@@ -147,6 +147,140 @@ expect "observe: capture carries no acceptance criteria and hands off at G0" "0"
   "$( grep -qi 'no acceptance criteria' "$OBSERVE" && grep -q 'G0' "$OBSERVE" && echo 0 || echo 1 )"
 
 # ---------------------------------------------------------------------------
+echo "ship-check.sh (G3 release readiness)"
+
+# Every case below runs ship-check.sh inside a throwaway git-repo fixture,
+# never against this repo's own root: gate 1 IS `bash tests/guardrails.test.sh`,
+# i.e. this very file, so pointing ship-check at $ROOT from in here recurses.
+
+SHIP_OUT=""
+SHIP_EXIT=0
+ship_run() {
+  local dir="$1"; shift
+  SHIP_OUT="$(cd "$dir" && bash scripts/ship-check.sh "$@" 2>&1)"
+  SHIP_EXIT=$?
+}
+
+new_ship_fixture() {
+  local dir
+  dir="$(mktemp -d)"
+  git -C "$dir" init --quiet
+  git -C "$dir" config user.email t@example.test
+  git -C "$dir" config user.name test
+  mkdir -p "$dir/scripts" "$dir/tests"
+  cp "$SCRIPTS/ship-check.sh" "$dir/scripts/ship-check.sh"
+  chmod +x "$dir/scripts/ship-check.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/tests/guardrails.test.sh"
+  chmod +x "$dir/tests/guardrails.test.sh"
+  printf '#!/usr/bin/env bash\necho clean\n' > "$dir/scripts/clean.sh"
+  chmod +x "$dir/scripts/clean.sh"
+  git -C "$dir" add -A
+  git -C "$dir" commit --quiet -m init
+  printf '%s' "$dir"
+}
+
+gate_line() { # $1=output $2=gate number
+  printf '%s\n' "$1" | grep -E "^gate $2: "
+}
+
+SHIP1="$(new_ship_fixture)"
+ship_run "$SHIP1"
+GATE_LINES="$(printf '%s\n' "$SHIP_OUT" | grep -cE '^gate [0-9]: ')"
+expect "ship: summary prints exactly three gate lines" "3" "$GATE_LINES"
+rm -rf "$SHIP1"
+
+expect "ship: all runnable gates passing gives go and exit 0" "go 0" \
+  "$(bash -c 'source "'"$SCRIPTS"'/ship-check.sh"; v=$(ship_verdict passed passed passed); printf "%s %s" "$v" "$?"')"
+
+SHIP2="$(new_ship_fixture)"
+printf '#!/usr/bin/env bash\necho "SHIP-GATE1-SENTINEL-OUTPUT"\nexit 1\n' > "$SHIP2/tests/guardrails.test.sh"
+git -C "$SHIP2" add -A
+git -C "$SHIP2" commit --quiet -m "break gate 1"
+ship_run "$SHIP2"
+expect "ship: a failing gate gives hold and non-zero exit" "1" "$SHIP_EXIT"
+case "$SHIP_OUT" in
+  *SHIP-GATE1-SENTINEL-OUTPUT*) VERBATIM_FOUND="yes" ;;
+  *) VERBATIM_FOUND="no" ;;
+esac
+expect "ship: a failing gate's own output appears verbatim" "yes" "$VERBATIM_FOUND"
+rm -rf "$SHIP2"
+
+SHIP3="$(new_ship_fixture)"
+SHIP_OUT="$(cd "$SHIP3" && PATH="/usr/bin:/bin:/usr/sbin:/sbin" bash scripts/ship-check.sh 2>&1)"
+SHIP_EXIT=$?
+G2_STATE="$(gate_line "$SHIP_OUT" 2)"
+case "$G2_STATE" in
+  *not-run*) G2_NOTRUN="yes" ;;
+  *) G2_NOTRUN="no" ;;
+esac
+case "$SHIP_OUT" in
+  *"verdict: hold"*) VERDICT_HOLD="yes" ;;
+  *) VERDICT_HOLD="no" ;;
+esac
+expect "ship: shellcheck absent from PATH reads not-run, verdict hold" "yes yes 1" \
+  "$G2_NOTRUN $VERDICT_HOLD $([ "$SHIP_EXIT" -ne 0 ] && echo 1 || echo 0)"
+rm -rf "$SHIP3"
+
+SHIP4="$(new_ship_fixture)"
+rm -f "$SHIP4/tests/guardrails.test.sh"
+ship_run "$SHIP4"
+G1_STATE="$(gate_line "$SHIP_OUT" 1)"
+case "$G1_STATE" in
+  *"not-run"*"tests/guardrails.test.sh"*) G1_NAMED="yes" ;;
+  *) G1_NAMED="no" ;;
+esac
+case "$SHIP_OUT" in
+  *"verdict: hold"*) VERDICT_HOLD="yes" ;;
+  *) VERDICT_HOLD="no" ;;
+esac
+expect "ship: a missing gate file reads not-run by name, verdict hold" "yes yes 1" \
+  "$G1_NAMED $VERDICT_HOLD $([ "$SHIP_EXIT" -ne 0 ] && echo 1 || echo 0)"
+rm -rf "$SHIP4"
+
+SHIP5="$(new_ship_fixture)"
+ship_run "$SHIP5"
+FIRST_OUT="$SHIP_OUT"; FIRST_EXIT="$SHIP_EXIT"
+ship_run "$SHIP5"
+SECOND_OUT="$SHIP_OUT"; SECOND_EXIT="$SHIP_EXIT"
+FIRST_VERDICT="$(printf '%s\n' "$FIRST_OUT" | grep -E '^verdict: ')"
+SECOND_VERDICT="$(printf '%s\n' "$SECOND_OUT" | grep -E '^verdict: ')"
+expect "ship: two runs on an unchanged tree give the same verdict and exit code" \
+  "$FIRST_VERDICT $FIRST_EXIT" "$SECOND_VERDICT $SECOND_EXIT"
+
+REFS_BEFORE="$(git -C "$SHIP5" show-ref; git -C "$SHIP5" tag; git -C "$SHIP5" status --porcelain)"
+ship_run "$SHIP5"
+REFS_AFTER="$(git -C "$SHIP5" show-ref; git -C "$SHIP5" tag; git -C "$SHIP5" status --porcelain)"
+expect "ship: fixture refs, tags, and porcelain status are byte-identical after a run" \
+  "$REFS_BEFORE" "$REFS_AFTER"
+rm -rf "$SHIP5"
+
+NOGIT="$(mktemp -d)"
+cp "$SCRIPTS/ship-check.sh" "$NOGIT/ship-check.sh"
+chmod +x "$NOGIT/ship-check.sh"
+SHIP_OUT="$(cd "$NOGIT" && bash ship-check.sh 2>&1)"
+SHIP_EXIT=$?
+case "$SHIP_OUT" in
+  *"not inside a git work tree"*) SAID_SO="yes" ;;
+  *) SAID_SO="no" ;;
+esac
+case "$SHIP_OUT" in
+  *"gate 1:"*|*"gate 2:"*|*"gate 3:"*) RAN_A_GATE="yes" ;;
+  *) RAN_A_GATE="no" ;;
+esac
+expect "ship: outside a git work tree it says so and runs no gate" "yes no 1" \
+  "$SAID_SO $RAN_A_GATE $([ "$SHIP_EXIT" -ne 0 ] && echo 1 || echo 0)"
+rm -rf "$NOGIT"
+
+SHIP6="$(new_ship_fixture)"
+ship_run "$SHIP6"
+case "$SHIP_OUT" in
+  *"publishes nothing and deploys nothing"*) DISCLAIMED="yes" ;;
+  *) DISCLAIMED="no" ;;
+esac
+expect "ship: summary states it publishes and deploys nothing" "yes" "$DISCLAIMED"
+rm -rf "$SHIP6"
+
+# ---------------------------------------------------------------------------
 echo "manifest + component structure"
 structure_check() {
   local bad=0
