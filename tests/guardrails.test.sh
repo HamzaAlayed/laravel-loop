@@ -110,6 +110,43 @@ expect "nothing staged allows" "$ALLOW" \
 rm -rf "$REPO"
 
 # ---------------------------------------------------------------------------
+echo "observe (capture procedure)"
+OBSERVE="$ROOT/commands/observe.md"
+
+observe_script_present() {
+  local f
+  for f in "$SCRIPTS"/*observe* "$SCRIPTS"/*capture*; do
+    [ -e "$f" ] && return 0
+  done
+  return 1
+}
+expect "observe: no capture script exists — the surface is markdown only" "0" \
+  "$( observe_script_present && echo 1 || echo 0 )"
+
+expect "observe: procedure names all five required capture fields" "0" \
+  "$( grep -q 'What was observed' "$OBSERVE" \
+      && grep -q 'Where it surfaced' "$OBSERVE" \
+      && grep -q '## When' "$OBSERVE" \
+      && grep -q 'What was already tried' "$OBSERVE" \
+      && grep -qi 'suspected unit or commit' "$OBSERVE" \
+      && echo 0 || echo 1 )"
+
+expect "observe: procedure records unknown rather than inferring" "0" \
+  "$( grep -qi 'unknown' "$OBSERVE" && grep -qi 'is ever inferred' "$OBSERVE" && echo 0 || echo 1 )"
+
+expect "observe: procedure forbids editing an existing unit's spec, slices, or verify" "0" \
+  "$( grep -q 'spec.md' "$OBSERVE" && grep -q 'slices.md' "$OBSERVE" && grep -q 'verify.md' "$OBSERVE" \
+      && grep -qi 'never opened for writing\|never overwrite\|never touch' "$OBSERVE" \
+      && echo 0 || echo 1 )"
+
+expect "observe: procedure refuses a slug collision" "0" \
+  "$( grep -qi 'slug' "$OBSERVE" && grep -qi 'collision' "$OBSERVE" \
+      && grep -qi 'refuse\|distinct slug' "$OBSERVE" && echo 0 || echo 1 )"
+
+expect "observe: capture carries no acceptance criteria and hands off at G0" "0" \
+  "$( grep -qi 'no acceptance criteria' "$OBSERVE" && grep -q 'G0' "$OBSERVE" && echo 0 || echo 1 )"
+
+# ---------------------------------------------------------------------------
 echo "manifest + component structure"
 structure_check() {
   local bad=0
