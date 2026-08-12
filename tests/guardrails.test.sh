@@ -281,6 +281,20 @@ expect "ship: summary states it publishes and deploys nothing" "yes" "$DISCLAIME
 rm -rf "$SHIP6"
 
 # ---------------------------------------------------------------------------
+echo "ship (command surface — commands/ship.md)"
+SHIPMD="$ROOT/commands/ship.md"
+
+allowed_tools_line() { grep '^allowed-tools:' "$SHIPMD"; }
+expect "ship: commands/ship.md declares no write-capable tool" "0" \
+  "$( allowed_tools_line | grep -qE '\b(Write|Edit|MultiEdit|NotebookEdit|Agent)\b' && echo 1 || echo 0 )"
+
+expect "ship: commands/ship.md states nothing is deployed, published, or tagged" "0" \
+  "$( grep -qi 'deploys, publishes, tags, and bumps nothing' "$SHIPMD" && echo 0 || echo 1 )"
+
+expect "ship: commands/ship.md disclaims downstream Laravel app gates" "0" \
+  "$( grep -qi 'downstream Laravel' "$SHIPMD" && grep -qi 'ship-checklist' "$SHIPMD" && echo 0 || echo 1 )"
+
+# ---------------------------------------------------------------------------
 echo "manifest + component structure"
 structure_check() {
   local bad=0
