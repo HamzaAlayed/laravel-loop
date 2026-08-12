@@ -1,1 +1,4 @@
 .claude/loop-refine-passes.tsv
+.claude/agents-board.jsonl
+.claude/board.html
+.claude/agent-memory/

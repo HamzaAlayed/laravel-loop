@@ -15,6 +15,8 @@ INNER — per slice, one agent, one worktree
                     └─── Refine ──────┘  red — cap 3, then blocked
 ```
 
+A fifth gate, **G4**, sits outside this line: it fires whenever an agent is about to take any production-affecting action (a deploy, a rollback, a live-data change), regardless of which outer phase triggered it. See `loop-protocol` for the full gate table.
+
 ---
 
 ## Why phases, not roles
