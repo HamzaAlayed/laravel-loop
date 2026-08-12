@@ -161,6 +161,37 @@ ship_run() {
   SHIP_EXIT=$?
 }
 
+# Writes VERSION / plugin.json / marketplace.json into a fixture dir with
+# the given values, so gate 3 has something real to read. marketplace.json
+# always carries a decoy top-level "version" key (real marketplace.json
+# schema has none, per S5, but the reader must not assume that -- it must
+# still land on plugins[0].version, not the first "version" string in the
+# file) ahead of the real plugins[0] entry.
+write_ship_versions() {
+  local dir="$1" version="$2" plugin_version="$3" market_version="$4"
+  mkdir -p "$dir/.claude-plugin"
+  printf '%s\n' "$version" > "$dir/VERSION"
+  cat > "$dir/.claude-plugin/plugin.json" <<JSON
+{
+  "name": "fixture-plugin",
+  "version": "$plugin_version"
+}
+JSON
+  cat > "$dir/.claude-plugin/marketplace.json" <<JSON
+{
+  "name": "fixture-marketplace",
+  "version": "9.9.9",
+  "plugins": [
+    {
+      "name": "fixture-plugin",
+      "source": "./",
+      "version": "$market_version"
+    }
+  ]
+}
+JSON
+}
+
 new_ship_fixture() {
   local dir
   dir="$(mktemp -d)"
@@ -174,6 +205,7 @@ new_ship_fixture() {
   chmod +x "$dir/tests/guardrails.test.sh"
   printf '#!/usr/bin/env bash\necho clean\n' > "$dir/scripts/clean.sh"
   chmod +x "$dir/scripts/clean.sh"
+  write_ship_versions "$dir" "0.2.0" "0.2.0" "0.2.0"
   git -C "$dir" add -A
   git -C "$dir" commit --quiet -m init
   printf '%s' "$dir"
@@ -279,6 +311,114 @@ case "$SHIP_OUT" in
 esac
 expect "ship: summary states it publishes and deploys nothing" "yes" "$DISCLAIMED"
 rm -rf "$SHIP6"
+
+SHIP7="$(new_ship_fixture)"
+ship_run "$SHIP7"
+G3_STATE="$(gate_line "$SHIP_OUT" 3)"
+case "$G3_STATE" in
+  *"passed"*) G3_PASSED="yes" ;;
+  *) G3_PASSED="no" ;;
+esac
+case "$SHIP_OUT" in
+  *"verdict: go"*) VERDICT_GO="yes" ;;
+  *) VERDICT_GO="no" ;;
+esac
+expect "ship: three agreeing versions pass the version gate" "yes yes 0" \
+  "$G3_PASSED $VERDICT_GO $SHIP_EXIT"
+rm -rf "$SHIP7"
+
+SHIP8="$(new_ship_fixture)"
+write_ship_versions "$SHIP8" "0.2.0" "0.2.0" "0.1.9"
+git -C "$SHIP8" add -A
+git -C "$SHIP8" commit --quiet -m "disagree"
+ship_run "$SHIP8"
+G3_STATE="$(gate_line "$SHIP_OUT" 3)"
+case "$G3_STATE" in
+  *"failed"*) G3_FAILED="yes" ;;
+  *) G3_FAILED="no" ;;
+esac
+case "$SHIP_OUT" in
+  *"verdict: hold"*) VERDICT_HOLD="yes" ;;
+  *) VERDICT_HOLD="no" ;;
+esac
+NAMES_ALL_THREE="no"
+case "$SHIP_OUT" in
+  *"VERSION: 0.2.0"*)
+    case "$SHIP_OUT" in
+      *".claude-plugin/plugin.json: 0.2.0"*)
+        case "$SHIP_OUT" in
+          *".claude-plugin/marketplace.json: 0.1.9"*) NAMES_ALL_THREE="yes" ;;
+        esac
+        ;;
+    esac
+    ;;
+esac
+expect "ship: a disagreeing version file gives hold and names all three files with values" \
+  "yes yes yes 1" "$G3_FAILED $VERDICT_HOLD $NAMES_ALL_THREE $SHIP_EXIT"
+rm -rf "$SHIP8"
+
+SHIP9="$(new_ship_fixture)"
+rm -f "$SHIP9/VERSION"
+git -C "$SHIP9" add -A
+git -C "$SHIP9" commit --quiet -m "drop VERSION"
+ship_run "$SHIP9"
+case "$SHIP_OUT" in
+  *"VERSION: MISSING"*) NAMED_MISSING="yes" ;;
+  *) NAMED_MISSING="no" ;;
+esac
+case "$SHIP_OUT" in
+  *"verdict: hold"*) VERDICT_HOLD="yes" ;;
+  *) VERDICT_HOLD="no" ;;
+esac
+expect "ship: a missing version file gives hold and names it" "yes yes 1" \
+  "$NAMED_MISSING $VERDICT_HOLD $SHIP_EXIT"
+rm -rf "$SHIP9"
+
+SHIP10="$(new_ship_fixture)"
+cat > "$SHIP10/.claude-plugin/plugin.json" <<'JSON'
+{
+  "name": "fixture-plugin"
+}
+JSON
+git -C "$SHIP10" add -A
+git -C "$SHIP10" commit --quiet -m "drop plugin.json version field"
+ship_run "$SHIP10"
+case "$SHIP_OUT" in
+  *".claude-plugin/plugin.json: NO VERSION FIELD"*) NAMED_NO_FIELD="yes" ;;
+  *) NAMED_NO_FIELD="no" ;;
+esac
+case "$SHIP_OUT" in
+  *"verdict: hold"*) VERDICT_HOLD="yes" ;;
+  *) VERDICT_HOLD="no" ;;
+esac
+expect "ship: a version field absent from plugin.json gives hold, not a match" "yes yes 1" \
+  "$NAMED_NO_FIELD $VERDICT_HOLD $SHIP_EXIT"
+rm -rf "$SHIP10"
+
+# marketplace.json's fixture (write_ship_versions) always plants a decoy
+# top-level "version" ahead of the real plugins[0].version -- proves the
+# reader is scoped to the plugin entry, not "first match in the file".
+SHIP11="$(new_ship_fixture)"
+ship_run "$SHIP11"
+case "$SHIP_OUT" in
+  *"verdict: go"*) DECOY_IGNORED="yes" ;;
+  *) DECOY_IGNORED="no" ;;
+esac
+expect "ship: marketplace version is read from the plugin entry, not the first match" \
+  "yes" "$DECOY_IGNORED"
+rm -rf "$SHIP11"
+
+SHIP12="$(new_ship_fixture)"
+SHIP_OUT="$(cd "$SHIP12" && PATH="/usr/bin:/bin:/usr/sbin:/sbin" bash scripts/ship-check.sh 2>&1)"
+SHIP_EXIT=$?
+G3_STATE="$(gate_line "$SHIP_OUT" 3)"
+case "$G3_STATE" in
+  *"passed"*) G3_PASSED_NO_TOOLS="yes" ;;
+  *) G3_PASSED_NO_TOOLS="no" ;;
+esac
+expect "ship: version gate works with jq and python3 unavailable on PATH" \
+  "yes" "$G3_PASSED_NO_TOOLS"
+rm -rf "$SHIP12"
 
 # ---------------------------------------------------------------------------
 echo "ship (command surface — commands/ship.md)"
