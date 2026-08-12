@@ -476,6 +476,79 @@ ORPHAN_COUNT="$(pgrep -f "sleep 600" | wc -l | tr -d ' ')"
 expect "ship: no orphan child survives a timed-out run" "0" "$ORPHAN_COUNT"
 rm -rf "$SHIP15"
 
+# -- S4: release-context block (dirty tree + unit contract) ----------------
+# Context is reported, it never changes the verdict (spec S6) -- every case
+# below re-derives the verdict/exit from the same fixture with and without
+# the context-triggering change and asserts they are identical.
+
+SHIP16="$(new_ship_fixture)"
+ship_run "$SHIP16"
+CLEAN_VERDICT="$(printf '%s\n' "$SHIP_OUT" | grep -E '^verdict: ')"
+CLEAN_EXIT="$SHIP_EXIT"
+: > "$SHIP16/untracked-file.txt"
+ship_run "$SHIP16"
+DIRTY_VERDICT="$(printf '%s\n' "$SHIP_OUT" | grep -E '^verdict: ')"
+case "$SHIP_OUT" in
+  *"working tree is dirty"*) DIRTY_REPORTED="yes" ;;
+  *) DIRTY_REPORTED="no" ;;
+esac
+expect "ship: a dirty fixture tree is reported and the verdict is unchanged" \
+  "yes $CLEAN_VERDICT $CLEAN_EXIT" "$DIRTY_REPORTED $DIRTY_VERDICT $SHIP_EXIT"
+rm -rf "$SHIP16"
+
+SHIP17="$(new_ship_fixture)"
+mkdir -p "$SHIP17/docs/loop/demo"
+printf '# spec\n' > "$SHIP17/docs/loop/demo/spec.md"
+printf '# verify\n' > "$SHIP17/docs/loop/demo/verify.md"
+git -C "$SHIP17" add -A
+git -C "$SHIP17" commit --quiet -m "add demo unit with a verify record"
+ship_run "$SHIP17" demo
+case "$SHIP_OUT" in
+  *"docs/loop/demo/"*) NAMED_SLUG="yes" ;;
+  *) NAMED_SLUG="no" ;;
+esac
+case "$SHIP_OUT" in
+  *"verify record present"*"docs/loop/demo/verify.md"*) VERIFY_PRESENT="yes" ;;
+  *) VERIFY_PRESENT="no" ;;
+esac
+expect "ship: a named slug with a verify record is reported as present" \
+  "yes yes" "$NAMED_SLUG $VERIFY_PRESENT"
+rm -rf "$SHIP17"
+
+SHIP18="$(new_ship_fixture)"
+mkdir -p "$SHIP18/docs/loop/demo"
+printf '# spec\n' > "$SHIP18/docs/loop/demo/spec.md"
+git -C "$SHIP18" add -A
+git -C "$SHIP18" commit --quiet -m "add demo unit without a verify record"
+ship_run "$SHIP18" demo
+case "$SHIP_OUT" in
+  *"verify record absent"*"docs/loop/demo/verify.md"*) VERIFY_ABSENT="yes" ;;
+  *) VERIFY_ABSENT="no" ;;
+esac
+WITH_SLUG_VERDICT="$(printf '%s\n' "$SHIP_OUT" | grep -E '^verdict: ')"
+WITH_SLUG_EXIT="$SHIP_EXIT"
+ship_run "$SHIP18"
+NO_SLUG_VERDICT="$(printf '%s\n' "$SHIP_OUT" | grep -E '^verdict: ')"
+NO_SLUG_EXIT="$SHIP_EXIT"
+expect "ship: a named slug without a verify record says so" \
+  "yes $WITH_SLUG_VERDICT $WITH_SLUG_EXIT" "$VERIFY_ABSENT $NO_SLUG_VERDICT $NO_SLUG_EXIT"
+rm -rf "$SHIP18"
+
+SHIP19="$(new_ship_fixture)"
+ship_run "$SHIP19" no-such-slug
+case "$SHIP_OUT" in
+  *"no unit contract found"*) NO_CONTRACT_NAMED="yes" ;;
+  *) NO_CONTRACT_NAMED="no" ;;
+esac
+ship_run "$SHIP19"
+case "$SHIP_OUT" in
+  *"no unit contract found"*) NO_CONTRACT_UNNAMED="yes" ;;
+  *) NO_CONTRACT_UNNAMED="no" ;;
+esac
+expect "ship: no unit contract found is stated, not omitted" \
+  "yes yes" "$NO_CONTRACT_NAMED $NO_CONTRACT_UNNAMED"
+rm -rf "$SHIP19"
+
 # ---------------------------------------------------------------------------
 echo "ship (command surface — commands/ship.md)"
 SHIPMD="$ROOT/commands/ship.md"

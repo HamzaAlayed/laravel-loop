@@ -32,6 +32,16 @@
 # runner but absent from a stock macOS -- the maintainer's own machine -- so
 # relying on it would only hold the guarantee on Linux. It is bash job
 # control end to end instead -- see run_bounded() below.
+#
+# A release-context block (spec S9) reports, alongside the verdict, whether
+# the working tree is dirty and whether this unit of work has a contract
+# under docs/loop/<slug>/ (and a verify record in it). Context is reported,
+# never a fourth gate: it cannot flip go/hold, or S6's "the verdict is a
+# function of exactly the three gate results" stops being true. The slug is
+# an optional first argument; with none given it is resolved from the
+# current branch, and it is never guessed from "the most recent directory".
+# Presence or absence is always stated -- "no unit contract found" is
+# printed, not omitted, the same discipline the gates apply to `not-run`.
 
 set -uo pipefail
 
@@ -300,6 +310,52 @@ gate3_version() {
   fi
 }
 
+# -- release context: dirty tree + unit contract ---------------------------
+# Read-only: `git status --porcelain` and reads under docs/loop/ only. Never
+# writes, never influences $GATE*_STATE or the verdict.
+
+# Sets SLUG from $1 if given; otherwise from the current branch. Never
+# "HEAD" for a detached checkout -- `symbolic-ref` fails there (empty), and
+# an empty SLUG is reported as "no unit contract found" rather than guessed.
+resolve_slug() {
+  local arg="${1:-}"
+  SLUG=""
+  if [ -n "$arg" ]; then
+    SLUG="$arg"
+    return
+  fi
+  SLUG="$(git -C "$ROOT" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+}
+
+# Prints the context block. Presence or absence is always stated, in the
+# same words the spec and failure-mode table use, so a human (or a harness
+# case) never has to infer a missing line means "clean" or "found".
+print_context() {
+  local porcelain
+  porcelain="$(git -C "$ROOT" status --porcelain 2>/dev/null)"
+  if [ -n "$porcelain" ]; then
+    echo "context: working tree is dirty -- not what a release would contain"
+  fi
+
+  if [ -z "$SLUG" ]; then
+    echo "context: no unit contract found -- no slug given and none resolved from the current branch"
+    return
+  fi
+
+  local unit_dir="$ROOT/docs/loop/$SLUG"
+  if [ ! -d "$unit_dir" ]; then
+    echo "context: no unit contract found for slug '$SLUG' -- docs/loop/$SLUG/ does not exist"
+    return
+  fi
+
+  echo "context: unit contract docs/loop/$SLUG/ found"
+  if [ -f "$unit_dir/verify.md" ]; then
+    echo "context: verify record present -- docs/loop/$SLUG/verify.md"
+  else
+    echo "context: verify record absent -- no docs/loop/$SLUG/verify.md"
+  fi
+}
+
 print_gate() {
   local n="$1" name="$2" state="$3" reason="$4"
   if [ -n "$reason" ]; then
@@ -325,6 +381,7 @@ main() {
   fi
 
   ROOT="$(git rev-parse --show-toplevel)"
+  resolve_slug "${1:-}"
 
   gate1_harness
   gate2_shellcheck
@@ -345,6 +402,9 @@ main() {
   show_failure_output 1 "$GATE1_STATE" "$GATE1_OUTPUT"
   show_failure_output 2 "$GATE2_STATE" "$GATE2_OUTPUT"
   show_failure_output 3 "$GATE3_STATE" "$GATE3_OUTPUT"
+
+  print_context
+  echo
 
   local verdict
   verdict="$(ship_verdict "$GATE1_STATE" "$GATE2_STATE" "$GATE3_STATE")"
