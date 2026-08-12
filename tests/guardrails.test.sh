@@ -564,6 +564,25 @@ expect "ship: commands/ship.md disclaims downstream Laravel app gates" "0" \
   "$( grep -qi 'downstream Laravel' "$SHIPMD" && grep -qi 'ship-checklist' "$SHIPMD" && echo 0 || echo 1 )"
 
 # ---------------------------------------------------------------------------
+echo "docs (README matches what shipped)"
+README_MD="$ROOT/README.md"
+
+commands_table_check() {
+  local bad=0 table name
+  table="$(sed -n '/^## Commands/,/^## Skills/p' "$README_MD")"
+  for f in "$ROOT"/commands/*.md; do
+    name="$(basename "$f" .md)"
+    echo "$table" | grep -qE "\`/${name}[\` ]" || bad=1
+  done
+  echo $bad
+}
+expect "docs: every commands/*.md has a row in README's Commands table" "0" \
+  "$(commands_table_check)"
+
+expect "docs: README no longer claims Ship and Observe are missing" "0" \
+  "$( { grep -qi 'No Ship phase automation' "$README_MD" || grep -qi 'No Observe phase' "$README_MD"; } && echo 1 || echo 0 )"
+
+# ---------------------------------------------------------------------------
 echo "manifest + component structure"
 structure_check() {
   local bad=0

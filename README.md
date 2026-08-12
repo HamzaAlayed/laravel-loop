@@ -45,6 +45,8 @@ Four agents is also small enough to hold in your head. You always know which one
 | `/loop <intent>` | The whole outer loop — spec, slice, build, verify — stopping at every gate. The main entry point. |
 | `/slice <spec>` | G1 alone, when a spec already exists and the only question is how to cut the work. |
 | `/verify [slug\|base]` | G2 alone, before opening or merging a PR — including when the claim of "done" is your own. |
+| `/ship` | G3 alone — runs `scripts/ship-check.sh`'s three release-readiness gates and relays the go/hold verdict verbatim. Checks **laravel-loop's own** release readiness only, never a downstream Laravel app's gates, and does not overlap `laravel-team:ship-checklist`. |
+| `/observe [fault]` | The `↺` — captures a fault or observation as a new `docs/loop/<slug>/intent.md` (what, where, when, tried, suspected unit), then hands off to `/loop` at G0. Never diagnoses, never builds. |
 
 ## Skills
 
@@ -120,7 +122,7 @@ They answer different questions. Reach for the **Guild** when you want a named s
 ## Development
 
 ```bash
-bash tests/guardrails.test.sh   # 22 cases, zero dependencies
+bash tests/guardrails.test.sh   # 57 cases, zero dependencies
 shellcheck scripts/*.sh
 ```
 
@@ -130,8 +132,6 @@ CI runs both on every push.
 
 Named deliberately, because a plugin that hides its edges is worse than one that states them:
 
-- **No Ship phase automation.** G3 is a gate in the protocol, but there is no release command yet — use your existing pipeline.
-- **No Observe phase.** Production telemetry → issue → next intent is documented as the loop's closing edge, not automated.
 - **No Gemini or Codex target.** Both guardrails need agent identity in the hook payload, which those hosts do not carry.
 - **Frontend, mobile, infra, and docs** have no dedicated phase agent. `loop-build` handles what it can; deep specialist work is where Laravel Guild earns its keep.
 

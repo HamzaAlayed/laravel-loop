@@ -18,6 +18,10 @@ INNER — per slice, one agent, one worktree
                     └─── Refine ──────┘  red — cap 3, then blocked
 ```
 
+`↺` is `/observe`'s capture step: it writes `docs/loop/<slug>/intent.md` (what was observed, where,
+when, what was already tried, which unit or commit is suspected) and hands off to a fresh Intent at
+G0. It never diagnoses, reproduces, or builds by itself.
+
 The failure this prevents is **unstructured delegation**: one large ambiguous ask handed to one agent, producing work that reads like several people who never spoke. Every phase below exists to move an ambiguity earlier, to where fixing it is cheap.
 
 ## Phase placement
@@ -30,7 +34,7 @@ Identify the phase before doing anything. Most bad outcomes are phase errors —
 | An agreed spec, unclear how to build | Slice | `loop-slice` |
 | A named, scoped, testable change | Build | `loop-build` |
 | "Is this done?" / a branch to merge | Verify | `loop-verify` |
-| A production fault | Observe → new Intent | human |
+| A production fault | Observe (`/observe`'s capture step) → new Intent | human |
 
 **Escalate when the input is thinner than the phase requires.** "Just add a button" that turns out to need a schema change is an Intent, not a slice. Starting it as a slice is how a one-hour task becomes a three-day one.
 
@@ -43,7 +47,7 @@ Everything not listed here runs without asking. Enumerating the gates is what li
 | **G0** | Spec written | Right problem? Right acceptance criteria? Right non-goals? |
 | **G1** | Slices written | Right cuts, right order? |
 | **G2** | Work claims done | Do I understand and endorse this diff? |
-| **G3** | Pre-release | Ship / hold |
+| **G3** | Pre-release | Ship / hold — evidence is `scripts/ship-check.sh`'s verdict (run via `/ship`) |
 | **G4** | Production change | Any agent-initiated action on live infra |
 
 Present every gate as numbered options with a recommended default (`AskUserQuestion` main-thread, printed text as a subagent), never as a paragraph the human has to decode into a yes or no.
