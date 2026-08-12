@@ -69,8 +69,9 @@ Together they close both exits from a red test: grinding on it, and making it go
 ## Install
 
 ```bash
-# As a Claude Code plugin
-/plugin install laravel-loop
+# As a Claude Code plugin — register this repo as a marketplace, then install
+claude plugin marketplace add HamzaAlayed/laravel-loop
+claude plugin install laravel-loop@laravel-loop
 
 # Or drop it in a project
 cp -r laravel-loop/agents laravel-loop/commands laravel-loop/skills .claude/
