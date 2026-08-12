@@ -24,12 +24,74 @@
 # "go"/"hold" out) precisely so the aggregation rule -- go only when every
 # declared gate reads passed -- is testable on its own, independent of
 # whether all three gates have real dispatch behind them yet.
+#
+# Every gate that shells out (1 and 2) runs under a per-gate wall-clock bound
+# (LARAVEL_LOOP_SHIP_GATE_TIMEOUT seconds, default 120) so a gate that never
+# returns produces a hold instead of a hang the human waits on forever. This
+# never shells out to `timeout(1)`: that's GNU coreutils, present on the CI
+# runner but absent from a stock macOS -- the maintainer's own machine -- so
+# relying on it would only hold the guarantee on Linux. It is bash job
+# control end to end instead -- see run_bounded() below.
 
 set -uo pipefail
 
 GATE1_STATE=""; GATE1_REASON=""; GATE1_OUTPUT=""
 GATE2_STATE=""; GATE2_REASON=""; GATE2_OUTPUT=""
 GATE3_STATE=""; GATE3_REASON=""; GATE3_OUTPUT=""
+
+GATE_TIMEOUT="${LARAVEL_LOOP_SHIP_GATE_TIMEOUT:-120}"
+case "$GATE_TIMEOUT" in ''|*[!0-9]*) GATE_TIMEOUT=120 ;; esac
+
+# Runs "$@", capturing its combined stdout+stderr into the file named by $1.
+# Sets BOUNDED_STATE to "ok" (BOUNDED_EXIT holds the real exit code) or
+# "timeout" (killed after $GATE_TIMEOUT seconds without returning;
+# BOUNDED_EXIT is 124, matching coreutils `timeout`'s convention).
+#
+# No `timeout(1)`, `gtimeout`, `setsid`, `perl`, or `python3` anywhere in
+# here -- bash job control only. `set -m` inside the inner subshell gives
+# the backgrounded command its own process group (pgid == its own pid,
+# because job control assigns a fresh group to each job it starts), so on
+# timeout `kill -TERM -"$pid"` (the leading `-` addresses the whole group,
+# not just that one pid) reaches every descendant a hung gate spawned --
+# e.g. a stray `sleep` -- not only its immediate child. That is what leaves
+# no orphan behind. The inner subshell's own stdout/stderr are discarded so
+# bash's job-control notices ("Terminated") never leak into the gate's
+# captured output or this script's own.
+run_bounded() {
+  local out="$1"; shift
+  : >"$out"
+  (
+    set -m
+    "$@" >"$out" 2>&1 &
+    echo $! >"$out.pid"
+    wait $!
+    echo $? >"$out.exit"
+  ) >/dev/null 2>/dev/null &
+  local runner=$! start
+  start="$SECONDS"
+  while kill -0 "$runner" 2>/dev/null; do
+    if [ $((SECONDS - start)) -ge "$GATE_TIMEOUT" ]; then
+      local pgid
+      pgid="$(cat "$out.pid" 2>/dev/null || true)"
+      if [ -n "$pgid" ]; then
+        kill -TERM "-$pgid" 2>/dev/null || true
+        sleep 0.3
+        kill -KILL "-$pgid" 2>/dev/null || true
+      fi
+      kill -KILL "$runner" 2>/dev/null || true
+      wait "$runner" 2>/dev/null || true
+      BOUNDED_STATE="timeout"
+      BOUNDED_EXIT=124
+      rm -f "$out.pid" "$out.exit"
+      return
+    fi
+    sleep 0.2
+  done
+  wait "$runner" 2>/dev/null || true
+  BOUNDED_STATE="ok"
+  BOUNDED_EXIT="$(cat "$out.exit" 2>/dev/null || echo 1)"
+  rm -f "$out.pid" "$out.exit"
+}
 
 # go iff every state passed in is exactly "passed" -- D2: a gate that cannot
 # be run must never let the run read as releasable. Sourceable in isolation.
@@ -54,7 +116,11 @@ gate1_harness() {
   fi
   local out
   out="$(mktemp)"
-  if bash "$target" >"$out" 2>&1; then
+  run_bounded "$out" bash "$target"
+  if [ "$BOUNDED_STATE" = "timeout" ]; then
+    GATE1_STATE="failed"
+    GATE1_REASON="timed out after ${GATE_TIMEOUT}s without returning"
+  elif [ "$BOUNDED_EXIT" -eq 0 ]; then
     GATE1_STATE="passed"
   else
     GATE1_STATE="failed"
@@ -79,7 +145,11 @@ gate2_shellcheck() {
   fi
   local out
   out="$(mktemp)"
-  if shellcheck "${files[@]}" >"$out" 2>&1; then
+  run_bounded "$out" shellcheck "${files[@]}"
+  if [ "$BOUNDED_STATE" = "timeout" ]; then
+    GATE2_STATE="failed"
+    GATE2_REASON="timed out after ${GATE_TIMEOUT}s without returning"
+  elif [ "$BOUNDED_EXIT" -eq 0 ]; then
     GATE2_STATE="passed"
   else
     GATE2_STATE="failed"
