@@ -420,6 +420,62 @@ expect "ship: version gate works with jq and python3 unavailable on PATH" \
   "yes" "$G3_PASSED_NO_TOOLS"
 rm -rf "$SHIP12"
 
+# -- S3: per-gate wall-clock bound ------------------------------------------
+# A stub gate 1 that never returns (`sleep 600`) must still yield a verdict.
+# LARAVEL_LOOP_SHIP_GATE_TIMEOUT is set low so the case itself stays fast;
+# the "600" is only ever the *asked-for* sleep -- the bound must cut it off
+# long before it elapses.
+hang_gate1_fixture() {
+  local dir
+  dir="$(new_ship_fixture)"
+  printf '#!/usr/bin/env bash\nsleep 600\n' > "$dir/tests/guardrails.test.sh"
+  git -C "$dir" add -A
+  git -C "$dir" commit --quiet -m "hang gate 1"
+  printf '%s' "$dir"
+}
+
+SHIP13="$(hang_gate1_fixture)"
+START_TS="$(date +%s)"
+SHIP_OUT="$(cd "$SHIP13" && LARAVEL_LOOP_SHIP_GATE_TIMEOUT=2 bash scripts/ship-check.sh 2>&1)"
+SHIP_EXIT=$?
+END_TS="$(date +%s)"
+ELAPSED=$((END_TS - START_TS))
+case "$SHIP_OUT" in
+  *"verdict: hold"*) HANG_HOLD="yes" ;;
+  *) HANG_HOLD="no" ;;
+esac
+expect "ship: a gate that never returns is bounded and gives hold" "yes 1 yes" \
+  "$HANG_HOLD $([ "$SHIP_EXIT" -ne 0 ] && echo 1 || echo 0) $([ "$ELAPSED" -le 15 ] && echo yes || echo no)"
+
+G1_STATE="$(gate_line "$SHIP_OUT" 1)"
+case "$G1_STATE" in
+  *"passed"*) TIMEOUT_READS_PASSED="yes" ;;
+  *) TIMEOUT_READS_PASSED="no" ;;
+esac
+expect "ship: a timed-out gate never prints as passed" "no" "$TIMEOUT_READS_PASSED"
+rm -rf "$SHIP13"
+
+SHIP14="$(hang_gate1_fixture)"
+START_TS="$(date +%s)"
+SHIP_OUT="$(cd "$SHIP14" && LARAVEL_LOOP_SHIP_GATE_TIMEOUT=2 PATH="/usr/bin:/bin:/usr/sbin:/sbin" bash scripts/ship-check.sh 2>&1)"
+SHIP_EXIT=$?
+END_TS="$(date +%s)"
+ELAPSED=$((END_TS - START_TS))
+case "$SHIP_OUT" in
+  *"verdict: hold"*) NOPATH_HOLD="yes" ;;
+  *) NOPATH_HOLD="no" ;;
+esac
+expect "ship: the bound holds with timeout(1) absent from PATH" "yes 1 yes" \
+  "$NOPATH_HOLD $([ "$SHIP_EXIT" -ne 0 ] && echo 1 || echo 0) $([ "$ELAPSED" -le 15 ] && echo yes || echo no)"
+rm -rf "$SHIP14"
+
+SHIP15="$(hang_gate1_fixture)"
+( cd "$SHIP15" && LARAVEL_LOOP_SHIP_GATE_TIMEOUT=2 bash scripts/ship-check.sh >/dev/null 2>&1 )
+sleep 1
+ORPHAN_COUNT="$(pgrep -f "sleep 600" | wc -l | tr -d ' ')"
+expect "ship: no orphan child survives a timed-out run" "0" "$ORPHAN_COUNT"
+rm -rf "$SHIP15"
+
 # ---------------------------------------------------------------------------
 echo "ship (command surface — commands/ship.md)"
 SHIPMD="$ROOT/commands/ship.md"
