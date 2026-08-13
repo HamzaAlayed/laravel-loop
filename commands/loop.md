@@ -55,6 +55,20 @@ Sequence dependent slices along the real dependency chain. Merge in that same or
 
 **On a blocked return:** the refine cap tripped, or the envelope was ambiguous. Re-brief **once**, naming the exact gap. Blocked again → stop the lane and take it back to G1 as a re-slice. Never a third brief on the same slice, and never patch the work yourself.
 
+**On a budget breach:** `check-budget-gate.sh` exits 2 before the next spawn once a human has set `LARAVEL_LOOP_BUDGET_HARD` and the unit's priced spend has reached it. Relay its message **verbatim** — it already carries the coverage sentence and the most-expensive-slice figure (BG5, BG9); do not restate the coverage caveat in your own words, the same discipline as relaying a FAIL verdict. A slice already in flight completes: the gate never kills, interrupts, or abandons an invocation in progress, because a half-built worktree wastes everything already spent (BG4). Present the choice as numbered options, recommended default first, raising the cap listed last:
+
+```
+1. Re-slice the most expensive slice named in the gate's message  (recommended)
+2. Stop here and review manually before continuing
+3. Raise the hard cap for this unit only
+```
+
+Choosing 3 writes `.claude/loop-budget-state/<slug>/hard-override` and **nothing else** — never an env var, never `settings.json`, never `.env`, never `CLAUDE.md`. It raises the threshold for this unit alone and dies with it; a cap raised under pressure at 2am must never become the standing configuration (BG11).
+
+**Unattended or non-interactive run:** with nobody available to answer, stop the lane and keep the artifacts and the log — never continue past the breach on the grounds that nobody answered, and never wait forever (BG12).
+
+Track every budget event that fires during the unit — warn crossed, hard gate fired, cap raised (and to what), or the gate disabled by an unparseable value — noting the threshold in force at the time. These accumulate under a `## Budget events` heading in `docs/loop/<slug>/log.md`.
+
 **4. Verify — `loop-verify`.** Once all slices for the unit are merged. It reads the spec's acceptance criteria, checks the diff against every `Do NOT`, reproduces the evidence itself, and returns PASS / CONCERNS / FAIL. Every brief carries `Unit:  <slug>` and `Slice:` naming the slice range under verification (e.g. `Slice: S1–S4`).
 
 **⏸ Gate G2.** Relay the verdict, then the human reads the diff. FAIL → route findings back to `loop-build` as re-briefs, one per finding, then re-verify. Do not argue a FAIL down.
