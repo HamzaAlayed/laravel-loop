@@ -867,6 +867,193 @@ expect "(m) commands/cost.md relays the report script's output verbatim" "0" \
 
 rm -rf "$MIXDIR"
 
+# --- S3: Phases, Rework, Slices, Flags, Budget sections --------------------
+
+# (a) CO4 — a mixed fixture with model_source "derived" on a PRICED
+# invocation (unlike S2's MIXDIR, whose only derived-model invocation was
+# unpriced) so the word "derived" actually appears attached to a phase that
+# has coverage, and a phase with zero priced invocations (verify, slice)
+# reads "unavailable", never "0".
+PHASEDIR="$(mktemp -d)"
+mkdir -p "$PHASEDIR/.claude"
+PHASELEDGER="$PHASEDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"p1","slug":"phase-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"p1","slug":"phase-fixture","phase":"spec","agent":"loop-spec","model":"claude-opus-4","model_source":"observed","status":"completed","total_tokens":1000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"p2","slug":"phase-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"p2","slug":"phase-fixture","phase":"build","agent":"loop-build","model":"claude-sonnet-4","model_source":"derived","status":"completed","total_tokens":2000}'
+  printf '%s\n' '{"ts":5,"event":"start","invocation_id":"p3","slug":"phase-fixture","phase":"verify","agent":"loop-verify"}'
+  printf '%s\n' '{"ts":6,"event":"finish","invocation_id":"p3","slug":"phase-fixture","phase":"verify","agent":"loop-verify","status":"async_launched"}'
+} > "$PHASELEDGER"
+PHASE_OUT="$(report "$PHASEDIR" phase-fixture)"
+
+expect "(a) CO4: 'derived' appears against the build phase's model" "yes" \
+  "$(printf '%s\n' "$PHASE_OUT" | grep -qE 'build[[:space:]]+claude-sonnet-4 \(derived\)' && echo yes || echo no)"
+expect "(a) CO4: spec phase shows its observed model without a derived tag" "yes" \
+  "$(printf '%s\n' "$PHASE_OUT" | grep -qE 'spec[[:space:]]+claude-opus-4$' && echo yes || echo no)"
+expect "(a) CO4: verify phase (no priced invocation) reads unavailable" "yes" \
+  "$(printf '%s\n' "$PHASE_OUT" | grep -qE 'verify[[:space:]]+unavailable' && echo yes || echo no)"
+expect "(a) CO4: slice phase (zero invocations) reads unavailable, never 0" "yes" \
+  "$(printf '%s\n' "$PHASE_OUT" | grep -qE 'slice[[:space:]]+unavailable' && echo yes || echo no)"
+
+# (i) CV7 on the phase fixture too.
+PHASE_OUT_2="$(report "$PHASEDIR" phase-fixture)"
+expect "(i) phase fixture: byte-identical stdout on a re-run (CV7)" "" \
+  "$(diff <(printf '%s' "$PHASE_OUT") <(printf '%s' "$PHASE_OUT_2"))"
+
+# (b) CO5 — rework entirely unpriced (E4's real case): counts labelled as
+# counts, token share unavailable.
+REWORKUDIR="$(mktemp -d)"
+mkdir -p "$REWORKUDIR/.claude"
+REWORKULEDGER="$REWORKUDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"r1","slug":"rework-unpriced","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"r1","slug":"rework-unpriced","phase":"build","agent":"loop-build","status":"async_launched","phase_detail":"rework","refine_passes":2}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"r2","slug":"rework-unpriced","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"r2","slug":"rework-unpriced","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$REWORKULEDGER"
+REWORKU_OUT="$(report "$REWORKUDIR" rework-unpriced)"
+expect "(b) CO5: all-unpriced rework prints count labelled as a count" "yes" \
+  "$(printf '%s\n' "$REWORKU_OUT" | grep -q 'count: 1 of 2 invocation(s) marked rework' && echo yes || echo no)"
+expect "(b) CO5: all-unpriced rework's token share reads unavailable" "yes" \
+  "$(printf '%s\n' "$REWORKU_OUT" | grep -q 'token share: unavailable' && echo yes || echo no)"
+
+# (b) CO5 — a priced-rework fixture prints a genuine share, labelled as a
+# share, plus its ambiguous attribution shown as ambiguous, never definite.
+REWORKPDIR="$(mktemp -d)"
+mkdir -p "$REWORKPDIR/.claude"
+REWORKPLEDGER="$REWORKPDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"q1","slug":"rework-priced","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"q1","slug":"rework-priced","phase":"build","agent":"loop-build","status":"completed","total_tokens":1000,"phase_detail":"rework","refine_passes":1,"rework_attribution":"ambiguous"}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"q2","slug":"rework-priced","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"q2","slug":"rework-priced","phase":"build","agent":"loop-build","status":"completed","total_tokens":3000}'
+} > "$REWORKPLEDGER"
+REWORKP_OUT="$(report "$REWORKPDIR" rework-priced)"
+expect "(b) CO5: priced-rework fixture prints a token share labelled as a share" "yes" \
+  "$(printf '%s\n' "$REWORKP_OUT" | grep -q 'token share: 25% of priced tokens' && echo yes || echo no)"
+expect "(b) CO5: refine-pass count travels with the rework count" "yes" \
+  "$(printf '%s\n' "$REWORKP_OUT" | grep -q 'count: 1 of 2 invocation(s) marked rework (refine passes: 1)' && echo yes || echo no)"
+expect "rework_attribution:ambiguous shows as ambiguous, never definite (v0.2 S5)" "yes" \
+  "$(printf '%s\n' "$REWORKP_OUT" | grep -qi 'ambiguous' && echo yes || echo no)"
+
+# (c) CO6 — the D3 granularity statement and the not-comparable-to-<15%
+# statement both appear, and no verdict against that target is printed.
+expect "(c) CO6: states rework is not the cost of retrying (D3)" "yes" \
+  "$(printf '%s\n' "$REWORKP_OUT" | grep -q 'not the cost of retrying' && echo yes || echo no)"
+expect "(c) CO6: states the figure is not comparable to the <15% target" "yes" \
+  "$(printf '%s\n' "$REWORKP_OUT" | grep -q 'not comparable to the' && printf '%s\n' "$REWORKP_OUT" | grep -q '<15%' && echo yes || echo no)"
+expect "(c) CO6: no pass/fail verdict against the 15% target is printed" "0" \
+  "$(printf '%s\n' "$REWORKP_OUT" | grep -icE 'meets the target|below the target|exceeds the target|target: *(pass|fail)')"
+
+# (d) CO7 — one slice over 30% of the unit's priced total prints the flag.
+CONCDIR="$(mktemp -d)"
+mkdir -p "$CONCDIR/.claude"
+CONCLEDGER="$CONCDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"c1","slug":"slice-conc","slice":"S1","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"c1","slug":"slice-conc","slice":"S1","phase":"build","agent":"loop-build","status":"completed","total_tokens":8000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"c2","slug":"slice-conc","slice":"S2","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"c2","slug":"slice-conc","slice":"S2","phase":"build","agent":"loop-build","status":"completed","total_tokens":2000}'
+} > "$CONCLEDGER"
+CONC_OUT="$(report "$CONCDIR" slice-conc)"
+expect "(d) CO7: a slice above 30% of the priced total is flagged, named, with its percentage" "yes" \
+  "$(printf '%s\n' "$CONC_OUT" | grep -qE 'S1 is 80% .*concentration threshold' && echo yes || echo no)"
+
+# (d) CO7 — slice-level coverage cannot support the comparison (a priced
+# invocation with no slice at all): states so, names what was missing, and
+# prints no flag either way that could read as a passed check.
+UNASSESSDIR="$(mktemp -d)"
+mkdir -p "$UNASSESSDIR/.claude"
+UNASSESSLEDGER="$UNASSESSDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"u1","slug":"slice-unassessable","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"u1","slug":"slice-unassessable","phase":"build","agent":"loop-build","status":"completed","total_tokens":5000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"u2","slug":"slice-unassessable","slice":"S1","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"u2","slug":"slice-unassessable","slice":"S1","phase":"build","agent":"loop-build","status":"completed","total_tokens":1000}'
+} > "$UNASSESSLEDGER"
+UNASSESS_OUT="$(report "$UNASSESSDIR" slice-unassessable)"
+expect "(d) CO7: unassessable slice coverage states so and names what was missing" "yes" \
+  "$(printf '%s\n' "$UNASSESS_OUT" | grep -q 'could not be assessed -- 1 priced invocation(s) carry no slice attribution' && echo yes || echo no)"
+expect "(d) CO7: unassessable case prints no concentration percentage that could read as a passed check" "0" \
+  "$(printf '%s\n' "$UNASSESS_OUT" | grep -c 'concentration threshold')"
+
+# (e) CV4 — cache_read_tokens absent from every record: unavailable, and
+# "0%" appears nowhere in the output.
+CACHEDIR="$(mktemp -d)"
+mkdir -p "$CACHEDIR/.claude"
+CACHELEDGER="$CACHEDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"k1","slug":"cache-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"k1","slug":"cache-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":500}'
+} > "$CACHELEDGER"
+CACHE_OUT="$(report "$CACHEDIR" cache-fixture)"
+expect "(e) CV4: cache-read share reads unavailable when absent from every record" "yes" \
+  "$(printf '%s\n' "$CACHE_OUT" | grep -q 'cache-read share: unavailable' && echo yes || echo no)"
+expect "(e) CV4: the string 0% appears nowhere in the output" "0" \
+  "$(printf '%s\n' "$CACHE_OUT" | grep -c '0%')"
+
+# (f) CO11 — overlapping invocations: elapsed is a wall-clock span, never a
+# sum of durations, and no "agent time" wording anywhere.
+OVERLAPDIR="$(mktemp -d)"
+mkdir -p "$OVERLAPDIR/.claude"
+OVERLAPLEDGER="$OVERLAPDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":100,"event":"start","invocation_id":"o1","slug":"overlap-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":105,"event":"start","invocation_id":"o2","slug":"overlap-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":115,"event":"finish","invocation_id":"o2","slug":"overlap-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":100,"duration_ms":10000}'
+  printf '%s\n' '{"ts":120,"event":"finish","invocation_id":"o1","slug":"overlap-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":200,"duration_ms":20000}'
+} > "$OVERLAPLEDGER"
+OVERLAP_OUT="$(report "$OVERLAPDIR" overlap-fixture)"
+expect "(f) CO11: no 'agent time' wording anywhere, even with overlapping invocations" "0" \
+  "$(printf '%s\n' "$OVERLAP_OUT" | grep -icE 'agent time')"
+expect "(f) CO11: elapsed is labelled and is the wall-clock span, not the summed durations" "yes" \
+  "$(printf '%s\n' "$OVERLAP_OUT" | grep -q 'elapsed (wall-clock' && printf '%s\n' "$OVERLAP_OUT" | grep -q '20 second(s)' && echo yes || echo no)"
+
+# (g) CO12/BG6 — Budget section states config or its absence, never a
+# reassurance token, whichever way the variables are set.
+BUDGET_UNSET_OUT="$(report "$PHASEDIR" phase-fixture)"
+expect "(g) CO12: unset budget vars state that nothing will gate" "yes" \
+  "$(printf '%s\n' "$BUDGET_UNSET_OUT" | grep -q 'no threshold is set' && echo yes || echo no)"
+BUDGET_SET_OUT="$(LARAVEL_LOOP_BUDGET_HARD=12345 report "$PHASEDIR" phase-fixture)"
+expect "(g) CO12: a set threshold shows the value that was read" "yes" \
+  "$(printf '%s\n' "$BUDGET_SET_OUT" | grep -q 'LARAVEL_LOOP_BUDGET_HARD=12345' && echo yes || echo no)"
+
+# (l) BG6 — no reassurance token in any S3 fixture's output above.
+ALL_S3_OUTPUT="$PHASE_OUT
+$REWORKU_OUT
+$REWORKP_OUT
+$CONC_OUT
+$UNASSESS_OUT
+$CACHE_OUT
+$OVERLAP_OUT
+$BUDGET_UNSET_OUT
+$BUDGET_SET_OUT"
+expect "(g) BG6: no 'within budget', 'under budget', or checkmark in any S3 fixture's output" "1" \
+  "$(printf '%s\n' "$ALL_S3_OUTPUT" | grep -iE 'within budget|under budget|✓' >/dev/null 2>&1; echo $?)"
+
+# (h) CV7 — byte-identical output on a re-run of every S3 fixture above.
+REWORKU_OUT_2="$(report "$REWORKUDIR" rework-unpriced)"
+expect "(h) rework-unpriced fixture: byte-identical on a re-run (CV7)" "" \
+  "$(diff <(printf '%s' "$REWORKU_OUT") <(printf '%s' "$REWORKU_OUT_2"))"
+REWORKP_OUT_2="$(report "$REWORKPDIR" rework-priced)"
+expect "(h) rework-priced fixture: byte-identical on a re-run (CV7)" "" \
+  "$(diff <(printf '%s' "$REWORKP_OUT") <(printf '%s' "$REWORKP_OUT_2"))"
+CONC_OUT_2="$(report "$CONCDIR" slice-conc)"
+expect "(h) slice-conc fixture: byte-identical on a re-run (CV7)" "" \
+  "$(diff <(printf '%s' "$CONC_OUT") <(printf '%s' "$CONC_OUT_2"))"
+UNASSESS_OUT_2="$(report "$UNASSESSDIR" slice-unassessable)"
+expect "(h) slice-unassessable fixture: byte-identical on a re-run (CV7)" "" \
+  "$(diff <(printf '%s' "$UNASSESS_OUT") <(printf '%s' "$UNASSESS_OUT_2"))"
+CACHE_OUT_2="$(report "$CACHEDIR" cache-fixture)"
+expect "(h) cache fixture: byte-identical on a re-run (CV7)" "" \
+  "$(diff <(printf '%s' "$CACHE_OUT") <(printf '%s' "$CACHE_OUT_2"))"
+OVERLAP_OUT_2="$(report "$OVERLAPDIR" overlap-fixture)"
+expect "(h) overlap fixture: byte-identical on a re-run (CV7)" "" \
+  "$(diff <(printf '%s' "$OVERLAP_OUT") <(printf '%s' "$OVERLAP_OUT_2"))"
+
+rm -rf "$PHASEDIR" "$REWORKUDIR" "$REWORKPDIR" "$CONCDIR" "$UNASSESSDIR" "$CACHEDIR" "$OVERLAPDIR"
+
 # ---------------------------------------------------------------------------
 echo "block-untested-commit.sh (test-with-the-code guard)"
 REPO="$(mktemp -d)"
