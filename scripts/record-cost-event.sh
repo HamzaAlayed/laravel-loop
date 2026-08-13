@@ -81,6 +81,37 @@
 # settle. Handled explicitly below -- not left to the tool_name gate to
 # discard by accident -- so a reader, or someone who wires SubagentStop
 # manually, can see this was a considered decision.
+#
+# Bound + oldest-first eviction (S4, spec.md H2-H5). The ledger is capped at
+# LARAVEL_LOOP_COST_MAX_LINES lines (default 5000; a non-numeric value falls
+# back to that default rather than disabling the bound or crashing -- same
+# parser shape as enforce-refine-cap.sh's CAP). Every invocation that appends
+# a line then checks whether the ledger is over cap and, if so, evicts the
+# oldest lines itself -- there is no separate long-running evictor process.
+#
+# No flock (absent on macOS by default; this repo is bash + coreutils only),
+# so eviction uses the same primitive as S3's dedup: a `mkdir`-based mutex
+# (.claude/loop-cost-evict.lock), held only by whichever invocation is
+# currently trimming the file. Appenders never contend for that lock and
+# never block on it (L7) -- they poll briefly for it to clear, then append
+# regardless of whether it did, because cost accounting that can stall a
+# spawn is worse than a ledger that sits slightly over cap for a moment.
+#
+# Eviction itself never truncates the file to empty, not even transiently
+# (H3): the trimmed content is written to a fresh temp file first (`tail -n
+# $MAX_LINES`, always non-empty whenever eviction runs at all) and only then
+# swapped into place with `mv`, an atomic rename on a local filesystem. A
+# reader that opens the ledger mid-swap gets the pre-eviction file or the
+# post-eviction file, in full, never a truncated or empty one. The eviction
+# loop re-checks the line count a bounded number of times before releasing
+# the lock, so a burst of appends that lands during the trim gets caught up
+# rather than silently re-growing the file past cap the moment the lock
+# clears.
+#
+# The ledger being absent is normal, not an error (H5): every append below
+# already does `mkdir -p` + `>>`, which recreates a deleted file from
+# nothing, so eviction needs no special handling for "file missing" beyond
+# what the append path already does.
 
 set -uo pipefail
 
@@ -94,6 +125,14 @@ ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
 DIR="$ROOT/.claude"
 OUT="$DIR/loop-cost.jsonl"
 FINISHED_DIR="$DIR/loop-cost-finished"
+EVICT_LOCK="$DIR/loop-cost-evict.lock"
+
+# Bound parser (H2): default 5000, non-numeric falls back to it -- same shape
+# as enforce-refine-cap.sh's CAP parser.
+MAX_LINES="${LARAVEL_LOOP_COST_MAX_LINES:-5000}"
+case "$MAX_LINES" in
+  ''|*[!0-9]*) MAX_LINES=5000 ;;
+esac
 
 HAVE_JQ=0
 HAVE_PY=0
@@ -372,7 +411,41 @@ if [ "$EVENT_TYPE" = "finish" ]; then
   # record (L7 outranks L9 here).
 fi
 
+# --- bound the ledger (H2/H3): give a concurrent eviction a brief, bounded
+# window to finish before this append's own open() lands, without ever
+# blocking on it -- see header. This only ever shortens, never removes, the
+# already-small race between an append's open() and an eviction's rename. --
+BACKOFF=0
+while [ -d "$EVICT_LOCK" ] && [ "$BACKOFF" -lt 5 ]; do
+  sleep 0.02
+  BACKOFF=$((BACKOFF + 1))
+done
+
 mkdir -p "$DIR" 2>/dev/null || exit 0
 printf '%s\n' "$LINE" >> "$OUT" 2>/dev/null
+
+# --- oldest-first eviction, in place, never emptying the file even
+# transiently (H2/H3). Only the invocation that finds the ledger over cap
+# does the trimming; a `mkdir` on EVICT_LOCK is the (non-blocking, evictor-
+# only) mutex that keeps two invocations from trimming at once. If the lock
+# can't be acquired, another invocation is already evicting -- this one
+# leaves the ledger as-is rather than waiting (L7 outranks H2 here too: a
+# file that sits briefly over cap beats a spawn that stalls). -------------
+if mkdir "$EVICT_LOCK" 2>/dev/null; then
+  ATTEMPT=0
+  while [ "$ATTEMPT" -lt 5 ]; do
+    ATTEMPT=$((ATTEMPT + 1))
+    COUNT="$(wc -l < "$OUT" 2>/dev/null | tr -d ' ')"
+    case "$COUNT" in ''|*[!0-9]*) break ;; esac
+    [ "$COUNT" -le "$MAX_LINES" ] && break
+    TMP="$(mktemp "$OUT.evict.XXXXXX" 2>/dev/null)" || break
+    if ! tail -n "$MAX_LINES" "$OUT" > "$TMP" 2>/dev/null || [ ! -s "$TMP" ]; then
+      rm -f "$TMP"
+      break
+    fi
+    mv -f "$TMP" "$OUT" 2>/dev/null || rm -f "$TMP"
+  done
+  rmdir "$EVICT_LOCK" 2>/dev/null
+fi
 
 exit 0
