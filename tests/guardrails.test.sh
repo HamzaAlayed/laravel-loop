@@ -64,6 +64,191 @@ expect "LARAVEL_LOOP_REFINE_CAP=2 blocks one pass earlier" "$BLOCK" \
 rm -rf "$CAPDIR"
 
 # ---------------------------------------------------------------------------
+echo "record-cost-event.sh (cost ledger)"
+
+COSTDIR="$(mktemp -d)"
+cost() { CLAUDE_PROJECT_DIR="$COSTDIR" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh "$1"; }
+LEDGER="$COSTDIR/.claude/loop-cost.jsonl"
+
+# Builds a PreToolUse payload for one Agent/Task spawn. $4 (prompt) is the
+# text actually handed to the subagent -- where Unit:/Slice: really live.
+start_json() { # $1 subagent_type $2 tool_use_id $3 description $4 prompt $5 session_id
+  python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
+import json, sys
+subagent, tid, desc, prompt, session = sys.argv[1:6]
+print(json.dumps({
+    "hook_event_name": "PreToolUse",
+    "session_id": session,
+    "tool_name": "Agent",
+    "tool_use_id": tid,
+    "tool_input": {"subagent_type": subagent, "description": desc, "prompt": prompt},
+}))
+PY
+}
+
+# Builds the matching PostToolUse (finish) payload. $6 status, $7 total
+# tokens ("null" to omit -- e.g. async_launched), $8 duration ms ("null" to
+# omit), $9 optional raw JSON object merged into tool_response (usage, etc).
+finish_json() { # $1 subagent_type $2 tool_use_id $3 description $4 prompt $5 session_id $6 status $7 tokens $8 duration_ms $9 extra_json
+  python3 - "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" <<'PY'
+import json, sys
+subagent, tid, desc, prompt, session, status, tokens, dur, extra = sys.argv[1:10]
+resp = {"status": status}
+if tokens != "null":
+    resp["totalTokens"] = int(tokens)
+if dur != "null":
+    resp["totalDurationMs"] = int(dur)
+if extra:
+    resp.update(json.loads(extra))
+ti = {"subagent_type": subagent, "description": desc}
+if prompt:
+    ti["prompt"] = prompt
+print(json.dumps({
+    "hook_event_name": "PostToolUse",
+    "session_id": session,
+    "tool_name": "Agent",
+    "tool_use_id": tid,
+    "tool_input": ti,
+    "tool_response": resp,
+}))
+PY
+}
+
+# -- (a) simulated four-phase run: one start + one finish per phase, every
+# L2 field present, slug resolved from the prompt in every record (L10, L1).
+SESSION="sess-fourphase"
+SPEC_PROMPT=$'You own Phase 1 -- Spec.\nUnit:  cost-measurement-v0.2\n\nWrite the spec.'
+SLICE_PROMPT=$'You own Phase 2 -- Slice.\nUnit:  cost-measurement-v0.2\n\nCut the slices.'
+BUILD_PROMPT=$'Unit:  cost-measurement-v0.2\nSlice: S2\n\nBuild the cost ledger hook.'
+VERIFY_PROMPT=$'You own Phase 4 -- Verify.\nUnit:  cost-measurement-v0.2\n\nVerify the unit.'
+
+cost "$(start_json loop-spec toolu-sp1 "Spec cost-measurement-v0.2" "$SPEC_PROMPT" "$SESSION")" >/dev/null
+cost "$(finish_json loop-spec toolu-sp1 "Spec cost-measurement-v0.2" "$SPEC_PROMPT" "$SESSION" completed 11000 5000 "")" >/dev/null
+
+cost "$(start_json loop-slice toolu-sl1 "Slice cost-measurement-v0.2" "$SLICE_PROMPT" "$SESSION")" >/dev/null
+cost "$(finish_json loop-slice toolu-sl1 "Slice cost-measurement-v0.2" "$SLICE_PROMPT" "$SESSION" completed 12000 6000 "")" >/dev/null
+
+cost "$(start_json loop-build toolu-bd1 "S2 cost ledger hook" "$BUILD_PROMPT" "$SESSION")" >/dev/null
+cost "$(finish_json loop-build toolu-bd1 "S2 cost ledger hook" "$BUILD_PROMPT" "$SESSION" completed 60787 239271 "")" >/dev/null
+
+cost "$(start_json loop-verify toolu-vf1 "Verify cost-measurement-v0.2" "$VERIFY_PROMPT" "$SESSION")" >/dev/null
+cost "$(finish_json loop-verify toolu-vf1 "Verify cost-measurement-v0.2" "$VERIFY_PROMPT" "$SESSION" completed 9000 3000 "")" >/dev/null
+
+four_phase_check() {
+  local bad=0
+  python3 - "$LEDGER" <<'PY' || bad=1
+import json, sys, collections
+records = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+by_phase = collections.defaultdict(list)
+for r in records:
+    by_phase[r.get("phase")].append(r)
+
+REQUIRED_ALWAYS = ["ts", "event", "invocation_id", "session_id", "slug", "phase", "agent", "model_source"]
+REQUIRED_FINISH = ["status", "duration_ms", "total_tokens"]
+
+for phase in ("spec", "slice", "build", "verify"):
+    evs = by_phase.get(phase, [])
+    assert len(evs) == 2, "%s: expected 2 records, got %d" % (phase, len(evs))
+    starts = [e for e in evs if e["event"] == "start"]
+    finishes = [e for e in evs if e["event"] == "finish"]
+    assert len(starts) == 1, phase + ": expected exactly 1 start"
+    assert len(finishes) == 1, phase + ": expected exactly 1 finish"
+    for e in evs:
+        for k in REQUIRED_ALWAYS:
+            assert k in e, "%s %s: missing %s" % (phase, e["event"], k)
+        assert e["slug"] == "cost-measurement-v0.2", phase + ": slug not resolved"
+    for k in REQUIRED_FINISH:
+        assert k in finishes[0], phase + " finish: missing " + k
+
+build_finish = [e for e in by_phase["build"] if e["event"] == "finish"][0]
+assert build_finish.get("slice") == "S2", "build finish: slice not resolved"
+PY
+  echo "$bad"
+}
+expect "four-phase run: 1 start + 1 finish per phase, L2 fields present, slug resolved" "0" "$(four_phase_check)"
+expect "four-phase run: exactly 8 records total" "8" "$(wc -l < "$LEDGER" | tr -d ' ')"
+
+# -- (b) no `Unit:` line anywhere -> slug "unknown", record not dropped (L4).
+rm -f "$LEDGER"
+cost "$(finish_json loop-build toolu-nounit "no unit here" "" "sess-nounit" completed 500 100 "")" >/dev/null
+expect "no Unit: line yields slug unknown and the record is not dropped" "unknown 1" \
+  "$(python3 -c "import json;print(json.loads(open('$LEDGER').read().strip())['slug'])") $(wc -l < "$LEDGER" | tr -d ' ')"
+
+# -- (c) exit 0 on every path, asserted individually (L6, L8).
+expect "cost ledger: valid payload exits 0" "0" \
+  "$(cost "$(finish_json loop-build toolu-valid1 "d" "" "$SESSION" completed 10 10 "")")"
+
+expect "cost ledger: malformed payload exits 0" "0" \
+  "$(CLAUDE_PROJECT_DIR="$COSTDIR" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh '{"hook_event_name":"PreToolUse", not valid json')"
+
+expect "cost ledger: empty payload exits 0" "0" \
+  "$(CLAUDE_PROJECT_DIR="$COSTDIR" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh '')"
+
+RODIR="$(mktemp -d)"
+chmod 555 "$RODIR"
+expect "cost ledger: unwritable ledger dir still exits 0" "0" \
+  "$(CLAUDE_PROJECT_DIR="$RODIR" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh "$(finish_json loop-build toolu-ro1 "d" "" sess-ro completed 10 10 "")")"
+chmod 755 "$RODIR"; rm -rf "$RODIR"
+
+NOPARSER_BIN="$(mktemp -d)"
+for b in cat mkdir date sed bash; do
+  p="$(command -v "$b" 2>/dev/null)"
+  [ -n "$p" ] && ln -s "$p" "$NOPARSER_BIN/$b"
+done
+NOPARSER_DIR="$(mktemp -d)"
+NOPARSER_PAYLOAD="$(finish_json loop-build toolu-np1 "d" "" sess-np completed 10 10 "")"
+NOPARSER_EXIT="$(PATH="$NOPARSER_BIN" CLAUDE_PROJECT_DIR="$NOPARSER_DIR" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh "$NOPARSER_PAYLOAD")"
+expect "cost ledger: PATH stripped of jq+python3 still exits 0" "0" "$NOPARSER_EXIT"
+expect "cost ledger: PATH stripped of jq+python3 writes no partial line" "no" \
+  "$([ -e "$NOPARSER_DIR/.claude/loop-cost.jsonl" ] && echo yes || echo no)"
+rm -rf "$NOPARSER_BIN" "$NOPARSER_DIR"
+
+# -- (d) async-launched: null tokens, a status that says why, never a 0 (L3, D4).
+rm -f "$LEDGER"
+cost "$(finish_json loop-build toolu-async1 "d" "" sess-async async_launched null null "")" >/dev/null
+async_check() {
+  python3 - "$LEDGER" <<'PY'
+import json, sys
+r = json.loads(open(sys.argv[1]).read().strip())
+fields = ["total_tokens", "input_tokens", "output_tokens", "cache_read_tokens", "duration_ms"]
+ok = r.get("status") == "async_launched" and all(r.get(f) is None for f in fields)
+print("yes" if ok else "no")
+PY
+}
+expect "async-launched invocation: null tokens, status names why, never 0" "yes" "$(async_check)"
+
+# -- (e) cache-read tokens recorded when present, omitted (not zeroed) when
+# absent (C4, L3).
+rm -f "$LEDGER"
+cost "$(finish_json loop-build toolu-cache1 "d" "" sess-cache completed 1000 500 '{"usage":{"input_tokens":200,"output_tokens":300,"cache_read_input_tokens":150}}')" >/dev/null
+cost "$(finish_json loop-build toolu-cache2 "d" "" sess-cache completed 1000 500 "")" >/dev/null
+cache_check() {
+  python3 - "$LEDGER" <<'PY'
+import json, sys
+lines = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+with_cache = [r for r in lines if r.get("invocation_id") == "toolu-cache1"][0]
+without_cache = [r for r in lines if r.get("invocation_id") == "toolu-cache2"][0]
+ok = with_cache.get("cache_read_tokens") == 150 and "cache_read_tokens" not in without_cache
+print("yes" if ok else "no")
+PY
+}
+expect "cache-read tokens recorded when present, field absent (not 0) when not" "yes" "$(cache_check)"
+
+# -- (f) ledger path, and nothing under docs/loop (H1).
+expect "ledger is written at .claude/loop-cost.jsonl" "yes" \
+  "$([ -f "$COSTDIR/.claude/loop-cost.jsonl" ] && echo yes || echo no)"
+expect "nothing is ever written under docs/loop" "no" \
+  "$([ -e "$COSTDIR/docs" ] && echo yes || echo no)"
+
+# -- (g) LARAVEL_LOOP_COST_LEDGER=0 writes nothing and exits 0.
+rm -f "$LEDGER"
+DISABLE_EXIT="$(LARAVEL_LOOP_COST_LEDGER=0 cost "$(finish_json loop-build toolu-off1 "d" "" sess-off completed 10 10 "")")"
+expect "LARAVEL_LOOP_COST_LEDGER=0 exits 0" "0" "$DISABLE_EXIT"
+expect "LARAVEL_LOOP_COST_LEDGER=0 writes nothing" "no" "$([ -e "$LEDGER" ] && echo yes || echo no)"
+
+rm -rf "$COSTDIR"
+
+# ---------------------------------------------------------------------------
 echo "block-untested-commit.sh (test-with-the-code guard)"
 REPO="$(mktemp -d)"
 git -C "$REPO" init --quiet
