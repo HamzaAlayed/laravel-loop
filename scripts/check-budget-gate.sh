@@ -284,7 +284,8 @@ if [ -n "$WARN_RAW" ]; then
     WARN_VALID=1
     WARN_VALUE="$WARN_RAW"
   else
-    echo "budget gate: LARAVEL_LOOP_BUDGET_WARN=\"$WARN_RAW\" is not a bare non-negative integer -- the warn threshold is DISABLED, not defaulted to any number. Accepted form: digits only, e.g. 150000." >&2
+    echo "budget gate: LARAVEL_LOOP_BUDGET_WARN=\"$WARN_RAW\" is not a bare non-negative integer -- the warn threshold is DISABLED, not defaulted to any number. Accepted form: digits only." \
+      >&2
   fi
 fi
 
@@ -294,14 +295,16 @@ if [ -n "$HARD_RAW" ]; then
     HARD_VALID=1
     HARD_VALUE="$HARD_RAW"
   else
-    echo "budget gate: LARAVEL_LOOP_BUDGET_HARD=\"$HARD_RAW\" is not a bare non-negative integer -- the hard gate is DISABLED, not defaulted to any number. Accepted form: digits only, e.g. 400000." >&2
+    echo "budget gate: LARAVEL_LOOP_BUDGET_HARD=\"$HARD_RAW\" is not a bare non-negative integer -- the hard gate is DISABLED, not defaulted to any number. Accepted form: digits only." \
+      >&2
   fi
 fi
 
 # BG8 -- reported plainly; resolved by picking neither, and never a reason to
 # skip the hard gate below.
 if [ "$WARN_VALID" -eq 1 ] && [ "$HARD_VALID" -eq 1 ] && [ "$WARN_VALUE" -gt "$HARD_VALUE" ]; then
-  echo "budget gate: misconfiguration -- LARAVEL_LOOP_BUDGET_WARN ($WARN_VALUE) is set above LARAVEL_LOOP_BUDGET_HARD ($HARD_VALUE). Neither value is preferred over the other; fix the thresholds. This does not skip the hard gate below." >&2
+  echo "budget gate: misconfiguration -- LARAVEL_LOOP_BUDGET_WARN ($WARN_VALUE) is set above LARAVEL_LOOP_BUDGET_HARD ($HARD_VALUE). Neither value is preferred over the other; fix the thresholds. This does not skip the hard gate below." \
+    >&2
 fi
 
 # Nothing left to evaluate.

@@ -1346,6 +1346,21 @@ print(count)
 PY
 )"
 
+# -- (o) G0-D1 regression (S4 re-brief, closing loop-verify's G2 FAIL): no
+# digit ever shares a line with LARAVEL_LOOP_BUDGET_WARN or
+# LARAVEL_LOOP_BUDGET_HARD anywhere in check-budget-gate.sh's OWN SOURCE.
+# Mirrors the docs section's README-only case (c) below, but S8's version
+# never scanned the script itself -- which is exactly how "Accepted form:
+# digits only, e.g. 150000." / "...e.g. 400000." shipped undetected in the
+# two disable messages: a numeric example sitting right next to the env-var
+# name a human sees at the one moment they are most likely to typo it. (Proof
+# this case can fail: reconstructing that exact pre-fix wording in a temp
+# copy trips this same grep -- verified by hand during S4's re-brief rather
+# than kept as a second permanent case, matching S8's own single-assertion
+# shape below and this file's own case-count discipline.)
+expect "(o) G0-D1: no digit shares a line with LARAVEL_LOOP_BUDGET_WARN or LARAVEL_LOOP_BUDGET_HARD anywhere in check-budget-gate.sh's own source" \
+  "0" "$(grep -qE 'LARAVEL_LOOP_BUDGET_(WARN|HARD)[^\n]*[0-9]' "$SCRIPTS/check-budget-gate.sh" 2>/dev/null && echo 1 || echo 0)"
+
 # -- (k) no reassurance token anywhere in any message this section produced.
 expect "(k) BG6: no 'within budget', 'under budget', or checkmark in any budget-gate output" "1" \
   "$( { printf '%s\n' "$ALL_BG_STDOUT"; printf '%s\n' "$ALL_BG_STDERR"; } | grep -iE 'within budget|under budget|✓' >/dev/null 2>&1; echo $?)"

@@ -49,7 +49,7 @@ offered would be a guess dressed as a default.
   this plugin or this README — not baked in, not commented out, not offered as a
   "suggested starting value." Set one from your own ledger's observed totals once you
   have some.
-- Harness grew from 121 to 326 cases; shellcheck stays clean throughout.
+- Harness grew from 121 to 329 cases; shellcheck stays clean throughout.
 - DC2 and DC3 (the report recognised against a real run; the gate observed doing nothing,
   then observed firing) are open, human-judged conditions, the same footing as v0.2's
   still-open DC1 — passing verify means this is built, not yet that it is trusted in the
