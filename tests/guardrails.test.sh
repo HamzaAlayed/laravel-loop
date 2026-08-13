@@ -1408,17 +1408,22 @@ expect "(c) '## Budget events' instruction names all four event kinds + threshol
 expect "(d) commands/loop.md never instructs 'within budget'/'under budget'/checkmark for spend (BG6)" "no" \
   "$(grep -iE 'within budget|under budget|✓' "$LOOPMD" >/dev/null 2>&1 && echo yes || echo no)"
 
-# (e) step 5 (Close) is unedited by this slice's diff — the S7 boundary
-# machine-checked rather than trusted. Compares the Close region as last
-# committed (HEAD) against the current working tree; empty means this
-# slice introduced no uncommitted change there.
-close_region() {
-  sed -n '/^\*\*5\. Close\.\*\*/,/^## Refusals/p' "$1" 2>/dev/null
+# (e) [retired by S7 (cost-reporting-v0.3): the original version of this
+# case asserted step 5 (Close) had no diff at all, which was only ever true
+# because S6's own commit never touched it. That assertion goes stale the
+# moment a slice legitimately edits step 5, so S7 replaces it with the
+# boundary's other half — step 3/4 (the breach-gate documentation this slice
+# owns, "On a budget breach" through "**4. Verify") has no diff introduced
+# by S7's edits to step 5. Compares the region as last committed (HEAD)
+# against the current working tree; empty means S7 touched no byte of it,
+# which is S7's own done-when (h).]
+build_region() {
+  sed -n '/On a budget breach/,/^\*\*4\. Verify/p' "$1" 2>/dev/null
 }
-CLOSE_HEAD="$(cd "$ROOT" && git show HEAD:commands/loop.md 2>/dev/null | sed -n '/^\*\*5\. Close\.\*\*/,/^## Refusals/p')"
-CLOSE_WORK="$(close_region "$LOOPMD")"
-expect "(e) step 5 (Close) region has no diff introduced by this slice (S7 boundary machine-checked)" "" \
-  "$(diff <(printf '%s\n' "$CLOSE_HEAD") <(printf '%s\n' "$CLOSE_WORK"))"
+BUILD_HEAD="$(cd "$ROOT" && git show HEAD:commands/loop.md 2>/dev/null | sed -n '/On a budget breach/,/^\*\*4\. Verify/p')"
+BUILD_WORK="$(build_region "$LOOPMD")"
+expect "(e) step 3/4 (Build) breach-gate region (S6's) has no diff from S7's edits to step 5 (boundary machine-checked)" "" \
+  "$(diff <(printf '%s\n' "$BUILD_HEAD") <(printf '%s\n' "$BUILD_WORK"))"
 
 # ---------------------------------------------------------------------------
 echo "check-budget-gate.sh --phase (per-phase expectations, S5)"
@@ -2349,6 +2354,192 @@ for event, entries in h.items():
 print(count)
 PY
 )"
+
+# ---------------------------------------------------------------------------
+echo
+echo "cost in log.md (scripts/write-cost-log-section.sh, S7)"
+
+writelog() { # $1 CLAUDE_PROJECT_DIR $2 slug
+  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/write-cost-log-section.sh" "$2" >/dev/null 2>&1
+}
+writelog_exit() { # $1 CLAUDE_PROJECT_DIR $2 slug
+  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/write-cost-log-section.sh" "$2" >/dev/null 2>&1
+  echo $?
+}
+writelog_stderr() { # $1 CLAUDE_PROJECT_DIR $2 slug
+  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/write-cost-log-section.sh" "$2" 2>&1 1>/dev/null
+}
+
+# Fixture: a log.md shaped like a real one -- pre-existing headings plus a
+# seeded '## Budget events' block (S6's heading) and a trailing section
+# after it -- alongside a mixed ledger (one priced spec invocation marked
+# rework, one unpriced build invocation) under the same slug.
+LOGDIR="$(mktemp -d)"
+mkdir -p "$LOGDIR/.claude" "$LOGDIR/docs/loop/cost-log-fixture"
+LOGFILE="$LOGDIR/docs/loop/cost-log-fixture/log.md"
+{
+  printf '%s\n' '# Log — cost-log-fixture'
+  printf '\n'
+  printf '%s\n' '## G0 — Spec'
+  printf '%s\n' 'Some spec notes.'
+  printf '\n'
+  printf '%s\n' '## G1 — Slice'
+  printf '%s\n' 'Some slice notes.'
+  printf '\n'
+  printf '%s\n' '## Budget events'
+  printf '%s\n' '- warn crossed at 100000 tokens (threshold LARAVEL_LOOP_BUDGET_WARN=100000)'
+  printf '\n'
+  printf '%s\n' '## Conventions / decisions carried forward'
+  printf '%s\n' 'Nothing.'
+} > "$LOGFILE"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"a1","slug":"cost-log-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"a1","slug":"cost-log-fixture","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":60787,"phase_detail":"rework","refine_passes":1}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"a2","slug":"cost-log-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"a2","slug":"cost-log-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$LOGDIR/.claude/loop-cost.jsonl"
+
+expect "(a) write-cost-log-section.sh exits 0 on the mixed fixture" "0" "$(writelog_exit "$LOGDIR" cost-log-fixture)"
+writelog "$LOGDIR" cost-log-fixture
+LOG_OUT1="$(cat "$LOGFILE")"
+
+expect "(a) a '## Cost' heading is written" "1" "$(grep -cx '## Cost' "$LOGFILE")"
+expect "(a) the section carries the coverage sentence (DL1, DL2, CV1)" "yes" \
+  "$(printf '%s\n' "$LOG_OUT1" | grep -q 'unpriced, not counted' && echo yes || echo no)"
+expect "(a) the priced-subset total is labelled partial, with the unpriced count adjacent (DL1)" "yes" \
+  "$(printf '%s\n' "$LOG_OUT1" | grep -q '60787 (priced subset only, partial -- 1 unpriced' && echo yes || echo no)"
+expect "(a) the rework figure carries its count (DL3)" "yes" \
+  "$(printf '%s\n' "$LOG_OUT1" | grep -q 'count: 1 of 2 invocation(s) marked rework' && echo yes || echo no)"
+expect "(a) the rework figure carries D3's definition alongside it, not just the count (DL3)" "yes" \
+  "$(printf '%s\n' "$LOG_OUT1" | grep -qi 'not the cost of retrying' && echo yes || echo no)"
+
+# (b) DL4 -- re-running the close step replaces the section rather than
+# appending a second one, and disturbs no other byte -- '## Budget events'
+# and every pre-existing heading included, asserted with diff.
+expect "(b) exactly one '## Cost' heading after the first run" "1" "$(grep -cx '## Cost' "$LOGFILE")"
+writelog "$LOGDIR" cost-log-fixture
+LOG_OUT2="$(cat "$LOGFILE")"
+expect "(b) exactly one '## Cost' heading after a second run (DL4)" "1" "$(grep -cx '## Cost' "$LOGFILE")"
+expect "(b) the file is byte-identical across the second run (DL4, CV7)" "" \
+  "$(diff <(printf '%s' "$LOG_OUT1") <(printf '%s' "$LOG_OUT2"))"
+expect "(b) '## Budget events' and every pre-existing heading survive untouched (DL4)" "yes" \
+  "$(printf '%s\n' "$LOG_OUT2" | grep -qx '## Budget events' \
+     && printf '%s\n' "$LOG_OUT2" | grep -q 'warn crossed at 100000' \
+     && printf '%s\n' "$LOG_OUT2" | grep -qx '## G0 — Spec' \
+     && printf '%s\n' "$LOG_OUT2" | grep -qx '## G1 — Slice' \
+     && printf '%s\n' "$LOG_OUT2" | grep -qx '## Conventions / decisions carried forward' \
+     && echo yes || echo no)"
+
+# (c) a ledger with no record for the slug: the section is written and says
+# so; never omitted, never a zeroed table (DL5).
+NOSLUGDIR="$(mktemp -d)"
+mkdir -p "$NOSLUGDIR/.claude" "$NOSLUGDIR/docs/loop/other-slug"
+NOSLUGLOG="$NOSLUGDIR/docs/loop/other-slug/log.md"
+printf '# Log — other-slug\n\n## G0 — Spec\nnotes\n' > "$NOSLUGLOG"
+cp "$LOGDIR/.claude/loop-cost.jsonl" "$NOSLUGDIR/.claude/loop-cost.jsonl"
+expect "(c) unrecorded slug: exits 0" "0" "$(writelog_exit "$NOSLUGDIR" other-slug)"
+writelog "$NOSLUGDIR" other-slug
+NOSLUG_OUT="$(cat "$NOSLUGLOG")"
+expect "(c) unrecorded slug: '## Cost' section is written, not omitted (DL5)" "yes" \
+  "$(printf '%s\n' "$NOSLUG_OUT" | grep -qx '## Cost' && echo yes || echo no)"
+expect "(c) unrecorded slug: says so plainly" "yes" \
+  "$(printf '%s\n' "$NOSLUG_OUT" | grep -qi 'No records for this unit' && echo yes || echo no)"
+expect "(c) unrecorded slug: no zeroed token table" "no" \
+  "$(printf '%s\n' "$NOSLUG_OUT" | grep -qiE 'tokens?:[[:space:]]*0\b' && echo yes || echo no)"
+
+# (d) DL7/H1 -- the only changed path under docs/loop/ is that unit's
+# log.md, and no ledger content appears anywhere beneath docs/loop/.
+DL7DIR="$(mktemp -d)"
+mkdir -p "$DL7DIR/.claude" "$DL7DIR/docs/loop/dl7-fixture" "$DL7DIR/docs/loop/untouched-unit"
+printf '# Log — dl7-fixture\n\n## G0 — Spec\nnotes\n' > "$DL7DIR/docs/loop/dl7-fixture/log.md"
+printf '# Log — untouched-unit\n\n## G0 — Spec\nnotes\n' > "$DL7DIR/docs/loop/untouched-unit/log.md"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"dl7-unique-token-zzz","slug":"dl7-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"dl7-unique-token-zzz","slug":"dl7-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":777}'
+} > "$DL7DIR/.claude/loop-cost.jsonl"
+DL7_BEFORE="$(find "$DL7DIR/docs/loop" -type f | sort | while IFS= read -r f; do cksum "$f"; done)"
+writelog "$DL7DIR" dl7-fixture
+DL7_AFTER="$(find "$DL7DIR/docs/loop" -type f | sort | while IFS= read -r f; do cksum "$f"; done)"
+expect "(d) untouched-unit's log.md is byte-identical (only the target unit's log.md changed)" "" \
+  "$(diff <(printf '%s\n' "$DL7_BEFORE" | grep untouched-unit) <(printf '%s\n' "$DL7_AFTER" | grep untouched-unit))"
+expect "(d) no ledger content (invocation_id) appears anywhere under docs/loop/ (H1)" "no" \
+  "$(grep -rl 'dl7-unique-token-zzz' "$DL7DIR/docs/loop" >/dev/null 2>&1 && echo yes || echo no)"
+expect "(d) the file set under docs/loop/ is unchanged -- nothing added, nothing removed" "yes" \
+  "$(diff <(printf '%s\n' "$DL7_BEFORE" | awk '{print $NF}') <(printf '%s\n' "$DL7_AFTER" | awk '{print $NF}') >/dev/null 2>&1 && echo yes || echo no)"
+rm -rf "$DL7DIR"
+
+# (e) log.md absent: exit 0, nothing written, a message saying why -- the
+# close step writes log.md first; this script never invents one.
+ABSENTLOGDIR="$(mktemp -d)"
+mkdir -p "$ABSENTLOGDIR/.claude" "$ABSENTLOGDIR/docs/loop"
+cp "$LOGDIR/.claude/loop-cost.jsonl" "$ABSENTLOGDIR/.claude/loop-cost.jsonl"
+expect "(e) log.md absent: exits 0" "0" "$(writelog_exit "$ABSENTLOGDIR" no-log-yet)"
+ABSENT_ERR="$(writelog_stderr "$ABSENTLOGDIR" no-log-yet)"
+expect "(e) log.md absent: says why, on stderr" "yes" \
+  "$(printf '%s' "$ABSENT_ERR" | grep -qi 'No log.md found' && echo yes || echo no)"
+expect "(e) log.md absent: nothing written -- no path created for that unit" "no" \
+  "$([ -e "$ABSENTLOGDIR/docs/loop/no-log-yet" ] && echo yes || echo no)"
+rm -rf "$ABSENTLOGDIR"
+
+# (f) BG6 -- no reassurance token anywhere in this section, across every
+# fixture's output above.
+expect "(f) no 'within budget'/'under budget'/checkmark anywhere in the Cost section (BG6)" "1" \
+  "$(printf '%s\n%s\n%s\n' "$LOG_OUT1" "$LOG_OUT2" "$NOSLUG_OUT" | grep -iE 'within budget|under budget|✓' >/dev/null 2>&1; echo $?)"
+
+rm -rf "$LOGDIR" "$NOSLUGDIR"
+
+# (g) commands/loop.md step 5 names the script -- prove-it-can-fail run
+# against a stripped temp copy first (the same idiom S5/S6 use).
+close_script_named_check() { # $1 file -> "0" present, "1" missing
+  local f="$1"
+  if grep -q 'write-cost-log-section.sh' "$f" && grep -q '## Cost' "$f"; then
+    echo 0
+  else
+    echo 1
+  fi
+}
+CLOSEDIR="$(mktemp -d)"
+mkdir -p "$CLOSEDIR/commands"
+grep -v -i -E 'write-cost-log-section|## Cost' "$LOOPMD" > "$CLOSEDIR/commands/loop.md"
+expect "(g) stripped copy fails the check (proves the case can fail)" "1" \
+  "$(close_script_named_check "$CLOSEDIR/commands/loop.md")"
+rm -rf "$CLOSEDIR"
+expect "(g) commands/loop.md step 5 (Close) names write-cost-log-section.sh" "0" \
+  "$(close_script_named_check "$LOOPMD")"
+
+# (h) S6's cases pass unmodified and its step 3/4 region is untouched by
+# this slice's diff -- machine-checked above in the (retired-and-replaced)
+# S6 boundary case; nothing further to assert here.
+
+# (i) byte-identical section content on a re-run of the same ledger -- (b)
+# already asserted the whole file is byte-identical; this isolates just the
+# '## Cost' section's own bytes.
+extract_cost_section() {
+  awk '
+    /^## Cost$/ { flag=1; print; next }
+    flag && /^## / { exit }
+    flag { print }
+  ' "$1"
+}
+LOGDIR2="$(mktemp -d)"
+mkdir -p "$LOGDIR2/.claude" "$LOGDIR2/docs/loop/cost-log-fixture2"
+LOGFILE2="$LOGDIR2/docs/loop/cost-log-fixture2/log.md"
+printf '# Log — cost-log-fixture2\n\n## G0 — Spec\nnotes\n' > "$LOGFILE2"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"c1","slug":"cost-log-fixture2","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"c1","slug":"cost-log-fixture2","phase":"build","agent":"loop-build","status":"completed","total_tokens":500}'
+} > "$LOGDIR2/.claude/loop-cost.jsonl"
+writelog "$LOGDIR2" cost-log-fixture2
+SECTION_1="$(extract_cost_section "$LOGFILE2")"
+writelog "$LOGDIR2" cost-log-fixture2
+SECTION_2="$(extract_cost_section "$LOGFILE2")"
+expect "(i) the '## Cost' section's own bytes are identical on a re-run of the same ledger (CV7)" "" \
+  "$(diff <(printf '%s' "$SECTION_1") <(printf '%s' "$SECTION_2"))"
+rm -rf "$LOGDIR2"
+
+# -- executable bit + shellcheck (X1) --
+expect "write-cost-log-section.sh is executable" "yes" \
+  "$([ -x "$SCRIPTS/write-cost-log-section.sh" ] && echo yes || echo no)"
 
 echo
 echo "----------------------------------------"
