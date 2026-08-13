@@ -55,6 +55,7 @@
 #   cost_coverage_sentence
 #   cost_scan <ledger-path> <slug-or-empty>
 #   cost_list_slugs <ledger-path>
+#   cost_slice_rows <ledger-path> <slug-or-empty>   (added in cost-reporting-v0.3 S3)
 #
 # cost_scan sets (never anything outside this COST_* namespace):
 #   COST_SCAN_STATE           "absent" | "empty" | "no-slug" | "ok" | "no-parser" | "scan-error"
@@ -73,6 +74,59 @@
 #   ...and the same five, suffixed _SPEC / _SLICE / _BUILD / _VERIFY / _UNKNOWN, split by
 #   the ledger's own `phase` field (an invocation's phase is the one on its finish record,
 #   falling back to its start record's if it has no finish yet).
+#
+# S3 additions to cost_scan (same rules: never a fabricated 0, never a re-parse elsewhere):
+#   COST_MODELS_SPEC / _SLICE / _BUILD / _VERIFY / _UNKNOWN
+#                             comma-separated "model::model_source" pairs, one per distinct
+#                             model actually seen on a PRICED invocation in that phase (CO4).
+#                             Empty string means no priced invocation in that phase --
+#                             callers render that as "unavailable", never "0" (cost-report.sh
+#                             does this formatting; the lib hands over data, not prose).
+#   COST_N_REWORK             resolved invocations (priced + unpriced) with phase_detail
+#                             "rework" -- the "n" in "n of m invocations marked rework" (CO5)
+#   COST_N_REWORK_PRICED      of those, the ones also priced
+#   COST_TOKENS_REWORK_PRICED sum of total_tokens over priced rework invocations only -- a
+#                             token SHARE is this divided by COST_TOKENS_PRICED, computed by
+#                             the caller, never by this file re-deriving a percentage view
+#   COST_REWORK_HAS_AMBIGUOUS "1" if any counted invocation carries rework_attribution
+#                             "ambiguous", else "0" -- a caller must show it as ambiguous,
+#                             never fold it into an unqualified count (v0.2 S5)
+#   COST_REWORK_REFINE_PASSES comma-separated refine_passes counts, one per rework
+#                             invocation, sorted by pass-count descending then invocation id
+#                             ascending -- fixed sort keys so this is byte-identical on a
+#                             re-run (CV7), never an unordered hash-iteration artifact
+#   COST_CACHE_READ_PRICED_N count of priced invocations that carry a cache_read_tokens
+#                             field at all (present, non-null) -- zero here means the field
+#                             is absent from every priced record, which is the CV4 case a
+#                             caller must render as "unavailable", never "0%"
+#   COST_TOKENS_CACHE_READ    sum of cache_read_tokens over that same subset
+#   COST_TOKENS_CACHE_DENOM   sum of total_tokens over that same subset (the share's
+#                             denominator -- computed only over invocations that actually
+#                             reported cache-read data, per CV5's "priced invocations only,
+#                             and says so")
+#   COST_TS_MIN               earliest `ts` seen on any start record for the requested slug,
+#                             or -1 if none -- raw ledger data, never wall-clock-of-now
+#   COST_TS_MAX               latest `ts` seen on any finish record for the requested slug,
+#                             or -1 if none. (COST_TS_MAX - COST_TS_MIN) is a wall-clock
+#                             SPAN, not a sum of durations -- CO11 forbids ever summing
+#                             overlapping invocations' elapsed times into one "agent time"
+#                             total, and this pair of timestamps is the only elapsed figure
+#                             this file computes for exactly that reason.
+#
+# cost_slice_rows sets, as a side effect (call it directly, never through
+# command substitution -- see the function's own comment for why), and also
+# prints the same rows to stdout for a caller that only wants a stream:
+#   COST_SLICE_UNKNOWN_PRICED count of priced invocations for the requested slug that carry
+#                             no `slice` field at all. Non-zero means a per-slice ranking
+#                             would silently exclude tokens that could belong to the biggest
+#                             slice -- the signal cost-report.sh's Flags section uses to
+#                             print "could not be assessed" instead of a ranking (CO7)
+#   COST_SLICE_ROWS           newline-joined TSV, one line per slice that DOES have at least
+#                             one priced invocation: slice<TAB>priced_tokens<TAB>
+#                             priced_invocations<TAB>rework_priced_tokens<TAB>
+#                             rework_priced_invocations, sorted by priced_tokens descending,
+#                             ties broken by slice name ascending (byte ordering, never a
+#                             locale-dependent sort -- CV7)
 #
 # COST_N_INVOCATIONS deliberately does NOT include COST_N_INFLIGHT: an in-flight
 # invocation has not resolved into "carries a token figure" or "does not" yet,
@@ -136,17 +190,35 @@ def phase_key:
       | if ($slugfilter != "" and $slugfilter != $slg) then .
         else
           (($r.invocation_id // ("noid-" + ((.lines)|tostring)))) as $id
-          | (.inv[$id] // {start:false, finish:false, priced:false, tokens:null, phase:"unknown"}) as $e
+          | (.inv[$id] // {start:false, finish:false, priced:false, tokens:null, phase:"unknown",
+                           model:null, model_source:null, ts_start:null, ts_finish:null,
+                           cache_read:null, cache_read_present:false,
+                           phase_detail:null, refine_passes:null, rework_attribution:null}) as $e
           | ( $e
-              | if $r.event == "start" then (.start = true) | (.phase = ($r.phase // .phase)) else . end
+              | if $r.event == "start" then
+                  (.start = true)
+                  | (.phase = ($r.phase // .phase))
+                  | (.model = ($r.model // .model))
+                  | (.model_source = ($r.model_source // .model_source))
+                  | (.ts_start = ($r.ts // .ts_start))
+                else . end
               | if $r.event == "finish" then
                   (.finish = true)
                   | (.phase = ($r.phase // .phase))
+                  | (.model = ($r.model // .model))
+                  | (.model_source = ($r.model_source // .model_source))
+                  | (.ts_finish = ($r.ts // .ts_finish))
+                  | (.phase_detail = ($r.phase_detail // .phase_detail))
+                  | (.refine_passes = ($r.refine_passes // .refine_passes))
+                  | (.rework_attribution = ($r.rework_attribution // .rework_attribution))
                   | (if (($r|has("total_tokens")) and ($r.total_tokens != null)) then
                        (.priced = true) | (.tokens = $r.total_tokens)
                      else
                        (.priced = false)
                      end)
+                  | (if (($r|has("cache_read_tokens")) and ($r.cache_read_tokens != null)) then
+                       (.cache_read_present = true) | (.cache_read = $r.cache_read_tokens)
+                     else . end)
                 else . end
             ) as $ne
           | .inv[$id] = $ne
@@ -159,25 +231,47 @@ def phase_key:
 | ($acc.inv | to_entries) as $entries
 | (reduce $entries[] as $e (
      { inv:0, priced:0, unpriced:0, inflight:0, tokens:0,
-       byphase: { SPEC:{inv:0,priced:0,unpriced:0,inflight:0,tokens:0},
-                  SLICE:{inv:0,priced:0,unpriced:0,inflight:0,tokens:0},
-                  BUILD:{inv:0,priced:0,unpriced:0,inflight:0,tokens:0},
-                  VERIFY:{inv:0,priced:0,unpriced:0,inflight:0,tokens:0},
-                  UNKNOWN:{inv:0,priced:0,unpriced:0,inflight:0,tokens:0} } }
+       ts_min:null, ts_max:null,
+       rework_n:0, rework_priced_n:0, rework_tokens:0, rework_ambiguous:0, rework_list:[],
+       cache_n:0, cache_sum:0, cache_denom:0,
+       byphase: { SPEC:{inv:0,priced:0,unpriced:0,inflight:0,tokens:0,models:{}},
+                  SLICE:{inv:0,priced:0,unpriced:0,inflight:0,tokens:0,models:{}},
+                  BUILD:{inv:0,priced:0,unpriced:0,inflight:0,tokens:0,models:{}},
+                  VERIFY:{inv:0,priced:0,unpriced:0,inflight:0,tokens:0,models:{}},
+                  UNKNOWN:{inv:0,priced:0,unpriced:0,inflight:0,tokens:0,models:{}} } }
    ;
      ($e.value.phase | phase_key) as $pk
    | (.inv += 1) | (.byphase[$pk].inv += 1)
+   | (if $e.value.ts_start != null then
+        (.ts_min = (if .ts_min == null then $e.value.ts_start else ([.ts_min, $e.value.ts_start] | min) end))
+      else . end)
    | if $e.value.finish then
-       if $e.value.priced then
-         (.priced += 1) | (.tokens += $e.value.tokens)
-         | (.byphase[$pk].priced += 1) | (.byphase[$pk].tokens += $e.value.tokens)
-       else
-         (.unpriced += 1) | (.byphase[$pk].unpriced += 1)
-       end
+       (if $e.value.ts_finish != null then
+          (.ts_max = (if .ts_max == null then $e.value.ts_finish else ([.ts_max, $e.value.ts_finish] | max) end))
+        else . end)
+       | (if $e.value.phase_detail == "rework" then
+            (.rework_n += 1)
+            | (.rework_list += [{id: $e.key, passes: ($e.value.refine_passes // 0)}])
+            | (if $e.value.rework_attribution == "ambiguous" then (.rework_ambiguous = 1) else . end)
+          else . end)
+       | if $e.value.priced then
+           (.priced += 1) | (.tokens += $e.value.tokens)
+           | (.byphase[$pk].priced += 1) | (.byphase[$pk].tokens += $e.value.tokens)
+           | (.byphase[$pk].models[(($e.value.model // "unavailable") + "::" + ($e.value.model_source // "unknown"))] = 1)
+           | (if $e.value.cache_read_present then
+                (.cache_n += 1) | (.cache_sum += $e.value.cache_read) | (.cache_denom += $e.value.tokens)
+              else . end)
+           | (if $e.value.phase_detail == "rework" then
+                (.rework_priced_n += 1) | (.rework_tokens += $e.value.tokens)
+              else . end)
+         else
+           (.unpriced += 1) | (.byphase[$pk].unpriced += 1)
+         end
      elif $e.value.start then
        (.inflight += 1) | (.byphase[$pk].inflight += 1)
      else . end
    )) as $agg
+| ( $agg.rework_list | sort_by([-(.passes), .id]) | map(.passes|tostring) | join(",") ) as $passeslist
 | ( "COUNT\tCOST_N_LINES\t\($acc.lines)",
     "COUNT\tCOST_N_SKIPPED\t\($acc.skipped)",
     "COUNT\tCOST_N_CAPTRIP\t\($acc.captrip)",
@@ -185,14 +279,25 @@ def phase_key:
     "COUNT\tCOST_N_PRICED\t\($agg.priced)",
     "COUNT\tCOST_N_UNPRICED\t\($agg.unpriced)",
     "COUNT\tCOST_N_INFLIGHT\t\($agg.inflight)",
-    "COUNT\tCOST_TOKENS_PRICED\t\($agg.tokens)"
+    "COUNT\tCOST_TOKENS_PRICED\t\($agg.tokens)",
+    "COUNT\tCOST_N_REWORK\t\($agg.rework_n)",
+    "COUNT\tCOST_N_REWORK_PRICED\t\($agg.rework_priced_n)",
+    "COUNT\tCOST_TOKENS_REWORK_PRICED\t\($agg.rework_tokens)",
+    "COUNT\tCOST_REWORK_HAS_AMBIGUOUS\t\($agg.rework_ambiguous)",
+    "COUNT\tCOST_CACHE_READ_PRICED_N\t\($agg.cache_n)",
+    "COUNT\tCOST_TOKENS_CACHE_READ\t\($agg.cache_sum)",
+    "COUNT\tCOST_TOKENS_CACHE_DENOM\t\($agg.cache_denom)",
+    "COUNT\tCOST_TS_MIN\t\($agg.ts_min // -1)",
+    "COUNT\tCOST_TS_MAX\t\($agg.ts_max // -1)",
+    "REFINEPASSES\t\($passeslist)"
   ), (
     $agg.byphase | to_entries[] | (
       "COUNT\tCOST_N_INVOCATIONS_\(.key)\t\(.value.inv)",
       "COUNT\tCOST_N_PRICED_\(.key)\t\(.value.priced)",
       "COUNT\tCOST_N_UNPRICED_\(.key)\t\(.value.unpriced)",
       "COUNT\tCOST_N_INFLIGHT_\(.key)\t\(.value.inflight)",
-      "COUNT\tCOST_TOKENS_PRICED_\(.key)\t\(.value.tokens)"
+      "COUNT\tCOST_TOKENS_PRICED_\(.key)\t\(.value.tokens)",
+      "MODEL\t\(.key)\t\((.value.models | keys_unsorted | join(",")))"
     )
   ), (
     $acc.slugs | keys_unsorted[] | "SLUG\t\(.)"
@@ -242,42 +347,83 @@ for raw in sys.stdin:
             continue
         invid = r.get("invocation_id") or ("noid-" + str(lines))
         e = inv.get(invid) or {"start": False, "finish": False, "priced": False,
-                                "tokens": None, "phase": "unknown"}
+                                "tokens": None, "phase": "unknown",
+                                "model": None, "model_source": None,
+                                "ts_start": None, "ts_finish": None,
+                                "cache_read": None, "cache_read_present": False,
+                                "phase_detail": None, "refine_passes": None,
+                                "rework_attribution": None}
         if event == "start":
             e["start"] = True
             e["phase"] = r.get("phase") or e["phase"]
+            e["model"] = r.get("model") or e["model"]
+            e["model_source"] = r.get("model_source") or e["model_source"]
+            e["ts_start"] = r.get("ts") if r.get("ts") is not None else e["ts_start"]
         if event == "finish":
             e["finish"] = True
             e["phase"] = r.get("phase") or e["phase"]
+            e["model"] = r.get("model") or e["model"]
+            e["model_source"] = r.get("model_source") or e["model_source"]
+            e["ts_finish"] = r.get("ts") if r.get("ts") is not None else e["ts_finish"]
+            e["phase_detail"] = r.get("phase_detail") or e["phase_detail"]
+            e["refine_passes"] = r.get("refine_passes") if r.get("refine_passes") is not None else e["refine_passes"]
+            e["rework_attribution"] = r.get("rework_attribution") or e["rework_attribution"]
             if "total_tokens" in r and r.get("total_tokens") is not None:
                 e["priced"] = True
                 e["tokens"] = r.get("total_tokens")
             else:
                 e["priced"] = False
+            if "cache_read_tokens" in r and r.get("cache_read_tokens") is not None:
+                e["cache_read_present"] = True
+                e["cache_read"] = r.get("cache_read_tokens")
         inv[invid] = e
         continue
     skipped += 1
 
-agg = {"inv": 0, "priced": 0, "unpriced": 0, "inflight": 0, "tokens": 0}
-byphase = {k: {"inv": 0, "priced": 0, "unpriced": 0, "inflight": 0, "tokens": 0}
+agg = {"inv": 0, "priced": 0, "unpriced": 0, "inflight": 0, "tokens": 0,
+       "ts_min": None, "ts_max": None,
+       "rework_n": 0, "rework_priced_n": 0, "rework_tokens": 0, "rework_ambiguous": 0}
+rework_list = []
+byphase = {k: {"inv": 0, "priced": 0, "unpriced": 0, "inflight": 0, "tokens": 0, "models": {}}
            for k in ("SPEC", "SLICE", "BUILD", "VERIFY", "UNKNOWN")}
 
-for e in inv.values():
+for invid, e in inv.items():
     pk = phase_key(e["phase"])
     agg["inv"] += 1
     byphase[pk]["inv"] += 1
+    if e["ts_start"] is not None:
+        agg["ts_min"] = e["ts_start"] if agg["ts_min"] is None else min(agg["ts_min"], e["ts_start"])
     if e["finish"]:
+        if e["ts_finish"] is not None:
+            agg["ts_max"] = e["ts_finish"] if agg["ts_max"] is None else max(agg["ts_max"], e["ts_finish"])
+        if e["phase_detail"] == "rework":
+            agg["rework_n"] += 1
+            rework_list.append((e["refine_passes"] or 0, invid))
+            if e["rework_attribution"] == "ambiguous":
+                agg["rework_ambiguous"] = 1
         if e["priced"]:
             agg["priced"] += 1
             agg["tokens"] += e["tokens"]
             byphase[pk]["priced"] += 1
             byphase[pk]["tokens"] += e["tokens"]
+            mkey = (e["model"] or "unavailable") + "::" + (e["model_source"] or "unknown")
+            byphase[pk]["models"][mkey] = 1
+            if e["cache_read_present"]:
+                agg["cache_n"] = agg.get("cache_n", 0) + 1
+                agg["cache_sum"] = agg.get("cache_sum", 0) + e["cache_read"]
+                agg["cache_denom"] = agg.get("cache_denom", 0) + e["tokens"]
+            if e["phase_detail"] == "rework":
+                agg["rework_priced_n"] += 1
+                agg["rework_tokens"] += e["tokens"]
         else:
             agg["unpriced"] += 1
             byphase[pk]["unpriced"] += 1
     elif e["start"]:
         agg["inflight"] += 1
         byphase[pk]["inflight"] += 1
+
+rework_list.sort(key=lambda t: (-t[0], t[1]))
+passeslist = ",".join(str(p) for p, _ in rework_list)
 
 out = [
     f"COUNT\tCOST_N_LINES\t{lines}",
@@ -288,6 +434,16 @@ out = [
     f"COUNT\tCOST_N_UNPRICED\t{agg['unpriced']}",
     f"COUNT\tCOST_N_INFLIGHT\t{agg['inflight']}",
     f"COUNT\tCOST_TOKENS_PRICED\t{agg['tokens']}",
+    f"COUNT\tCOST_N_REWORK\t{agg['rework_n']}",
+    f"COUNT\tCOST_N_REWORK_PRICED\t{agg['rework_priced_n']}",
+    f"COUNT\tCOST_TOKENS_REWORK_PRICED\t{agg['rework_tokens']}",
+    f"COUNT\tCOST_REWORK_HAS_AMBIGUOUS\t{agg['rework_ambiguous']}",
+    f"COUNT\tCOST_CACHE_READ_PRICED_N\t{agg.get('cache_n', 0)}",
+    f"COUNT\tCOST_TOKENS_CACHE_READ\t{agg.get('cache_sum', 0)}",
+    f"COUNT\tCOST_TOKENS_CACHE_DENOM\t{agg.get('cache_denom', 0)}",
+    f"COUNT\tCOST_TS_MIN\t{agg['ts_min'] if agg['ts_min'] is not None else -1}",
+    f"COUNT\tCOST_TS_MAX\t{agg['ts_max'] if agg['ts_max'] is not None else -1}",
+    f"REFINEPASSES\t{passeslist}",
 ]
 for k in ("SPEC", "SLICE", "BUILD", "VERIFY", "UNKNOWN"):
     v = byphase[k]
@@ -296,6 +452,7 @@ for k in ("SPEC", "SLICE", "BUILD", "VERIFY", "UNKNOWN"):
     out.append(f"COUNT\tCOST_N_UNPRICED_{k}\t{v['unpriced']}")
     out.append(f"COUNT\tCOST_N_INFLIGHT_{k}\t{v['inflight']}")
     out.append(f"COUNT\tCOST_TOKENS_PRICED_{k}\t{v['tokens']}")
+    out.append(f"MODEL\t{k}\t{','.join(v['models'].keys())}")
 for s in slugs.keys():
     out.append(f"SLUG\t{s}")
 
@@ -368,6 +525,21 @@ _cost_reset_scan_vars() {
   COST_N_INFLIGHT_VERIFY=0; COST_TOKENS_PRICED_VERIFY=0
   COST_N_INVOCATIONS_UNKNOWN=0; COST_N_PRICED_UNKNOWN=0; COST_N_UNPRICED_UNKNOWN=0
   COST_N_INFLIGHT_UNKNOWN=0; COST_TOKENS_PRICED_UNKNOWN=0
+  COST_N_REWORK=0
+  COST_N_REWORK_PRICED=0
+  COST_TOKENS_REWORK_PRICED=0
+  COST_REWORK_HAS_AMBIGUOUS=0
+  COST_REWORK_REFINE_PASSES=""
+  COST_CACHE_READ_PRICED_N=0
+  COST_TOKENS_CACHE_READ=0
+  COST_TOKENS_CACHE_DENOM=0
+  COST_TS_MIN=-1
+  COST_TS_MAX=-1
+  COST_MODELS_SPEC=""
+  COST_MODELS_SLICE=""
+  COST_MODELS_BUILD=""
+  COST_MODELS_VERIFY=""
+  COST_MODELS_UNKNOWN=""
 }
 
 _cost_apply_scan_line() {
@@ -382,9 +554,33 @@ $k"
     fi
     return 0
   fi
+  if [ "$tag" = "MODEL" ]; then
+    case "$k" in
+      SPEC) COST_MODELS_SPEC="$v" ;;
+      SLICE) COST_MODELS_SLICE="$v" ;;
+      BUILD) COST_MODELS_BUILD="$v" ;;
+      VERIFY) COST_MODELS_VERIFY="$v" ;;
+      UNKNOWN) COST_MODELS_UNKNOWN="$v" ;;
+      *) : ;;
+    esac
+    return 0
+  fi
+  if [ "$tag" = "REFINEPASSES" ]; then
+    COST_REWORK_REFINE_PASSES="$k"
+    return 0
+  fi
   [ "$tag" = "COUNT" ] || return 0
   case "$k" in
     COST_N_LINES) COST_N_LINES="$v" ;;
+    COST_N_REWORK) COST_N_REWORK="$v" ;;
+    COST_N_REWORK_PRICED) COST_N_REWORK_PRICED="$v" ;;
+    COST_TOKENS_REWORK_PRICED) COST_TOKENS_REWORK_PRICED="$v" ;;
+    COST_REWORK_HAS_AMBIGUOUS) COST_REWORK_HAS_AMBIGUOUS="$v" ;;
+    COST_CACHE_READ_PRICED_N) COST_CACHE_READ_PRICED_N="$v" ;;
+    COST_TOKENS_CACHE_READ) COST_TOKENS_CACHE_READ="$v" ;;
+    COST_TOKENS_CACHE_DENOM) COST_TOKENS_CACHE_DENOM="$v" ;;
+    COST_TS_MIN) COST_TS_MIN="$v" ;;
+    COST_TS_MAX) COST_TS_MAX="$v" ;;
     COST_N_SKIPPED) COST_N_SKIPPED="$v" ;;
     COST_N_CAPTRIP) COST_N_CAPTRIP="$v" ;;
     COST_N_INVOCATIONS) COST_N_INVOCATIONS="$v" ;;
@@ -481,5 +677,185 @@ cost_list_slugs() {
   elif command -v python3 >/dev/null 2>&1; then
     python3 -c "$(_cost_list_py_program)" < "$ledger" 2>/dev/null
   fi
+  return 0
+}
+
+# --- cost_slice_rows: added in cost-reporting-v0.3 S3 (see the doc block near
+# the top of this file for what it sets and prints). A dedicated pass over
+# the ledger, grouped by `slice` rather than `phase` -- a different bucketing
+# dimension from cost_scan's, so it is its own function rather than a second
+# thing cost_scan's single reduce would have to carry. Still degrades
+# jq -> python3 -> a safe no-op, and still counts the three record shapes of
+# E6 identically to cost_scan (cap_trip excluded; a start with no finish
+# excluded; only a resolved, PRICED invocation contributes a token to a
+# slice's total, per CV5). ---------------------------------------------------
+
+_cost_slice_jq_program() {
+  cat <<'JQ_EOF'
+def to_rec: (try fromjson catch null);
+(reduce (inputs | select(length > 0)) as $line
+  ( {inv:{}}
+  ; ($line | to_rec) as $r
+  | if $r == null or ($r|type) != "object" then .
+    elif (($r.event // "") == "start" or ($r.event // "") == "finish") then
+      (($r.slug // "unknown")) as $slg
+      | if ($slugfilter != "" and $slugfilter != $slg) then .
+        else
+          (($r.invocation_id // "noid")) as $id
+          | (.inv[$id] // {start:false, finish:false, priced:false, tokens:null,
+                           slice:null, phase_detail:null}) as $e
+          | ( $e
+              | if $r.event == "start" then (.start = true) | (.slice = ($r.slice // .slice)) else . end
+              | if $r.event == "finish" then
+                  (.finish = true)
+                  | (.slice = ($r.slice // .slice))
+                  | (.phase_detail = ($r.phase_detail // .phase_detail))
+                  | (if (($r|has("total_tokens")) and ($r.total_tokens != null)) then
+                       (.priced = true) | (.tokens = $r.total_tokens)
+                     else
+                       (.priced = false)
+                     end)
+                else . end
+            ) as $ne
+          | .inv[$id] = $ne
+        end
+    else . end
+  )
+) as $acc
+| ($acc.inv | to_entries | map(select(.value.finish and .value.priced))) as $priced
+| (reduce $priced[] as $e (
+     {unknown:0, slices:{}}
+   ;
+     if (($e.value.slice // "") == "") then
+       (.unknown += 1)
+     else
+       ($e.value.slice) as $s
+       | (.slices[$s].tokens = ((.slices[$s].tokens // 0) + $e.value.tokens))
+       | (.slices[$s].inv = ((.slices[$s].inv // 0) + 1))
+       | (if $e.value.phase_detail == "rework" then
+            (.slices[$s].rtokens = ((.slices[$s].rtokens // 0) + $e.value.tokens))
+            | (.slices[$s].rinv = ((.slices[$s].rinv // 0) + 1))
+          else . end)
+     end
+   )) as $sagg
+| "META\tCOST_SLICE_UNKNOWN_PRICED\t\($sagg.unknown)",
+  ( $sagg.slices | to_entries
+    | sort_by([-(.value.tokens), .key])
+    | .[]
+    | "SLICEROW\t\(.key)\t\(.value.tokens)\t\(.value.inv)\t\(.value.rtokens // 0)\t\(.value.rinv // 0)"
+  )
+JQ_EOF
+}
+
+_cost_slice_py_program() {
+  cat <<'PY_EOF'
+import sys, json
+
+slugfilter = sys.argv[1] if len(sys.argv) > 1 else ""
+inv = {}
+
+for raw in sys.stdin:
+    line = raw.rstrip("\n")
+    if line == "":
+        continue
+    try:
+        r = json.loads(line)
+        if not isinstance(r, dict):
+            raise ValueError()
+    except Exception:
+        continue
+    event = r.get("event") or ""
+    if event not in ("start", "finish"):
+        continue
+    slg = r.get("slug") or "unknown"
+    if slugfilter != "" and slugfilter != slg:
+        continue
+    invid = r.get("invocation_id") or "noid"
+    e = inv.get(invid) or {"start": False, "finish": False, "priced": False,
+                            "tokens": None, "slice": None, "phase_detail": None}
+    if event == "start":
+        e["start"] = True
+        e["slice"] = r.get("slice") or e["slice"]
+    if event == "finish":
+        e["finish"] = True
+        e["slice"] = r.get("slice") or e["slice"]
+        e["phase_detail"] = r.get("phase_detail") or e["phase_detail"]
+        if "total_tokens" in r and r.get("total_tokens") is not None:
+            e["priced"] = True
+            e["tokens"] = r.get("total_tokens")
+        else:
+            e["priced"] = False
+    inv[invid] = e
+
+unknown = 0
+slices = {}
+for e in inv.values():
+    if not (e["finish"] and e["priced"]):
+        continue
+    s = e["slice"] or ""
+    if s == "":
+        unknown += 1
+        continue
+    d = slices.setdefault(s, {"tokens": 0, "inv": 0, "rtokens": 0, "rinv": 0})
+    d["tokens"] += e["tokens"]
+    d["inv"] += 1
+    if e["phase_detail"] == "rework":
+        d["rtokens"] += e["tokens"]
+        d["rinv"] += 1
+
+out = [f"META\tCOST_SLICE_UNKNOWN_PRICED\t{unknown}"]
+for s, d in sorted(slices.items(), key=lambda kv: (-kv[1]["tokens"], kv[0])):
+    out.append(f"SLICEROW\t{s}\t{d['tokens']}\t{d['inv']}\t{d['rtokens']}\t{d['rinv']}")
+print("\n".join(out))
+PY_EOF
+}
+
+cost_slice_rows() {
+  # Also sets COST_SLICE_ROWS as a global (the same TSV rows this prints to
+  # stdout, newline-joined) precisely so a caller does not have to invoke
+  # this through command substitution to read them -- command substitution
+  # runs in a subshell, and COST_SLICE_UNKNOWN_PRICED (the side effect a
+  # caller actually needs, for CO7) would never escape it. Read
+  # COST_SLICE_ROWS / COST_SLICE_UNKNOWN_PRICED after calling this directly
+  # (`cost_slice_rows ...`, not `x="$(cost_slice_rows ...)"`), the same way
+  # cost_scan is called.
+  local ledger="${1:-}" slug="${2:-}"
+  COST_SLICE_UNKNOWN_PRICED=0
+  COST_SLICE_ROWS=""
+
+  [ -n "$ledger" ] && [ -f "$ledger" ] && [ -s "$ledger" ] || return 0
+
+  local have_jq=0 have_py=0
+  command -v jq >/dev/null 2>&1 && have_jq=1
+  [ "$have_jq" -eq 0 ] && command -v python3 >/dev/null 2>&1 && have_py=1
+  if [ "$have_jq" -eq 0 ] && [ "$have_py" -eq 0 ]; then
+    return 0
+  fi
+
+  local out=""
+  if [ "$have_jq" -eq 1 ]; then
+    out="$(jq -Rn -r --arg slugfilter "$slug" "$(_cost_slice_jq_program)" < "$ledger" 2>/dev/null)"
+  else
+    out="$(python3 -c "$(_cost_slice_py_program)" "$slug" < "$ledger" 2>/dev/null)"
+  fi
+
+  local tag a b c d e row
+  while IFS=$'\t' read -r tag a b c d e; do
+    [ -z "$tag" ] && continue
+    if [ "$tag" = "META" ] && [ "$a" = "COST_SLICE_UNKNOWN_PRICED" ]; then
+      COST_SLICE_UNKNOWN_PRICED="$b"
+    elif [ "$tag" = "SLICEROW" ]; then
+      row="$(printf '%s\t%s\t%s\t%s\t%s' "$a" "$b" "$c" "$d" "$e")"
+      printf '%s\n' "$row"
+      if [ -z "$COST_SLICE_ROWS" ]; then
+        COST_SLICE_ROWS="$row"
+      else
+        COST_SLICE_ROWS="$COST_SLICE_ROWS
+$row"
+      fi
+    fi
+  done <<EOF
+$out
+EOF
   return 0
 }
