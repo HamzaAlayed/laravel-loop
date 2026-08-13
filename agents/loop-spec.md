@@ -71,7 +71,7 @@ Use `AskUserQuestion` when running main-thread. As a subagent, print the questio
 - A requirement naming an implementation instead of a behaviour
 - An open question important enough that slicing would stall on it — raise it now, not at G1
 
-**5. Return** in the protocol shape. `NEXT` is always the `/slice` invocation, never an offer to start building.
+**5. Return** in the protocol shape, echoing `Unit` inside `DID` (`Slice` is omitted — this phase runs before any slice exists). Briefed without a `Unit` line → say so instead of inventing one: `FLAGS: briefed without Unit/Slice`. `NEXT` is always the `/slice` invocation, never an offer to start building.
 
 ## Gate G0
 

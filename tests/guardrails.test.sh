@@ -164,6 +164,43 @@ PY
 }
 expect "agent, command, and skill frontmatter present" "0" "$(frontmatter_check)"
 
+# ---------------------------------------------------------------------------
+echo "envelope attribution (Unit/Slice propagation)"
+
+# Checks: the literal `Unit:` line in SKILL.md's envelope block, `Unit:` set in
+# every command that briefs an agent, and every agent naming Unit and Slice
+# (plus the P4 no-brief wording) in its return. Returns "0" clean, "1" if any
+# check fails, so it can be run against both the real tree and a stripped copy.
+envelope_check() {
+  local root="$1" bad=0
+  grep -q '^Unit:' "$root/skills/loop-protocol/SKILL.md" || bad=1
+  for f in loop.md slice.md verify.md; do
+    grep -q 'Unit:' "$root/commands/$f" || bad=1
+  done
+  for f in "$root"/agents/*.md; do
+    grep -q 'Unit' "$f" || bad=1
+    grep -q 'Slice' "$f" || bad=1
+    grep -q 'briefed without Unit/Slice' "$f" || bad=1
+  done
+  echo "$bad"
+}
+
+# Prove the case can fail before trusting that it can pass: strip every
+# Unit/Slice-carrying line from a temp copy and expect the check to go red.
+ENVDIR="$(mktemp -d)"
+mkdir -p "$ENVDIR/skills/loop-protocol" "$ENVDIR/commands" "$ENVDIR/agents"
+cp "$ROOT/skills/loop-protocol/SKILL.md" "$ENVDIR/skills/loop-protocol/SKILL.md"
+cp "$ROOT/commands/loop.md" "$ROOT/commands/slice.md" "$ROOT/commands/verify.md" "$ENVDIR/commands/"
+cp "$ROOT"/agents/*.md "$ENVDIR/agents/"
+for f in "$ENVDIR/skills/loop-protocol/SKILL.md" "$ENVDIR"/commands/*.md "$ENVDIR"/agents/*.md; do
+  grep -v -i -E 'unit|slice' "$f" > "$f.stripped" && mv "$f.stripped" "$f"
+done
+expect "envelope attribution fails on a stripped copy (proves the case can fail)" \
+  "1" "$(envelope_check "$ENVDIR")"
+rm -rf "$ENVDIR"
+
+expect "envelope attribution present on the real tree" "0" "$(envelope_check "$ROOT")"
+
 echo
 echo "----------------------------------------"
 printf 'total: %d passed, %d failed\n' "$PASS" "$FAIL"

@@ -58,7 +58,7 @@ Depends on:  <S<n>, or "nothing">
 3. Write `docs/loop/<slug>/slices.md`: the slice list, the dependency order, and which slices can run concurrently. Independent slices genuinely parallelise — builders run in isolated worktrees.
 4. **Audit your own slicing.** Send back to yourself anything with two owners, no nameable test, obvious multi-commit scope, an empty `Do NOT`, or a dependency on something later in the list.
 5. Name the riskiest slice and why. The human's real job at G1 is catching a wrong cut, and the wrong one is usually whichever you were least sure about — so say which that is rather than presenting a flat list.
-6. Return in the protocol shape.
+6. Return in the protocol shape, echoing `Unit` inside `DID` (`Slice` is omitted — this phase produces the slice list, it does not operate inside one). Briefed without a `Unit` line → say so instead of inventing one: `FLAGS: briefed without Unit/Slice`.
 
 ## Gate G1
 

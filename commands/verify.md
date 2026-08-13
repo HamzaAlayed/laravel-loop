@@ -23,7 +23,7 @@ git diff "$BASE"...HEAD --stat
 git log --oneline "$BASE"..HEAD
 ```
 
-3. **Brief `loop-verify`** with the diff, the spec path, and the slice list. Require it to reproduce the evidence itself rather than trusting any build report, and to diff for **deleted or weakened test lines** specifically.
+3. **Brief `loop-verify`** with the diff, the spec path, and the slice list. Require it to reproduce the evidence itself rather than trusting any build report, and to diff for **deleted or weakened test lines** specifically. Every brief carries `Unit:  <slug>` and `Slice:` naming the slice(s) under verification (e.g. `Slice: S1–S4`, or the single `S<n>` when verifying one slice).
 
 4. **Relay the verdict verbatim.** Do not soften a FAIL, do not summarize away a Blocking finding, and do not add reassurance the verifier did not write.
 
