@@ -373,6 +373,104 @@ expect "S2 unmodified: PATH stripped of jq+python3 writes no partial line" "no" 
   "$([ -e "$S2_NOPARSER_DIR/.claude/loop-cost.jsonl" ] && echo yes || echo no)"
 rm -rf "$S2_NOPARSER_BIN" "$S2_NOPARSER_DIR"
 
+# ---------------------------------------------------------------------------
+echo "record-cost-event.sh (cost ledger: bound + eviction, S4)"
+
+# -- (a) LARAVEL_LOOP_COST_MAX_LINES=50, 80 sequential events -> exactly 50
+# lines remain, and they are the newest 50, in order (H2).
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
+CAP_N=80
+CAP_MAX=50
+for i in $(seq 1 "$CAP_N"); do
+  LARAVEL_LOOP_COST_MAX_LINES=$CAP_MAX \
+    cost "$(finish_json loop-build "toolu-cap-$i" "d" "" "sess-cap-$i" completed "$i" "$i" "")" >/dev/null
+done
+expect "cap: 80 events with cap 50 leaves exactly 50 lines" "$CAP_MAX" \
+  "$(wc -l < "$LEDGER" | tr -d ' ')"
+cap_newest_in_order() {
+  python3 - "$LEDGER" "$CAP_N" <<'PY'
+import json, sys
+lines = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+n = int(sys.argv[2])
+want = [str(i) for i in range(n - len(lines) + 1, n + 1)]
+got = [l["invocation_id"].rsplit("-", 1)[-1] for l in lines]
+print("yes" if got == want else "no")
+PY
+}
+expect "cap: the retained lines are the newest 50, in order" "yes" "$(cap_newest_in_order)"
+
+# -- (b) eviction running concurrently with appends: the ledger is never
+# observed empty, and every retained line is complete, parseable JSON (H3).
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
+EVICT_N=60
+EVICT_CAP=15
+POLL_LOG="$(mktemp)"
+(
+  for _ in $(seq 1 600); do
+    if [ -f "$LEDGER" ]; then
+      wc -l < "$LEDGER" 2>/dev/null | tr -d ' ' >> "$POLL_LOG"
+    fi
+  done
+) &
+POLL_PID=$!
+for i in $(seq 1 "$EVICT_N"); do
+  LARAVEL_LOOP_COST_MAX_LINES=$EVICT_CAP \
+    cost "$(finish_json loop-build "toolu-evb-$i" "d" "" "sess-evb-$i" completed "$i" "$i" "")" >/dev/null &
+done
+wait
+wait "$POLL_PID" 2>/dev/null
+
+expect "eviction under concurrency: settles at or under cap" "yes" \
+  "$([ "$(wc -l < "$LEDGER" | tr -d ' ')" -le "$EVICT_CAP" ] && echo yes || echo no)"
+expect "eviction under concurrency: every retained line is complete, parseable JSON" "yes" \
+  "$(valid_jsonl_lines "$LEDGER")"
+expect "eviction under concurrency: ledger never observed at 0 lines while polling" "yes" \
+  "$(grep -qx '0' "$POLL_LOG" && echo no || echo yes)"
+rm -f "$POLL_LOG"
+
+# -- (c) `.claude/loop-cost.jsonl` is git-ignored, and a fixture repo shows no
+# ledger (or its S3/S4 sidecar state) in `git status` after events (H4).
+GITFIX="$(mktemp -d)"
+(cd "$GITFIX" && git init -q && cp "$ROOT/.gitignore" . && git add .gitignore && git commit -q -m init) >/dev/null 2>&1
+CLAUDE_PROJECT_DIR="$GITFIX" CLAUDE_PLUGIN_ROOT="$ROOT" \
+  run_hook record-cost-event.sh "$(finish_json loop-build toolu-git1 "d" "" sess-git completed 10 10 "")" >/dev/null
+expect "H4: git check-ignore succeeds for the ledger path" "0" \
+  "$(cd "$GITFIX" && git check-ignore -q .claude/loop-cost.jsonl >/dev/null 2>&1; echo $?)"
+expect "H4: git status --porcelain shows no ledger or sidecar state after events" "" \
+  "$(cd "$GITFIX" && git status --porcelain -- .claude 2>/dev/null)"
+rm -rf "$GITFIX"
+
+# -- (d) deleting the ledger mid-sequence breaks nothing: the next event
+# exits 0, recreates it, and the deleted event is simply gone (H5).
+rm -f "$LEDGER"
+cost "$(finish_json loop-build toolu-mid1 "d" "" sess-mid completed 1 1 "")" >/dev/null
+rm -f "$LEDGER"
+MIDDEL_EXIT="$(cost "$(finish_json loop-build toolu-mid2 "d" "" sess-mid completed 2 2 "")")"
+expect "H5: deleting the ledger mid-sequence, the next event exits 0" "0" "$MIDDEL_EXIT"
+expect "H5: the next event recreates the ledger" "yes" "$([ -f "$LEDGER" ] && echo yes || echo no)"
+expect "H5: the deleted (earlier) event is simply gone, not replayed" "1" \
+  "$(wc -l < "$LEDGER" | tr -d ' ')"
+
+# -- (e) a non-numeric LARAVEL_LOOP_COST_MAX_LINES falls back to 5000 rather
+# than disabling the bound or crashing. Seeded directly (no subprocess per
+# line) so the assertion is cheap; only the final real event goes through the
+# hook.
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
+SEED_N=5010
+: > "$LEDGER"
+for i in $(seq 1 "$SEED_N"); do
+  printf '{"ts":%d,"event":"finish","invocation_id":"seed-%d","slug":"seed","phase":"build","agent":"loop-build","model_source":"unknown"}\n' "$i" "$i"
+done >> "$LEDGER"
+NONNUM_EXIT="$(LARAVEL_LOOP_COST_MAX_LINES=abc cost "$(finish_json loop-build toolu-nonnum1 "d" "" sess-nonnum completed 1 1 "")")"
+expect "non-numeric LARAVEL_LOOP_COST_MAX_LINES: hook still exits 0" "0" "$NONNUM_EXIT"
+expect "non-numeric LARAVEL_LOOP_COST_MAX_LINES: falls back to 5000, not disabled" "5000" \
+  "$(wc -l < "$LEDGER" | tr -d ' ')"
+expect "non-numeric LARAVEL_LOOP_COST_MAX_LINES: newest line survives the fallback-bound eviction" "yes" \
+  "$(tail -1 "$LEDGER" | grep -q toolu-nonnum1 && echo yes || echo no)"
+
 rm -rf "$COSTDIR"
 
 # ---------------------------------------------------------------------------

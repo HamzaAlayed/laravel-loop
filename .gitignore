@@ -2,3 +2,6 @@
 .claude/agents-board.jsonl
 .claude/board.html
 .claude/agent-memory/
+.claude/loop-cost.jsonl
+.claude/loop-cost-finished/
+.claude/loop-cost-evict.lock/
