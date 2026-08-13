@@ -1055,6 +1055,302 @@ expect "(h) overlap fixture: byte-identical on a re-run (CV7)" "" \
 rm -rf "$PHASEDIR" "$REWORKUDIR" "$REWORKPDIR" "$CONCDIR" "$UNASSESSDIR" "$CACHEDIR" "$OVERLAPDIR"
 
 # ---------------------------------------------------------------------------
+echo "check-budget-gate.sh (budget gate, S4)"
+
+budget_payload() { # $1 slug  $2 hook_event (default PreToolUse)  $3 tool_name (default Agent)
+  python3 - "$1" "${2:-PreToolUse}" "${3:-Agent}" <<'PY'
+import json, sys
+slug, event, tool = sys.argv[1:4]
+payload = {
+    "hook_event_name": event,
+    "tool_name": tool,
+    "tool_input": {
+        "subagent_type": "loop-build",
+        "description": "Build " + slug,
+        "prompt": "Unit: " + slug + "\nSlice: S9\n\nDo the thing.",
+    },
+}
+print(json.dumps(payload))
+PY
+}
+
+gate_exit() { # $1 json (env vars set by the caller as a prefix)
+  printf '%s' "$1" | bash "$SCRIPTS/check-budget-gate.sh" >/dev/null 2>&1
+  echo $?
+}
+gate_stdout() { # $1 json
+  printf '%s' "$1" | bash "$SCRIPTS/check-budget-gate.sh" 2>/dev/null
+}
+gate_stderr() { # $1 json
+  printf '%s' "$1" | bash "$SCRIPTS/check-budget-gate.sh" 2>&1 1>/dev/null
+}
+
+ALL_BG_STDOUT=""
+ALL_BG_STDERR=""
+collect_bg() { # $1 stdout $2 stderr — accumulated for the aggregate BG6 check
+  ALL_BG_STDOUT="$ALL_BG_STDOUT
+$1"
+  ALL_BG_STDERR="$ALL_BG_STDERR
+$2"
+}
+
+# -- fully-priced fixture: slice A (700000 tokens, reworked) and slice B
+# (300000 tokens, not reworked). Priced total 1,000,000; coverage is
+# complete (0 unpriced), so the coverage sentence below is exact and fixed.
+BGFULLDIR="$(mktemp -d)"
+mkdir -p "$BGFULLDIR/.claude"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"f1","slug":"full-cov-unit","slice":"A","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"f1","slug":"full-cov-unit","slice":"A","phase":"build","agent":"loop-build","status":"completed","total_tokens":700000,"phase_detail":"rework","refine_passes":2}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"f2","slug":"full-cov-unit","slice":"B","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"f2","slug":"full-cov-unit","slice":"B","phase":"build","agent":"loop-build","status":"completed","total_tokens":300000}'
+} > "$BGFULLDIR/.claude/loop-cost.jsonl"
+BG_FULL_JSON="$(budget_payload full-cov-unit)"
+BG_FULL_COVERAGE='based on 2 of 2 invocations that carry a token figure (0 unpriced, not counted)'
+
+# -- (a) HARD below the priced total: exit 2, numbered options, option 1 is
+# re-slicing the most expensive slice, coverage sentence present verbatim
+# (BG3, BG5, CV8).
+BGA_ERR="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" LARAVEL_LOOP_BUDGET_HARD=999999 gate_stderr "$BG_FULL_JSON")"
+BGA_EXIT="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" LARAVEL_LOOP_BUDGET_HARD=999999 gate_exit "$BG_FULL_JSON")"
+collect_bg "" "$BGA_ERR"
+expect "(a) HARD below priced total: exit 2 (BG3)" "2" "$BGA_EXIT"
+expect "(a) breach message has numbered options 1/2/3" "yes" \
+  "$(printf '%s\n' "$BGA_ERR" | grep -qE '^ *1\.' && printf '%s\n' "$BGA_ERR" | grep -qE '^ *2\.' && printf '%s\n' "$BGA_ERR" | grep -qE '^ *3\.' && echo yes || echo no)"
+expect "(a) option 1 recommends re-slicing the most expensive slice (A) (BG5)" "yes" \
+  "$(printf '%s\n' "$BGA_ERR" | grep -E '^ *1\.' | grep -qi 're-slice' && printf '%s\n' "$BGA_ERR" | grep -E '^ *1\.' | grep -q '"A"' && echo yes || echo no)"
+expect "(a) breach message never recommends raising the cap as option 1" "no" \
+  "$(printf '%s\n' "$BGA_ERR" | grep -E '^ *1\.' | grep -qi 'raise' && echo yes || echo no)"
+expect "(a) breach message carries the coverage sentence verbatim (CV8)" "yes" \
+  "$(printf '%s\n' "$BGA_ERR" | grep -qF "$BG_FULL_COVERAGE" && echo yes || echo no)"
+expect "(a) breach message names the most expensive slice and its rework share (BG5)" "yes" \
+  "$(printf '%s\n' "$BGA_ERR" | grep -q 'Most expensive slice: A' && printf '%s\n' "$BGA_ERR" | grep -q 'rework share: 100%' && echo yes || echo no)"
+
+# -- (b) HARD above the total: exit 0, no output at all.
+BGB_JSON="$BG_FULL_JSON"
+BGB_OUT="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" LARAVEL_LOOP_BUDGET_HARD=1000001 gate_stdout "$BGB_JSON")"
+BGB_ERR="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" LARAVEL_LOOP_BUDGET_HARD=1000001 gate_stderr "$BGB_JSON")"
+BGB_EXIT="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" LARAVEL_LOOP_BUDGET_HARD=1000001 gate_exit "$BGB_JSON")"
+collect_bg "$BGB_OUT" "$BGB_ERR"
+expect "(b) HARD above the total: exit 0" "0" "$BGB_EXIT"
+expect "(b) HARD above the total: no output on stdout" "" "$BGB_OUT"
+expect "(b) HARD above the total: no output on stderr" "" "$BGB_ERR"
+
+# -- (c) both unset, against a ledger far above any plausible threshold:
+# exit 0 and zero bytes on stdout and stderr, asserted as emptiness (BG1).
+BGC_JSON="$BG_FULL_JSON"
+BGC_OUT_BYTES="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" gate_stdout "$BGC_JSON" | wc -c | tr -d ' ')"
+BGC_ERR_BYTES="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" gate_stderr "$BGC_JSON" | wc -c | tr -d ' ')"
+BGC_EXIT="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" gate_exit "$BGC_JSON")"
+expect "(c) both unset: exit 0 (BG1)" "0" "$BGC_EXIT"
+expect "(c) both unset: zero bytes on stdout (BG1)" "0" "$BGC_OUT_BYTES"
+expect "(c) both unset: zero bytes on stderr (BG1)" "0" "$BGC_ERR_BYTES"
+
+# -- (d) each unparseable value disables the gate and says so loudly, naming
+# the variable and the value; a breach-sized ledger still does not block
+# (BG2) — proving no numeric fallback happened, unlike E9's line cap.
+for bad in '400k' '4e5' '-1' '1.5' ' 100'; do
+  d_err="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" LARAVEL_LOOP_BUDGET_HARD="$bad" gate_stderr "$BG_FULL_JSON")"
+  d_exit="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" LARAVEL_LOOP_BUDGET_HARD="$bad" gate_exit "$BG_FULL_JSON")"
+  collect_bg "" "$d_err"
+  expect "(d) LARAVEL_LOOP_BUDGET_HARD=\"$bad\": gate disabled, exit 0 (BG2)" "0" "$d_exit"
+  expect "(d) LARAVEL_LOOP_BUDGET_HARD=\"$bad\": message names the variable and the value (BG2)" "yes" \
+    "$(printf '%s' "$d_err" | grep -q 'LARAVEL_LOOP_BUDGET_HARD' && printf '%s' "$d_err" | grep -qF -- "$bad" && echo yes || echo no)"
+done
+
+# -- (e) WARN above HARD: misconfiguration reported plainly, and a hard
+# breach still exits 2 (BG8).
+BGE_ERR="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" LARAVEL_LOOP_BUDGET_WARN=2000000 LARAVEL_LOOP_BUDGET_HARD=999999 gate_stderr "$BG_FULL_JSON")"
+BGE_EXIT="$(CLAUDE_PROJECT_DIR="$BGFULLDIR" LARAVEL_LOOP_BUDGET_WARN=2000000 LARAVEL_LOOP_BUDGET_HARD=999999 gate_exit "$BG_FULL_JSON")"
+collect_bg "" "$BGE_ERR"
+expect "(e) WARN above HARD: misconfiguration reported (BG8)" "yes" \
+  "$(printf '%s\n' "$BGE_ERR" | grep -qi 'misconfiguration' && echo yes || echo no)"
+expect "(e) WARN above HARD: the hard breach still fires (exit 2) (BG8)" "2" "$BGE_EXIT"
+
+rm -rf "$BGFULLDIR"
+
+# -- (f) WARN crossed: one message on the first spawn, nothing on the next
+# two (BG7). HARD left unset — this fixture isolates the warn-only path.
+BGWARNDIR="$(mktemp -d)"
+mkdir -p "$BGWARNDIR/.claude"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"w1","slug":"warn-unit","slice":"A","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"w1","slug":"warn-unit","slice":"A","phase":"build","agent":"loop-build","status":"completed","total_tokens":600}'
+} > "$BGWARNDIR/.claude/loop-cost.jsonl"
+BGWARN_JSON="$(budget_payload warn-unit)"
+BGWARN_ERR1="$(CLAUDE_PROJECT_DIR="$BGWARNDIR" LARAVEL_LOOP_BUDGET_WARN=500 gate_stderr "$BGWARN_JSON")"
+BGWARN_EXIT1="$(CLAUDE_PROJECT_DIR="$BGWARNDIR" LARAVEL_LOOP_BUDGET_WARN=500 gate_exit "$BGWARN_JSON")"
+BGWARN_ERR2="$(CLAUDE_PROJECT_DIR="$BGWARNDIR" LARAVEL_LOOP_BUDGET_WARN=500 gate_stderr "$BGWARN_JSON")"
+BGWARN_ERR3="$(CLAUDE_PROJECT_DIR="$BGWARNDIR" LARAVEL_LOOP_BUDGET_WARN=500 gate_stderr "$BGWARN_JSON")"
+collect_bg "" "$BGWARN_ERR1$BGWARN_ERR2$BGWARN_ERR3"
+expect "(f) WARN crossed: first spawn exits 0 and warns (BG7)" "0" "$BGWARN_EXIT1"
+expect "(f) WARN crossed: first spawn message present" "yes" \
+  "$(printf '%s\n' "$BGWARN_ERR1" | grep -qi 'warn threshold crossed' && echo yes || echo no)"
+expect "(f) WARN crossed: second spawn is silent (BG7)" "" "$BGWARN_ERR2"
+expect "(f) WARN crossed: third spawn is silent (BG7)" "" "$BGWARN_ERR3"
+rm -rf "$BGWARNDIR"
+
+# -- (g) threshold set with partial coverage: the coverage notice appears
+# once with the unpriced count, and not on the next spawn (BG9). HARD is set
+# far above the priced total so no breach interferes with this assertion.
+BGPARTIALDIR="$(mktemp -d)"
+mkdir -p "$BGPARTIALDIR/.claude"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"p1","slug":"partial-unit","slice":"A","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"p1","slug":"partial-unit","slice":"A","phase":"build","agent":"loop-build","status":"completed","total_tokens":100}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"p2","slug":"partial-unit","slice":"B","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"p2","slug":"partial-unit","slice":"B","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$BGPARTIALDIR/.claude/loop-cost.jsonl"
+BGPARTIAL_JSON="$(budget_payload partial-unit)"
+BGPARTIAL_ERR1="$(CLAUDE_PROJECT_DIR="$BGPARTIALDIR" LARAVEL_LOOP_BUDGET_HARD=100000 gate_stderr "$BGPARTIAL_JSON")"
+BGPARTIAL_EXIT1="$(CLAUDE_PROJECT_DIR="$BGPARTIALDIR" LARAVEL_LOOP_BUDGET_HARD=100000 gate_exit "$BGPARTIAL_JSON")"
+BGPARTIAL_ERR2="$(CLAUDE_PROJECT_DIR="$BGPARTIALDIR" LARAVEL_LOOP_BUDGET_HARD=100000 gate_stderr "$BGPARTIAL_JSON")"
+collect_bg "" "$BGPARTIAL_ERR1$BGPARTIAL_ERR2"
+expect "(g) partial coverage: first spawn exits 0 and notes it once (BG9)" "0" "$BGPARTIAL_EXIT1"
+expect "(g) partial coverage: first spawn names the unpriced count" "yes" \
+  "$(printf '%s\n' "$BGPARTIAL_ERR1" | grep -q '1 unpriced, not counted' && echo yes || echo no)"
+expect "(g) partial coverage: not repeated on the next spawn (BG9)" "" "$BGPARTIAL_ERR2"
+rm -rf "$BGPARTIALDIR"
+
+# -- (h) unreadable ledger, PATH stripped of jq+python3, and an unwritable
+# state dir: each exits 0 and says it is proceeding as if no threshold were
+# set (BG10) — asserted per case.
+BGH1DIR="$(mktemp -d)"
+mkdir -p "$BGH1DIR/.claude"
+printf '%s\n' '{"ts":1,"event":"start","invocation_id":"h1","slug":"unreadable-unit","phase":"build","agent":"loop-build"}
+{"ts":2,"event":"finish","invocation_id":"h1","slug":"unreadable-unit","phase":"build","agent":"loop-build","status":"completed","total_tokens":10}' > "$BGH1DIR/.claude/loop-cost.jsonl"
+chmod 000 "$BGH1DIR/.claude/loop-cost.jsonl"
+BGH1_JSON="$(budget_payload unreadable-unit)"
+BGH1_ERR="$(CLAUDE_PROJECT_DIR="$BGH1DIR" LARAVEL_LOOP_BUDGET_HARD=1 gate_stderr "$BGH1_JSON")"
+BGH1_EXIT="$(CLAUDE_PROJECT_DIR="$BGH1DIR" LARAVEL_LOOP_BUDGET_HARD=1 gate_exit "$BGH1_JSON")"
+collect_bg "" "$BGH1_ERR"
+expect "(h) unreadable ledger: exit 0 (BG10)" "0" "$BGH1_EXIT"
+expect "(h) unreadable ledger: says it is proceeding as if no threshold were set (BG10)" "yes" \
+  "$(printf '%s\n' "$BGH1_ERR" | grep -qi 'proceeding as if no threshold were set' && echo yes || echo no)"
+chmod 644 "$BGH1DIR/.claude/loop-cost.jsonl"
+rm -rf "$BGH1DIR"
+
+BGH2DIR="$(mktemp -d)"
+mkdir -p "$BGH2DIR/.claude"
+printf '%s\n' '{"ts":1,"event":"start","invocation_id":"n1","slug":"noparser-unit","phase":"build","agent":"loop-build"}
+{"ts":2,"event":"finish","invocation_id":"n1","slug":"noparser-unit","phase":"build","agent":"loop-build","status":"completed","total_tokens":10}' > "$BGH2DIR/.claude/loop-cost.jsonl"
+BGH2_BIN="$(mktemp -d)"
+for b in cat mkdir sed grep tr bash head; do
+  p="$(command -v "$b" 2>/dev/null)"
+  [ -n "$p" ] && ln -s "$p" "$BGH2_BIN/$b"
+done
+BGH2_JSON="$(budget_payload noparser-unit)"
+BGH2_ERR="$(CLAUDE_PROJECT_DIR="$BGH2DIR" LARAVEL_LOOP_BUDGET_HARD=1 PATH="$BGH2_BIN" gate_stderr "$BGH2_JSON")"
+BGH2_EXIT="$(CLAUDE_PROJECT_DIR="$BGH2DIR" LARAVEL_LOOP_BUDGET_HARD=1 PATH="$BGH2_BIN" gate_exit "$BGH2_JSON")"
+collect_bg "" "$BGH2_ERR"
+expect "(h) PATH stripped of jq+python3: exit 0 (BG10)" "0" "$BGH2_EXIT"
+expect "(h) PATH stripped of jq+python3: says it is proceeding as if no threshold were set (BG10)" "yes" \
+  "$(printf '%s\n' "$BGH2_ERR" | grep -qi 'proceeding as if no threshold were set' && echo yes || echo no)"
+rm -rf "$BGH2DIR" "$BGH2_BIN"
+
+BGH3DIR="$(mktemp -d)"
+mkdir -p "$BGH3DIR/.claude"
+printf '%s\n' '{"ts":1,"event":"start","invocation_id":"u1","slug":"unwritable-unit","phase":"build","agent":"loop-build"}
+{"ts":2,"event":"finish","invocation_id":"u1","slug":"unwritable-unit","phase":"build","agent":"loop-build","status":"completed","total_tokens":10}' > "$BGH3DIR/.claude/loop-cost.jsonl"
+mkdir -p "$BGH3DIR/.claude/loop-budget-state"
+chmod 555 "$BGH3DIR/.claude/loop-budget-state"
+BGH3_JSON="$(budget_payload unwritable-unit)"
+BGH3_ERR="$(CLAUDE_PROJECT_DIR="$BGH3DIR" LARAVEL_LOOP_BUDGET_HARD=1 gate_stderr "$BGH3_JSON")"
+BGH3_EXIT="$(CLAUDE_PROJECT_DIR="$BGH3DIR" LARAVEL_LOOP_BUDGET_HARD=1 gate_exit "$BGH3_JSON")"
+collect_bg "" "$BGH3_ERR"
+expect "(h) unwritable state dir: exit 0 (BG10)" "0" "$BGH3_EXIT"
+expect "(h) unwritable state dir: says it is proceeding as if no threshold were set (BG10)" "yes" \
+  "$(printf '%s\n' "$BGH3_ERR" | grep -qi 'proceeding as if no threshold were set' && echo yes || echo no)"
+chmod 755 "$BGH3DIR/.claude/loop-budget-state"
+rm -rf "$BGH3DIR"
+
+# -- (i) the blocking path completes within a bounded time (BG12) — run
+# under `timeout` and assert it returns rather than hanging or waiting for
+# more stdin.
+BGTIMEDIR="$(mktemp -d)"
+mkdir -p "$BGTIMEDIR/.claude"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"t1","slug":"timeout-unit","slice":"A","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"t1","slug":"timeout-unit","slice":"A","phase":"build","agent":"loop-build","status":"completed","total_tokens":1000000}'
+} > "$BGTIMEDIR/.claude/loop-cost.jsonl"
+BGTIME_JSON="$(budget_payload timeout-unit)"
+BGTIME_RC="$(CLAUDE_PROJECT_DIR="$BGTIMEDIR" LARAVEL_LOOP_BUDGET_HARD=1 timeout 5 bash -c 'printf "%s" "$1" | bash "$2"' _ "$BGTIME_JSON" "$SCRIPTS/check-budget-gate.sh" >/dev/null 2>&1; echo $?)"
+expect "(i) blocking path returns within a bounded time, not a timeout (BG12)" "yes" \
+  "$( [ "$BGTIME_RC" != "124" ] && echo yes || echo no )"
+rm -rf "$BGTIMEDIR"
+
+# -- (j) a PostToolUse finish payload produces no gate output at all, even
+# with a threshold that would otherwise breach (BG4).
+BGPOSTDIR="$(mktemp -d)"
+mkdir -p "$BGPOSTDIR/.claude"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"j1","slug":"post-unit","slice":"A","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"j1","slug":"post-unit","slice":"A","phase":"build","agent":"loop-build","status":"completed","total_tokens":1000000}'
+} > "$BGPOSTDIR/.claude/loop-cost.jsonl"
+BGPOST_JSON="$(budget_payload post-unit PostToolUse)"
+BGPOST_OUT="$(CLAUDE_PROJECT_DIR="$BGPOSTDIR" LARAVEL_LOOP_BUDGET_HARD=1 gate_stdout "$BGPOST_JSON")"
+BGPOST_ERR="$(CLAUDE_PROJECT_DIR="$BGPOSTDIR" LARAVEL_LOOP_BUDGET_HARD=1 gate_stderr "$BGPOST_JSON")"
+BGPOST_EXIT="$(CLAUDE_PROJECT_DIR="$BGPOSTDIR" LARAVEL_LOOP_BUDGET_HARD=1 gate_exit "$BGPOST_JSON")"
+collect_bg "$BGPOST_OUT" "$BGPOST_ERR"
+expect "(j) PostToolUse finish payload: exit 0, no gate output at all (BG4)" "0" "$BGPOST_EXIT"
+expect "(j) PostToolUse finish payload: stdout empty (BG4)" "" "$BGPOST_OUT"
+expect "(j) PostToolUse finish payload: stderr empty (BG4)" "" "$BGPOST_ERR"
+rm -rf "$BGPOSTDIR"
+
+# -- (l) the hard-override marker for a unit raises the effective threshold
+# for that unit only; with HARD unset the marker alone produces nothing
+# (BG11).
+BGOVERDIR="$(mktemp -d)"
+mkdir -p "$BGOVERDIR/.claude"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"o1","slug":"override-unit","slice":"A","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"o1","slug":"override-unit","slice":"A","phase":"build","agent":"loop-build","status":"completed","total_tokens":1000}'
+} > "$BGOVERDIR/.claude/loop-cost.jsonl"
+BGOVER_JSON="$(budget_payload override-unit)"
+BGOVER_EXIT_BEFORE="$(CLAUDE_PROJECT_DIR="$BGOVERDIR" LARAVEL_LOOP_BUDGET_HARD=500 gate_exit "$BGOVER_JSON")"
+expect "(l) before the override: HARD=500 vs total 1000 breaches (sanity)" "2" "$BGOVER_EXIT_BEFORE"
+mkdir -p "$BGOVERDIR/.claude/loop-budget-state/override-unit"
+printf '2000' > "$BGOVERDIR/.claude/loop-budget-state/override-unit/hard-override"
+BGOVER_EXIT_AFTER="$(CLAUDE_PROJECT_DIR="$BGOVERDIR" LARAVEL_LOOP_BUDGET_HARD=500 gate_exit "$BGOVER_JSON")"
+expect "(l) hard-override raises the effective threshold for this unit (BG11)" "0" "$BGOVER_EXIT_AFTER"
+BGOVER_OUT_ALONE="$(CLAUDE_PROJECT_DIR="$BGOVERDIR" gate_stdout "$BGOVER_JSON")"
+BGOVER_ERR_ALONE="$(CLAUDE_PROJECT_DIR="$BGOVERDIR" gate_stderr "$BGOVER_JSON")"
+BGOVER_EXIT_ALONE="$(CLAUDE_PROJECT_DIR="$BGOVERDIR" gate_exit "$BGOVER_JSON")"
+collect_bg "$BGOVER_OUT_ALONE" "$BGOVER_ERR_ALONE"
+expect "(l) override marker alone with HARD unset: exit 0 (BG11/BG1)" "0" "$BGOVER_EXIT_ALONE"
+expect "(l) override marker alone with HARD unset: stdout empty (BG11/BG1)" "" "$BGOVER_OUT_ALONE"
+expect "(l) override marker alone with HARD unset: stderr empty (BG11/BG1)" "" "$BGOVER_ERR_ALONE"
+rm -rf "$BGOVERDIR"
+
+# -- (m) record-cost-event.sh is untouched by this slice, and stays
+# observe-only (BG13, X4): no budget vocabulary was added to it.
+expect "(m) record-cost-event.sh carries no LARAVEL_LOOP_BUDGET reference (BG13, X4)" "1" \
+  "$(grep -q 'LARAVEL_LOOP_BUDGET' "$SCRIPTS/record-cost-event.sh"; echo $?)"
+
+# -- (n) the new registration doesn't disturb the structure check (X5), and
+# the gate is registered only on PreToolUse/Agent|Task — never on an event
+# that fires mid-invocation (BG4).
+expect "(n) check-budget-gate.sh is registered on PreToolUse/Agent|Task only" "1" \
+  "$(python3 - "$ROOT" <<'PY'
+import json, os, sys
+root = sys.argv[1]
+h = json.load(open(os.path.join(root, "hooks", "hooks.json")))["hooks"]
+count = 0
+for event, entries in h.items():
+    for e in entries:
+        for hk in e["hooks"]:
+            if hk["command"].endswith("check-budget-gate.sh"):
+                count += 1
+                assert event == "PreToolUse" and e["matcher"] == "Agent|Task", "wrong event/matcher"
+print(count)
+PY
+)"
+
+# -- (k) no reassurance token anywhere in any message this section produced.
+expect "(k) BG6: no 'within budget', 'under budget', or checkmark in any budget-gate output" "1" \
+  "$( { printf '%s\n' "$ALL_BG_STDOUT"; printf '%s\n' "$ALL_BG_STDERR"; } | grep -iE 'within budget|under budget|✓' >/dev/null 2>&1; echo $?)"
+
+# ---------------------------------------------------------------------------
 echo "block-untested-commit.sh (test-with-the-code guard)"
 REPO="$(mktemp -d)"
 git -C "$REPO" init --quiet
