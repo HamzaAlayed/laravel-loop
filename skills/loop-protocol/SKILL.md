@@ -18,6 +18,10 @@ INNER — per slice, one agent, one worktree
                     └─── Refine ──────┘  red — cap 3, then blocked
 ```
 
+`↺` is `/observe`'s capture step: it writes `docs/loop/<slug>/intent.md` (what was observed, where,
+when, what was already tried, which unit or commit is suspected) and hands off to a fresh Intent at
+G0. It never diagnoses, reproduces, or builds by itself.
+
 The failure this prevents is **unstructured delegation**: one large ambiguous ask handed to one agent, producing work that reads like several people who never spoke. Every phase below exists to move an ambiguity earlier, to where fixing it is cheap.
 
 ## Phase placement
@@ -30,7 +34,7 @@ Identify the phase before doing anything. Most bad outcomes are phase errors —
 | An agreed spec, unclear how to build | Slice | `loop-slice` |
 | A named, scoped, testable change | Build | `loop-build` |
 | "Is this done?" / a branch to merge | Verify | `loop-verify` |
-| A production fault | Observe → new Intent | human |
+| A production fault | Observe (`/observe`'s capture step) → new Intent | human |
 
 **Escalate when the input is thinner than the phase requires.** "Just add a button" that turns out to need a schema change is an Intent, not a slice. Starting it as a slice is how a one-hour task becomes a three-day one.
 
@@ -43,7 +47,7 @@ Everything not listed here runs without asking. Enumerating the gates is what li
 | **G0** | Spec written | Right problem? Right acceptance criteria? Right non-goals? |
 | **G1** | Slices written | Right cuts, right order? |
 | **G2** | Work claims done | Do I understand and endorse this diff? |
-| **G3** | Pre-release | Ship / hold |
+| **G3** | Pre-release | Ship / hold — evidence is `scripts/ship-check.sh`'s verdict (run via `/ship`) |
 | **G4** | Production change | Any agent-initiated action on live infra |
 
 Present every gate as numbered options with a recommended default (`AskUserQuestion` main-thread, printed text as a subagent), never as a paragraph the human has to decode into a yes or no.
@@ -143,3 +147,15 @@ Judgment → agent. Repeatability → hard-coded. Just because a step *could* be
 | Building something on the `Do NOT` list | Out of bounds even when it is an improvement |
 | Accepting "done" without evidence | Empty `VERIFIED` is a rejected return |
 | Whole codebase pasted as context | Relevant paths + an explicit `Do NOT` |
+
+## Cache-friendly prompt ordering
+
+Assemble every prompt stable-parts-first, in this fixed order: system prompt, this loop-protocol contract, `docs/loop/conventions.md` and `docs/loop/decisions.md`, the spec/slice list for the unit of work, the task envelope last. This is the five-level ordering and it does not get re-derived per project or per agent.
+
+**Rule: never interpolate a timestamp, run id, or counter above the task envelope.** A single volatile token near the front of a prompt invalidates the whole cached prefix behind it — everything stable that follows it stops being cacheable too. Anything more volatile than the envelope itself belongs only inside the envelope, never earlier.
+
+**The reason ships with the rule, in the same place, on purpose.** A rule without its rationale gets reordered by the next person who finds it inconvenient; writing down *why* it costs the whole prefix is what makes the ordering survive that person's judgment call.
+
+This rule ships on its rationale alone. Whether prompt caching is actually active for subagent invocations, and at what minimum prefix length, is not established in this repository, and its payoff is deliberately left unmeasured for now — the rule costs nothing to hold and nothing to be wrong about, so it does not wait on that measurement.
+
+Scope note: the rule's literal wording is timestamp, run id, counter — volatile state that changes on every run. A placeholder like `{{args}}` in a command's title is not a violation of it; substituting user-supplied argument text into a title is not the same failure mode as an ever-changing token, and moving it would be a readability cost paid for a benefit nobody has measured.
