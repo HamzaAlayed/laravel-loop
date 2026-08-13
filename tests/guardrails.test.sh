@@ -1177,6 +1177,29 @@ expect "docs: every commands/*.md has a row in README's Commands table" "0" \
 expect "docs: README no longer claims Ship and Observe are missing" "0" \
   "$( { grep -qi 'No Ship phase automation' "$README_MD" || grep -qi 'No Observe phase' "$README_MD"; } && echo 1 || echo 0 )"
 
+# README documents the cost ledger the way it documents the other two state
+# files (S6, spec.md X4): the ledger path, both env var names, the "never
+# leaves the machine" claim, the not-money statement, and the D3 rework
+# wording lifted from record-cost-event.sh's own header. Every env var and
+# path README names is also asserted to exist in the script itself, so the
+# docs cannot describe a switch that was never built.
+readme_ledger_check() {
+  local bad=0 readme="$README_MD" script="$ROOT/scripts/record-cost-event.sh"
+  grep -q 'loop-cost\.jsonl' "$readme" || bad=1
+  grep -q 'LARAVEL_LOOP_COST_LEDGER' "$readme" || bad=1
+  grep -q 'LARAVEL_LOOP_COST_MAX_LINES' "$readme" || bad=1
+  grep -qi 'never leaves the machine' "$readme" || bad=1
+  grep -qi 'not money' "$readme" || bad=1
+  grep -q 'cost of slices that were not right first time' "$readme" || bad=1
+  # the docs cannot name a switch or path the script does not actually have
+  grep -q 'LARAVEL_LOOP_COST_LEDGER' "$script" || bad=1
+  grep -q 'LARAVEL_LOOP_COST_MAX_LINES' "$script" || bad=1
+  grep -q 'loop-cost\.jsonl' "$script" || bad=1
+  echo $bad
+}
+expect "docs: README documents the cost ledger (path, env vars, machine, money, rework wording)" \
+  "0" "$(readme_ledger_check)"
+
 # ---------------------------------------------------------------------------
 echo "manifest + component structure"
 structure_check() {
