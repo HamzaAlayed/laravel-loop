@@ -1918,6 +1918,28 @@ expect "ship: version gate works with jq and python3 unavailable on PATH" \
   "yes" "$G3_PASSED_NO_TOOLS"
 rm -rf "$SHIP12"
 
+# gate 2 must run shellcheck at the same -S warning severity as CI and every
+# slice's own Done-when bar. A style/info-only notice (SC2005 here) must not
+# turn gate 2 red -- bare `shellcheck` (no -S) on the same file does flag it,
+# which is what proves this case can fail.
+SHIP13="$(new_ship_fixture)"
+printf '#!/usr/bin/env bash\necho "$(echo styleonly)"\n' > "$SHIP13/scripts/clean.sh"
+ship_run "$SHIP13"
+G2_STATE="$(gate_line "$SHIP_OUT" 2)"
+case "$G2_STATE" in
+  *passed*) G2_PASSED_ON_STYLE_ONLY="yes" ;;
+  *) G2_PASSED_ON_STYLE_ONLY="no" ;;
+esac
+BARE_SHELLCHECK_FLAGS_IT="no"
+if ! shellcheck "$SHIP13/scripts/clean.sh" >/dev/null 2>&1; then
+  BARE_SHELLCHECK_FLAGS_IT="yes"
+fi
+expect "ship: gate 2 uses -S warning, so a style-only notice still passes" \
+  "yes" "$G2_PASSED_ON_STYLE_ONLY"
+expect "ship: gate 2's case can fail -- bare shellcheck flags the same file" \
+  "yes" "$BARE_SHELLCHECK_FLAGS_IT"
+rm -rf "$SHIP13"
+
 # -- S3: per-gate wall-clock bound ------------------------------------------
 # A stub gate 1 that never returns (`sleep 600`) must still yield a verdict.
 # LARAVEL_LOOP_SHIP_GATE_TIMEOUT is set low so the case itself stays fast;

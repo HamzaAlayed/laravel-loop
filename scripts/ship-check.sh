@@ -155,7 +155,11 @@ gate2_shellcheck() {
   fi
   local out
   out="$(mktemp)"
-  run_bounded "$out" shellcheck "${files[@]}"
+  # -S warning matches CI (.github/workflows/ci.yml) and every slice's own
+  # Done-when bar. Without it, info/style-only notices (e.g. SC1091 on a
+  # sourced sibling script, SC2317 on an indirectly-invoked function) fail
+  # this gate even though nothing in the project treats them as failures.
+  run_bounded "$out" shellcheck -S warning "${files[@]}"
   if [ "$BOUNDED_STATE" = "timeout" ]; then
     GATE2_STATE="failed"
     GATE2_REASON="timed out after ${GATE_TIMEOUT}s without returning"
