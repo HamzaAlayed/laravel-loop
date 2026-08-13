@@ -73,7 +73,7 @@ Track every budget event that fires during the unit — warn crossed, hard gate 
 
 **⏸ Gate G2.** Relay the verdict, then the human reads the diff. FAIL → route findings back to `loop-build` as re-briefs, one per finding, then re-verify. Do not argue a FAIL down.
 
-**5. Close.** Write `docs/loop/<slug>/log.md`: phase by phase, artifact by artifact, with the gate decisions recorded. Any rejected approach surfaced in a FLAGS goes to `docs/loop/decisions.md` — that file is the reason the next unit of work does not re-litigate this one. Any correction the human made goes to `docs/loop/conventions.md`.
+**5. Close.** Write `docs/loop/<slug>/log.md`: phase by phase, artifact by artifact, with the gate decisions recorded. Any rejected approach surfaced in a FLAGS goes to `docs/loop/decisions.md` — that file is the reason the next unit of work does not re-litigate this one. Any correction the human made goes to `docs/loop/conventions.md`. Once `log.md` itself is written, run `scripts/write-cost-log-section.sh <slug>` to add the unit's `## Cost` section — it reads `.claude/loop-cost.jsonl` through `scripts/cost-ledger-lib.sh` and replaces that section in place on a re-run, never appending a second one and never touching `## Budget events` or any other heading. It is the only script in this unit that writes anything, and it writes nothing when `log.md` does not exist yet.
 
 ## Refusals
 
