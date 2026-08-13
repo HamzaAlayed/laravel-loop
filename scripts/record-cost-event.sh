@@ -13,9 +13,9 @@
 # tokens -- a `subagent_stop` record with null tokens, followed later by a
 # `completed` PostToolUse record carrying the real totalTokens/
 # totalDurationMs. Registering only PostToolUse here means "exactly one
-# finish record per invocation" holds by construction; deduping a second
-# finish signal, once SubagentStop is added, is later work (see slices.md
-# S3), not this script's job today.
+# finish record per invocation" holds by construction. See "Exactly-once
+# under concurrency" below for how a second finish signal -- SubagentStop or
+# otherwise -- is handled if it reaches this script anyway (S3).
 #
 # The `Unit:`/`Slice:` envelope lines (loop-protocol) live in
 # `tool_input.prompt` -- the actual text handed to the subagent -- not in
@@ -37,6 +37,50 @@
 #
 # Disable entirely: LARAVEL_LOOP_COST_LEDGER=0 (or "off"), matching the
 # LARAVEL_LOOP_REFINE_CAP=0 convention.
+#
+# Exactly-once under concurrency (S3, spec.md L1/L5/L9). No flock -- it is
+# not present on macOS by default and this repo is bash + coreutils only.
+# Two guarantees instead of one lock:
+#   1. Atomic append. Each record is assembled entirely in memory and
+#      emitted with a single `>>` write, and every field that could grow
+#      unboundedly is truncated so the line stays comfortably inside the
+#      size a single write() to an O_APPEND-opened file is atomic at on a
+#      local filesystem (kept well under 4096 bytes; see "oversize record"
+#      near the bottom for the fallback if it ever isn't). This is what
+#      makes L5 hold: N concurrent finishes for distinct invocations land as
+#      N intact lines, never interleaved or torn, because no writer's append
+#      is ever split across two syscalls.
+#   2. Exactly-once via mkdir. `mkdir "$FINISHED_DIR/$id"` is atomic across
+#      processes on any POSIX filesystem -- exactly one caller can ever
+#      create a given directory name -- so "has this invocation's finish
+#      already been recorded" is answered by one syscall, with no lock file,
+#      no spin-wait, and no window where two writers both believe they own
+#      it. Only finish signals are deduped: L9 is specifically about
+#      finishes, and a duplicate start is neither tested nor attempted here.
+#      A second finish for a key already marked finished -- the same
+#      payload delivered twice, the hook wired both as a plugin and by hand,
+#      or a genuine second host signal for one invocation -- is discarded
+#      silently, exit 0. If the finished-marker directory can't even be
+#      created (e.g. an unwritable .claude/), dedup is skipped rather than
+#      blocking the write: a possible duplicate is preferable to a
+#      guaranteed drop, so L7 (never block) outranks L9 in that one failure
+#      mode.
+#
+# SubagentStop, if it ever reaches this script, never writes a line of its
+# own, and is not registered in hooks.json for exactly this reason: E4
+# established it carries no tokens, and this repo's own real evidence
+# (.claude/agents-board.jsonl) shows it can arrive either BEFORE the
+# token-carrying PostToolUse finish (a normal sync completion) or AFTER a
+# null-token async_launched PostToolUse finish (an async one) -- in both
+# orderings PostToolUse is the useful signal. Because this script can only
+# append and never edit an already-written line, there is no ordering-safe
+# way to let a SubagentStop line ever outrank a PostToolUse one once both
+# exist. Making PostToolUse the sole source of a finish record sidesteps
+# that: "one finish record, and it is the one carrying tokens" (S3 case c)
+# holds by construction rather than by a race a lock would otherwise have to
+# settle. Handled explicitly below -- not left to the tool_name gate to
+# discard by accident -- so a reader, or someone who wires SubagentStop
+# manually, can see this was a considered decision.
 
 set -uo pipefail
 
@@ -47,6 +91,9 @@ case "${LARAVEL_LOOP_COST_LEDGER:-}" in
 esac
 
 ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+DIR="$ROOT/.claude"
+OUT="$DIR/loop-cost.jsonl"
+FINISHED_DIR="$DIR/loop-cost-finished"
 
 HAVE_JQ=0
 HAVE_PY=0
@@ -95,14 +142,19 @@ except Exception:
 HOOK_EVENT="$(extract '.hook_event_name' 'd.get("hook_event_name","")')"
 TOOL_NAME="$(extract '.tool_name' 'd.get("tool_name","")')"
 
-case "$TOOL_NAME" in
-  Agent|Task) : ;;
+# HOOK_EVENT is checked before TOOL_NAME so SubagentStop -- which carries no
+# tool_name/tool_input at all -- is handled explicitly rather than falling
+# into the tool_name gate below by accident (see header: "never writes a
+# line of its own").
+case "$HOOK_EVENT" in
+  PreToolUse)   EVENT_TYPE="start" ;;
+  PostToolUse)  EVENT_TYPE="finish" ;;
+  SubagentStop) exit 0 ;;
   *) exit 0 ;;
 esac
 
-case "$HOOK_EVENT" in
-  PreToolUse)  EVENT_TYPE="start" ;;
-  PostToolUse) EVENT_TYPE="finish" ;;
+case "$TOOL_NAME" in
+  Agent|Task) : ;;
   *) exit 0 ;;
 esac
 
@@ -122,9 +174,11 @@ find_label() {
 SLUG="$(find_label "$PROMPT" "Unit")"
 [ -z "$SLUG" ] && SLUG="$(find_label "$DESCRIPTION" "Unit")"
 [ -z "$SLUG" ] && SLUG="unknown"
+SLUG="${SLUG:0:200}"
 
 SLICE="$(find_label "$PROMPT" "Slice")"
 [ -z "$SLICE" ] && SLICE="$(find_label "$DESCRIPTION" "Slice")"
+SLICE="${SLICE:0:50}"
 
 # --- agent / phase ----------------------------------------------------------
 AGENT="$(printf '%s' "$SUBAGENT_TYPE" | sed -E 's/^.*://')"
@@ -160,6 +214,7 @@ if [ "$EVENT_TYPE" = "finish" ]; then
   OUTPUT_TOKENS="$(extract_num '.tool_response.usage.output_tokens // .tool_response.output_tokens' 'd.get("tool_response",{}).get("usage",{}).get("output_tokens")')"
   CACHE_READ_TOKENS="$(extract_num '.tool_response.usage.cache_read_input_tokens // .tool_response.cache_read_input_tokens' 'd.get("tool_response",{}).get("usage",{}).get("cache_read_input_tokens")')"
   OBSERVED_MODEL="$(extract '.tool_response.model // .tool_response.usage.model' 'd.get("tool_response",{}).get("model") or d.get("tool_response",{}).get("usage",{}).get("model") or ""')"
+  STATUS="${STATUS:0:200}"
 fi
 
 # --- model / model_source: observed beats derived beats unknown (L11). The
@@ -269,8 +324,53 @@ fi
 
 [ -z "$LINE" ] && exit 0
 
-DIR="$ROOT/.claude"
-OUT="$DIR/loop-cost.jsonl"
+# --- oversize record: truncate or omit rather than split a line (S3). The
+# per-field truncation above (SLUG, SLICE, STATUS) makes this vanishingly
+# unlikely in practice; this is the last-resort net so a pathological
+# payload still never produces a line that could straddle two writes. -----
+if [ "${#LINE}" -ge 4096 ]; then
+  LINE=""
+  if [ "$HAVE_JQ" -eq 1 ]; then
+    LINE="$(jq -nc \
+      --argjson ts "$TS" \
+      --arg event "$EVENT_TYPE" \
+      --arg invocation_id "$INVOCATION_ID" \
+      --arg slug "${SLUG:0:80}" \
+      --arg phase "$PHASE" \
+      --arg agent "$AGENT" \
+      '{ts:$ts, event:$event, invocation_id:$invocation_id, slug:$slug,
+        phase:$phase, agent:$agent, status:"line_too_long"}' 2>/dev/null)"
+  elif [ "$HAVE_PY" -eq 1 ]; then
+    LINE="$(python3 - "$TS" "$EVENT_TYPE" "$INVOCATION_ID" "${SLUG:0:80}" "$PHASE" "$AGENT" <<'PY' 2>/dev/null
+import json, sys
+ts, event, invocation_id, slug, phase, agent = sys.argv[1:7]
+print(json.dumps({"ts": int(ts), "event": event, "invocation_id": invocation_id,
+                   "slug": slug, "phase": phase, "agent": agent,
+                   "status": "line_too_long"}, separators=(",", ":")))
+PY
+)"
+  fi
+  [ -z "$LINE" ] && exit 0
+fi
+
+# --- exactly-once: only finish signals are deduped (L9); see header for why
+# a mkdir'd directory name, not flock, is the atomic primitive here. -------
+if [ "$EVENT_TYPE" = "finish" ]; then
+  SAFE_ID="$(printf '%s' "$INVOCATION_ID" | tr -c 'A-Za-z0-9_.-' '_')"
+  SAFE_ID="${SAFE_ID:0:200}"
+  [ -z "$SAFE_ID" ] && SAFE_ID="unknown"
+  if mkdir -p "$FINISHED_DIR" 2>/dev/null; then
+    if ! mkdir "$FINISHED_DIR/$SAFE_ID" 2>/dev/null; then
+      # A finish for this invocation was already recorded: duplicate
+      # delivery, double registration, or a second host signal for one
+      # invocation (E4/L9). Discard silently.
+      exit 0
+    fi
+  fi
+  # else: dedup infra unavailable (e.g. unwritable .claude/) -- fall through
+  # and attempt the write anyway rather than dropping a possible first-time
+  # record (L7 outranks L9 here).
+fi
 
 mkdir -p "$DIR" 2>/dev/null || exit 0
 printf '%s\n' "$LINE" >> "$OUT" 2>/dev/null

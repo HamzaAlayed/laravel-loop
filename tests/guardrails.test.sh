@@ -246,6 +246,133 @@ DISABLE_EXIT="$(LARAVEL_LOOP_COST_LEDGER=0 cost "$(finish_json loop-build toolu-
 expect "LARAVEL_LOOP_COST_LEDGER=0 exits 0" "0" "$DISABLE_EXIT"
 expect "LARAVEL_LOOP_COST_LEDGER=0 writes nothing" "no" "$([ -e "$LEDGER" ] && echo yes || echo no)"
 
+# ---------------------------------------------------------------------------
+echo "record-cost-event.sh (cost ledger: exactly-once + concurrency, S3)"
+
+# Builds a SubagentStop payload as it is really shaped (E4/agents-board.jsonl
+# evidence): no tool_name, no tool_input, no tool_use_id -- .agent_type here
+# identifies the agent that just stopped, not a caller.
+stop_json() { # $1 agent_type $2 session_id
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+agent, session = sys.argv[1:3]
+print(json.dumps({
+    "hook_event_name": "SubagentStop",
+    "session_id": session,
+    "agent_type": agent,
+}))
+PY
+}
+
+valid_jsonl_lines() { # $1 file -> "yes"/"no": every non-empty line parses
+  python3 - "$1" <<'PY'
+import json, sys
+ok = True
+for line in open(sys.argv[1]):
+    if not line.strip():
+        continue
+    try:
+        json.loads(line)
+    except Exception:
+        ok = False
+print("yes" if ok else "no")
+PY
+}
+
+# -- (a) forced concurrency: N >= 20 finish events for DISTINCT invocations,
+# fired in parallel with & and wait, produce exactly N lines, each a
+# complete parseable JSON object, no interleaved or truncated line (L5). The
+# concurrency is forced (backgrounded + waited), not hoped for.
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished"
+CONC_N=25
+for i in $(seq 1 "$CONC_N"); do
+  cost "$(finish_json loop-build "toolu-conc-$i" "d" "" "sess-conc-$i" completed $((1000 + i)) $((10 + i)) "")" >/dev/null &
+done
+wait
+expect "forced concurrency: N finish events yield exactly N lines" "$CONC_N" \
+  "$(wc -l < "$LEDGER" | tr -d ' ')"
+expect "forced concurrency: every line is a complete, parseable JSON object" "yes" \
+  "$(valid_jsonl_lines "$LEDGER")"
+conc_unique_ids() {
+  python3 - "$LEDGER" <<'PY'
+import json, sys
+ids = [json.loads(l)["invocation_id"] for l in open(sys.argv[1]) if l.strip()]
+print("yes" if len(ids) == len(set(ids)) else "no")
+PY
+}
+expect "forced concurrency: no invocation_id duplicated across the N lines" "yes" \
+  "$(conc_unique_ids)"
+
+# -- (b) the same finish payload delivered twice yields one finish record (L9).
+rm -f "$LEDGER"
+DUP_PAYLOAD="$(finish_json loop-build toolu-dup1 "d" "" sess-dup completed 700 70 "")"
+cost "$DUP_PAYLOAD" >/dev/null
+cost "$DUP_PAYLOAD" >/dev/null
+expect "same finish payload delivered twice yields one finish record" "1" \
+  "$(wc -l < "$LEDGER" | tr -d ' ')"
+
+# -- (c) a PostToolUse finish and a SubagentStop finish for one invocation
+# yield one finish record, and it is the one carrying tokens (L1, E4).
+# Proven both orderings, since real evidence shows SubagentStop can arrive
+# before OR after the token-carrying PostToolUse depending on sync vs async.
+one_finish_with_tokens() {
+  python3 - "$LEDGER" "$1" <<'PY'
+import json, sys
+path, want_tokens = sys.argv[1], int(sys.argv[2])
+lines = [json.loads(l) for l in open(path) if l.strip()]
+ok = len(lines) == 1 and lines[0].get("total_tokens") == want_tokens
+print("yes" if ok else "no")
+PY
+}
+
+rm -f "$LEDGER"
+cost "$(stop_json loop-build sess-stop1)" >/dev/null
+cost "$(finish_json loop-build toolu-stop1 "d" "" sess-stop1 completed 900 90 "")" >/dev/null
+expect "SubagentStop then PostToolUse: one finish record, carrying tokens" "yes" \
+  "$(one_finish_with_tokens 900)"
+
+rm -f "$LEDGER"
+cost "$(finish_json loop-build toolu-stop2 "d" "" sess-stop2 completed 950 95 "")" >/dev/null
+cost "$(stop_json loop-build sess-stop2)" >/dev/null
+expect "PostToolUse then SubagentStop: one finish record, carrying tokens" "yes" \
+  "$(one_finish_with_tokens 950)"
+
+# -- (d) the script invoked twice on the same event -- simulating plugin
+# plus manual install -- yields one record (L9).
+rm -f "$LEDGER"
+INSTALL_DUP_PAYLOAD="$(finish_json loop-build toolu-install1 "d" "" sess-install completed 400 40 "")"
+CLAUDE_PROJECT_DIR="$COSTDIR" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh "$INSTALL_DUP_PAYLOAD" >/dev/null
+CLAUDE_PROJECT_DIR="$COSTDIR" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh "$INSTALL_DUP_PAYLOAD" >/dev/null
+expect "hook registered twice (plugin + manual install) yields one record" "1" \
+  "$(wc -l < "$LEDGER" | tr -d ' ')"
+
+# -- (e) all of S2's exit-0 cases still pass unmodified: re-run them here
+# against the S3 script so a regression in this slice fails in this section,
+# not silently a scroll away.
+expect "S2 unmodified: valid payload exits 0" "0" \
+  "$(cost "$(finish_json loop-build toolu-s2valid "d" "" "$SESSION" completed 10 10 "")")"
+expect "S2 unmodified: malformed payload exits 0" "0" \
+  "$(CLAUDE_PROJECT_DIR="$COSTDIR" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh '{"hook_event_name":"PreToolUse", not valid json')"
+expect "S2 unmodified: empty payload exits 0" "0" \
+  "$(CLAUDE_PROJECT_DIR="$COSTDIR" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh '')"
+S2DIR_RO="$(mktemp -d)"
+chmod 555 "$S2DIR_RO"
+expect "S2 unmodified: unwritable ledger dir still exits 0" "0" \
+  "$(CLAUDE_PROJECT_DIR="$S2DIR_RO" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh "$(finish_json loop-build toolu-s2ro "d" "" sess-s2ro completed 10 10 "")")"
+chmod 755 "$S2DIR_RO"; rm -rf "$S2DIR_RO"
+S2_NOPARSER_BIN="$(mktemp -d)"
+for b in cat mkdir date sed bash; do
+  p="$(command -v "$b" 2>/dev/null)"
+  [ -n "$p" ] && ln -s "$p" "$S2_NOPARSER_BIN/$b"
+done
+S2_NOPARSER_DIR="$(mktemp -d)"
+expect "S2 unmodified: PATH stripped of jq+python3 still exits 0" "0" \
+  "$(PATH="$S2_NOPARSER_BIN" CLAUDE_PROJECT_DIR="$S2_NOPARSER_DIR" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh "$(finish_json loop-build toolu-s2np "d" "" sess-s2np completed 10 10 "")")"
+expect "S2 unmodified: PATH stripped of jq+python3 writes no partial line" "no" \
+  "$([ -e "$S2_NOPARSER_DIR/.claude/loop-cost.jsonl" ] && echo yes || echo no)"
+rm -rf "$S2_NOPARSER_BIN" "$S2_NOPARSER_DIR"
+
 rm -rf "$COSTDIR"
 
 # ---------------------------------------------------------------------------
