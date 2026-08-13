@@ -1350,6 +1350,76 @@ PY
 expect "(k) BG6: no 'within budget', 'under budget', or checkmark in any budget-gate output" "1" \
   "$( { printf '%s\n' "$ALL_BG_STDOUT"; printf '%s\n' "$ALL_BG_STDERR"; } | grep -iE 'within budget|under budget|✓' >/dev/null 2>&1; echo $?)"
 
+# -- S6: the conductor's own behaviour at the gate, in commands/loop.md.
+# Markdown-only cases: this slice edits no script, hook, or JSON.
+LOOPMD="$ROOT/commands/loop.md"
+
+# (a) the numbered-options gate presentation, re-slicing as the recommended
+# option, raising the cap listed last, the in-flight-completes rule, the
+# per-unit hard-override marker path, and the unattended-run behaviour —
+# echoes "0" clean, "1" if any is missing from the file's own breach-gate
+# region (between "On a budget breach" and step 4).
+loop_budget_gate_check() {
+  local f="$1" bad=0 block
+  block="$(sed -n '/On a budget breach/,/^\*\*4\. Verify/p' "$f" 2>/dev/null)"
+  [ -n "$block" ] || bad=1
+  printf '%s\n' "$block" | grep -qE '^1\.' || bad=1
+  printf '%s\n' "$block" | grep -qE '^2\.' || bad=1
+  printf '%s\n' "$block" | grep -qE '^3\.' || bad=1
+  printf '%s\n' "$block" | grep -E '^1\.' | grep -qi 're-slic' || bad=1
+  printf '%s\n' "$block" | grep -E '^1\.' | grep -qi 'recommended' || bad=1
+  printf '%s\n' "$block" | grep -E '^3\.' | grep -qi 'raise' || bad=1
+  printf '%s\n' "$block" | grep -qi 'in flight' || bad=1
+  printf '%s\n' "$block" | grep -qF '.claude/loop-budget-state/<slug>/hard-override' || bad=1
+  printf '%s\n' "$block" | grep -qiE 'unattended|non-interactive' || bad=1
+  echo "$bad"
+}
+
+# Prove the case can fail before trusting that it can pass: strip every line
+# carrying the breach-gate vocabulary from a temp copy and expect it to go red.
+LOOPGATEDIR="$(mktemp -d)"
+mkdir -p "$LOOPGATEDIR/commands"
+grep -v -iE 'budget|re-slic|hard cap|hard-override|unattended' "$LOOPMD" > "$LOOPGATEDIR/commands/loop.md"
+expect "(a) breach-gate documentation fails on a stripped copy (proves the case can fail)" \
+  "1" "$(loop_budget_gate_check "$LOOPGATEDIR/commands/loop.md")"
+rm -rf "$LOOPGATEDIR"
+
+expect "(a) breach-gate documentation present in commands/loop.md (BG3, BG4, BG11, BG12)" \
+  "0" "$(loop_budget_gate_check "$LOOPMD")"
+
+# (b) raising the cap is never persisted anywhere but the marker: named
+# explicitly so a later editor cannot soften it to "temporarily" (BG11).
+expect "(b) commands/loop.md forbids persisting a raised cap — names settings.json, .env, an env var (BG11)" "yes" \
+  "$(grep -q 'settings.json' "$LOOPMD" && grep -q '\.env' "$LOOPMD" && grep -qi 'env var' "$LOOPMD" && echo yes || echo no)"
+
+# (c) the '## Budget events' instruction names all four event kinds and the
+# threshold-in-force phrase (DL6).
+expect "(c) '## Budget events' instruction names all four event kinds + threshold-in-force (DL6)" "yes" \
+  "$(grep -q '## Budget events' "$LOOPMD" \
+     && grep -q 'warn crossed' "$LOOPMD" \
+     && grep -q 'hard gate fired' "$LOOPMD" \
+     && grep -q 'cap raised' "$LOOPMD" \
+     && grep -qi 'gate disabled by an unparseable value' "$LOOPMD" \
+     && grep -qF 'the threshold in force at the time' "$LOOPMD" \
+     && echo yes || echo no)"
+
+# (d) negative case: never a reassurance token for spend, anywhere in
+# commands/loop.md (BG6).
+expect "(d) commands/loop.md never instructs 'within budget'/'under budget'/checkmark for spend (BG6)" "no" \
+  "$(grep -iE 'within budget|under budget|✓' "$LOOPMD" >/dev/null 2>&1 && echo yes || echo no)"
+
+# (e) step 5 (Close) is unedited by this slice's diff — the S7 boundary
+# machine-checked rather than trusted. Compares the Close region as last
+# committed (HEAD) against the current working tree; empty means this
+# slice introduced no uncommitted change there.
+close_region() {
+  sed -n '/^\*\*5\. Close\.\*\*/,/^## Refusals/p' "$1" 2>/dev/null
+}
+CLOSE_HEAD="$(cd "$ROOT" && git show HEAD:commands/loop.md 2>/dev/null | sed -n '/^\*\*5\. Close\.\*\*/,/^## Refusals/p')"
+CLOSE_WORK="$(close_region "$LOOPMD")"
+expect "(e) step 5 (Close) region has no diff introduced by this slice (S7 boundary machine-checked)" "" \
+  "$(diff <(printf '%s\n' "$CLOSE_HEAD") <(printf '%s\n' "$CLOSE_WORK"))"
+
 # ---------------------------------------------------------------------------
 echo "check-budget-gate.sh --phase (per-phase expectations, S5)"
 
