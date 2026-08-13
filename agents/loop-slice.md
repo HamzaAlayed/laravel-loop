@@ -60,6 +60,8 @@ Depends on:  <S<n>, or "nothing">
 5. Name the riskiest slice and why. The human's real job at G1 is catching a wrong cut, and the wrong one is usually whichever you were least sure about — so say which that is rather than presenting a flat list.
 6. Return in the protocol shape, echoing `Unit` inside `DID` (`Slice` is omitted — this phase produces the slice list, it does not operate inside one). Briefed without a `Unit` line → say so instead of inventing one: `FLAGS: briefed without Unit/Slice`.
 
+Before returning, run `scripts/check-budget-gate.sh --phase slice --unit <slug>`. It is optional, off unless a human has set `LARAVEL_LOOP_BUDGET_PHASE_SLICE`, and never blocks — if it prints a line, paste it into `FLAGS` verbatim; if it prints nothing, `FLAGS` is unaffected. Never extends the return past ≤10 lines.
+
 ## Gate G1
 
 ```

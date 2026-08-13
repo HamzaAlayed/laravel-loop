@@ -1421,6 +1421,142 @@ expect "(e) step 5 (Close) region has no diff introduced by this slice (S7 bound
   "$(diff <(printf '%s\n' "$CLOSE_HEAD") <(printf '%s\n' "$CLOSE_WORK"))"
 
 # ---------------------------------------------------------------------------
+echo "check-budget-gate.sh --phase (per-phase expectations, S5)"
+
+phase_stdout() { # $1 phase  $2 slug  (env vars set by the caller as a prefix)
+  bash "$SCRIPTS/check-budget-gate.sh" --phase "$1" --unit "$2" 2>/dev/null
+}
+phase_stderr() { # $1 phase  $2 slug
+  bash "$SCRIPTS/check-budget-gate.sh" --phase "$1" --unit "$2" 2>&1 1>/dev/null
+}
+phase_exit() { # $1 phase  $2 slug
+  bash "$SCRIPTS/check-budget-gate.sh" --phase "$1" --unit "$2" >/dev/null 2>&1
+  echo $?
+}
+
+# -- fixture: one build-phase invocation, fully priced at 500000 tokens.
+PHASEXPDIR="$(mktemp -d)"
+mkdir -p "$PHASEXPDIR/.claude"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"px1","slug":"phase-exp-build","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"px1","slug":"phase-exp-build","phase":"build","agent":"loop-build","status":"completed","total_tokens":500000}'
+} > "$PHASEXPDIR/.claude/loop-cost.jsonl"
+
+# (a)/(e) PE3/PE4/PE6 — threshold below the phase's priced total: exactly one
+# FLAG line, containing the coverage caveat, exit 0.
+PEA_OUT="$(CLAUDE_PROJECT_DIR="$PHASEXPDIR" LARAVEL_LOOP_BUDGET_PHASE_BUILD=100000 phase_stdout build phase-exp-build)"
+PEA_EXIT="$(CLAUDE_PROJECT_DIR="$PHASEXPDIR" LARAVEL_LOOP_BUDGET_PHASE_BUILD=100000 phase_exit build phase-exp-build)"
+expect "(a) build over its configured expectation: exit 0 (PE3)" "0" "$PEA_EXIT"
+expect "(a) build over its configured expectation: exactly one FLAG line (PE6)" "yes" \
+  "$(printf '%s' "$PEA_OUT" | grep -c '^FLAG:' | grep -qx 1 && echo yes || echo no)"
+expect "(a) the FLAG line carries the coverage caveat (PE4)" "yes" \
+  "$(printf '%s\n' "$PEA_OUT" | grep -q 'unpriced, not counted' && echo yes || echo no)"
+expect "(a) the FLAG line says it never blocks (PE3)" "yes" \
+  "$(printf '%s\n' "$PEA_OUT" | grep -qi 'blocks nothing' && echo yes || echo no)"
+expect "(e) the printed flag is exactly one line, asserted with wc -l (PE6)" "1" \
+  "$(printf '%s\n' "$PEA_OUT" | wc -l | tr -d ' ')"
+
+# (b) PE1 — unset: zero bytes of output on either stream, exit 0.
+PEB_OUT_BYTES="$(CLAUDE_PROJECT_DIR="$PHASEXPDIR" phase_stdout build phase-exp-build | wc -c | tr -d ' ')"
+PEB_ERR_BYTES="$(CLAUDE_PROJECT_DIR="$PHASEXPDIR" phase_stderr build phase-exp-build | wc -c | tr -d ' ')"
+PEB_EXIT="$(CLAUDE_PROJECT_DIR="$PHASEXPDIR" phase_exit build phase-exp-build)"
+expect "(b) LARAVEL_LOOP_BUDGET_PHASE_BUILD unset: exit 0 (PE1)" "0" "$PEB_EXIT"
+expect "(b) LARAVEL_LOOP_BUDGET_PHASE_BUILD unset: zero bytes on stdout (PE1)" "0" "$PEB_OUT_BYTES"
+expect "(b) LARAVEL_LOOP_BUDGET_PHASE_BUILD unset: zero bytes on stderr (PE1)" "0" "$PEB_ERR_BYTES"
+
+# (c) an unparseable value disables the comparison loudly, names the field
+# and the value, and never compares (mirrors BG2's discipline exactly).
+for bad in '400k' '4e5' '-1' '1.5' ' 100'; do
+  c_err="$(CLAUDE_PROJECT_DIR="$PHASEXPDIR" LARAVEL_LOOP_BUDGET_PHASE_BUILD="$bad" phase_stderr build phase-exp-build)"
+  c_out="$(CLAUDE_PROJECT_DIR="$PHASEXPDIR" LARAVEL_LOOP_BUDGET_PHASE_BUILD="$bad" phase_stdout build phase-exp-build)"
+  c_exit="$(CLAUDE_PROJECT_DIR="$PHASEXPDIR" LARAVEL_LOOP_BUDGET_PHASE_BUILD="$bad" phase_exit build phase-exp-build)"
+  expect "(c) LARAVEL_LOOP_BUDGET_PHASE_BUILD=\"$bad\": disabled, exit 0" "0" "$c_exit"
+  expect "(c) LARAVEL_LOOP_BUDGET_PHASE_BUILD=\"$bad\": names the field and the value" "yes" \
+    "$(printf '%s' "$c_err" | grep -q 'LARAVEL_LOOP_BUDGET_PHASE_BUILD' && printf '%s' "$c_err" | grep -qF -- "$bad" && echo yes || echo no)"
+  expect "(c) LARAVEL_LOOP_BUDGET_PHASE_BUILD=\"$bad\": no FLAG, no comparison performed" "no" \
+    "$(printf '%s' "$c_out" | grep -q '^FLAG:' && echo yes || echo no)"
+done
+
+# threshold set ABOVE the priced total: never flags, and never reassures
+# (BG6's discipline, applied per phase — PE5).
+PEZ_OUT="$(CLAUDE_PROJECT_DIR="$PHASEXPDIR" LARAVEL_LOOP_BUDGET_PHASE_BUILD=999999999 phase_stdout build phase-exp-build)"
+PEZ_ERR="$(CLAUDE_PROJECT_DIR="$PHASEXPDIR" LARAVEL_LOOP_BUDGET_PHASE_BUILD=999999999 phase_stderr build phase-exp-build)"
+expect "threshold above the total: no FLAG" "" "$PEZ_OUT"
+expect "threshold above the total: no reassurance text anywhere" "1" \
+  "$(printf '%s\n%s\n' "$PEZ_OUT" "$PEZ_ERR" | grep -iE 'within expectation|✓|\bOK\b' >/dev/null 2>&1; echo $?)"
+
+rm -rf "$PHASEXPDIR"
+
+# (d) PE5/BG6 — a fixture whose only build invocation is unpriced: no FLAG
+# at any threshold, however low, and no "within expectation" or checkmark
+# text anywhere.
+PHASEUNPRICEDDIR="$(mktemp -d)"
+mkdir -p "$PHASEUNPRICEDDIR/.claude"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"pu1","slug":"phase-exp-unpriced","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"pu1","slug":"phase-exp-unpriced","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$PHASEUNPRICEDDIR/.claude/loop-cost.jsonl"
+PED_OUT="$(CLAUDE_PROJECT_DIR="$PHASEUNPRICEDDIR" LARAVEL_LOOP_BUDGET_PHASE_BUILD=1 phase_stdout build phase-exp-unpriced)"
+PED_ERR="$(CLAUDE_PROJECT_DIR="$PHASEUNPRICEDDIR" LARAVEL_LOOP_BUDGET_PHASE_BUILD=1 phase_stderr build phase-exp-unpriced)"
+PED_EXIT="$(CLAUDE_PROJECT_DIR="$PHASEUNPRICEDDIR" LARAVEL_LOOP_BUDGET_PHASE_BUILD=1 phase_exit build phase-exp-unpriced)"
+expect "(d) all-unpriced phase: exit 0 even at threshold=1 (PE5)" "0" "$PED_EXIT"
+expect "(d) all-unpriced phase: no FLAG at any threshold (PE5)" "" "$PED_OUT"
+expect "(d) all-unpriced phase: no 'within expectation' or checkmark anywhere (BG6)" "1" \
+  "$(printf '%s\n%s\n' "$PED_OUT" "$PED_ERR" | grep -iE 'within expectation|✓' >/dev/null 2>&1; echo $?)"
+rm -rf "$PHASEUNPRICEDDIR"
+
+# -- (h) every S4 (hook-mode) case is unaffected by this mode's addition:
+# the whole check-budget-gate.sh (budget gate, S4) section above already
+# reran and passed unmodified in this same file, so nothing further to
+# assert here beyond the fact this section changed no fixture of that one.
+
+# -- (f)/(g) documentation: SKILL.md names all four fields, how to set them,
+# that nothing is defaulted and why, and the in-flight limitation; every
+# agent instructs the check and carries the FLAG wording; the section itself
+# never exemplifies a number next to a field name (G0-D2).
+phase_doc_check() {
+  local root="$1" bad=0 skill
+  skill="$root/skills/loop-protocol/SKILL.md"
+  local f
+  for f in SPEC SLICE BUILD VERIFY; do
+    grep -q "LARAVEL_LOOP_BUDGET_PHASE_${f}" "$skill" || bad=1
+  done
+  grep -qi 'set by default' "$skill" || bad=1
+  grep -qi 'no baseline' "$skill" || bad=1
+  grep -qi 'bare non-negative integer' "$skill" || bad=1
+  grep -qi 'finish record' "$skill" || bad=1
+  for f in loop-spec loop-slice loop-build loop-verify; do
+    grep -q -- '--phase' "$root/agents/$f.md" || bad=1
+    grep -q 'FLAG' "$root/agents/$f.md" || bad=1
+  done
+  echo "$bad"
+}
+
+# Prove the case can fail before trusting that it can pass: strip every
+# phase-expectations-carrying line from a temp copy and expect the check to
+# go red (the "envelope attribution" idiom, run here first).
+PHASEDOCDIR="$(mktemp -d)"
+mkdir -p "$PHASEDOCDIR/skills/loop-protocol" "$PHASEDOCDIR/agents"
+cp "$ROOT/skills/loop-protocol/SKILL.md" "$PHASEDOCDIR/skills/loop-protocol/SKILL.md"
+cp "$ROOT"/agents/loop-spec.md "$ROOT"/agents/loop-slice.md "$ROOT"/agents/loop-build.md "$ROOT"/agents/loop-verify.md "$PHASEDOCDIR/agents/"
+for f in "$PHASEDOCDIR/skills/loop-protocol/SKILL.md" "$PHASEDOCDIR"/agents/*.md; do
+  grep -v -i -E 'LARAVEL_LOOP_BUDGET_PHASE|--phase|set by default|no baseline|bare non-negative integer|finish record|FLAG' "$f" > "$f.stripped" && mv "$f.stripped" "$f"
+done
+expect "phase expectations doc: fails on a stripped copy (proves the case can fail)" \
+  "1" "$(phase_doc_check "$PHASEDOCDIR")"
+rm -rf "$PHASEDOCDIR"
+
+expect "phase expectations doc: present on the real tree" "0" "$(phase_doc_check "$ROOT")"
+
+# (g) G0-D2 — the new SKILL.md section itself contains no digit at all, so no
+# example number can ever sit next to a LARAVEL_LOOP_BUDGET_PHASE_* name.
+PHASE_SECTION="$(awk '/^## Per-phase expectations/{f=1} /^## The refine cap/{f=0} f' "$ROOT/skills/loop-protocol/SKILL.md")"
+expect "phase expectations doc: section names all four fields" "yes" \
+  "$(printf '%s\n' "$PHASE_SECTION" | grep -q 'LARAVEL_LOOP_BUDGET_PHASE_SPEC' && printf '%s\n' "$PHASE_SECTION" | grep -q 'LARAVEL_LOOP_BUDGET_PHASE_SLICE' && printf '%s\n' "$PHASE_SECTION" | grep -q 'LARAVEL_LOOP_BUDGET_PHASE_BUILD' && printf '%s\n' "$PHASE_SECTION" | grep -q 'LARAVEL_LOOP_BUDGET_PHASE_VERIFY' && echo yes || echo no)"
+expect "phase expectations doc: no digit anywhere in the section (G0-D2)" "0" \
+  "$(printf '%s\n' "$PHASE_SECTION" | grep -c '[0-9]')"
+
+# ---------------------------------------------------------------------------
 echo "block-untested-commit.sh (test-with-the-code guard)"
 REPO="$(mktemp -d)"
 git -C "$REPO" init --quiet
