@@ -72,17 +72,21 @@ LEDGER="$COSTDIR/.claude/loop-cost.jsonl"
 
 # Builds a PreToolUse payload for one Agent/Task spawn. $4 (prompt) is the
 # text actually handed to the subagent -- where Unit:/Slice: really live.
-start_json() { # $1 subagent_type $2 tool_use_id $3 description $4 prompt $5 session_id
-  python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
+# $6 (optional) cwd -- carried at top level, as S5's rework attribution reads it.
+start_json() { # $1 subagent_type $2 tool_use_id $3 description $4 prompt $5 session_id $6 cwd
+  python3 - "$1" "$2" "$3" "$4" "$5" "${6:-}" <<'PY'
 import json, sys
-subagent, tid, desc, prompt, session = sys.argv[1:6]
-print(json.dumps({
+subagent, tid, desc, prompt, session, cwd = sys.argv[1:7]
+payload = {
     "hook_event_name": "PreToolUse",
     "session_id": session,
     "tool_name": "Agent",
     "tool_use_id": tid,
     "tool_input": {"subagent_type": subagent, "description": desc, "prompt": prompt},
-}))
+}
+if cwd:
+    payload["cwd"] = cwd
+print(json.dumps(payload))
 PY
 }
 
@@ -472,6 +476,187 @@ expect "non-numeric LARAVEL_LOOP_COST_MAX_LINES: newest line survives the fallba
   "$(tail -1 "$LEDGER" | grep -q toolu-nonnum1 && echo yes || echo no)"
 
 rm -rf "$COSTDIR"
+
+# ---------------------------------------------------------------------------
+echo "record-cost-event.sh (rework attribution, S5)"
+
+REWORKDIR="$(mktemp -d)"
+rcost() { CLAUDE_PROJECT_DIR="$REWORKDIR" CLAUDE_PLUGIN_ROOT="$ROOT" run_hook record-cost-event.sh "$1"; }
+RLEDGER="$REWORKDIR/.claude/loop-cost.jsonl"
+
+# A PostToolUse/Bash test-run result, exactly as enforce-refine-cap.sh's own
+# fixtures shape it, plus session_id/agent_type/cwd -- the attribution keys
+# this slice is pinned to. $5 (optional) cwd.
+bash_test_json() { # $1 session_id $2 agent_type $3 target $4 fail|pass $5 cwd
+  python3 - "$1" "$2" "$3" "$4" "${5:-}" <<'PY'
+import json, sys
+session, agent, target, result, cwd = sys.argv[1:6]
+if result == "fail":
+    resp = "FAIL  Tests\\Feature\\%s\n  Tests: 1 failed" % target
+else:
+    resp = "PASS  Tests\\Feature\\%s\n  Tests: 1 passed" % target
+payload = {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "session_id": session,
+    "agent_type": agent,
+    "tool_input": {"command": "php artisan test --filter=%s" % target},
+    "tool_response": resp,
+}
+if cwd:
+    payload["cwd"] = cwd
+print(json.dumps(payload))
+PY
+}
+
+# Reads one field off the record matching invocation_id+event in a JSONL
+# ledger. "MISSING" when the record exists but lacks the field (the case
+# that matters here: absent means "not rework"). "NOTFOUND" if no such
+# record exists at all.
+field_of() { # $1 ledger $2 invocation_id $3 event $4 field
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
+import json, sys
+path, invid, event, field = sys.argv[1:5]
+for line in open(path):
+    line = line.strip()
+    if not line:
+        continue
+    r = json.loads(line)
+    if r.get("invocation_id") == invid and r.get("event") == event:
+        print(json.dumps(r[field]) if field in r else "MISSING")
+        break
+else:
+    print("NOTFOUND")
+PY
+}
+
+# Same idea for the cap_trip terminal record, which carries no invocation_id.
+cap_trip_field() { # $1 ledger $2 field
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+path, field = sys.argv[1:3]
+for line in open(path):
+    line = line.strip()
+    if not line:
+        continue
+    r = json.loads(line)
+    if r.get("event") == "cap_trip":
+        print(json.dumps(r[field]) if field in r else "MISSING")
+        break
+else:
+    print("NOTFOUND")
+PY
+}
+
+REWORK_PROMPT=$'Unit:  cost-measurement-v0.2\nSlice: S5\n\nBuild rework attribution.'
+
+# -- (a) red -> red -> red: the finish record is marked rework in full, with
+# a refine-pass count (W1, W7). Default cap is 3, so the 3rd consecutive
+# failure both marks rework AND trips the cap (covers (f) too).
+SESSION_A="sess-rework-a"
+rcost "$(start_json loop-build toolu-rwa1 "Build S5" "$REWORK_PROMPT" "$SESSION_A")" >/dev/null
+rcost "$(bash_test_json "$SESSION_A" loop-build RwATest fail)" >/dev/null
+rcost "$(bash_test_json "$SESSION_A" loop-build RwATest fail)" >/dev/null
+rcost "$(bash_test_json "$SESSION_A" loop-build RwATest fail)" >/dev/null
+rcost "$(finish_json loop-build toolu-rwa1 "Build S5" "$REWORK_PROMPT" "$SESSION_A" completed 5000 2000 "")" >/dev/null
+
+expect "(a) red-red-red: finish record carries phase_detail:rework" '"rework"' \
+  "$(field_of "$RLEDGER" toolu-rwa1 finish phase_detail)"
+REFINE_A="$(field_of "$RLEDGER" toolu-rwa1 finish refine_passes)"
+expect "(a) red-red-red: refine_passes present and >= 1" "yes" \
+  "$([ "$REFINE_A" != "MISSING" ] && [ "$REFINE_A" != "NOTFOUND" ] && [ "$REFINE_A" -ge 1 ] 2>/dev/null && echo yes || echo no)"
+
+# -- (b) red -> green: not rework (W7).
+SESSION_B="sess-rework-b"
+rcost "$(start_json loop-build toolu-rwb1 "Build S5" "$REWORK_PROMPT" "$SESSION_B")" >/dev/null
+rcost "$(bash_test_json "$SESSION_B" loop-build RwBTest fail)" >/dev/null
+rcost "$(bash_test_json "$SESSION_B" loop-build RwBTest pass)" >/dev/null
+rcost "$(finish_json loop-build toolu-rwb1 "Build S5" "$REWORK_PROMPT" "$SESSION_B" completed 900 90 "")" >/dev/null
+expect "(b) red-green: finish record carries no phase_detail" "MISSING" \
+  "$(field_of "$RLEDGER" toolu-rwb1 finish phase_detail)"
+
+# -- (c) red -> green -> red -> green: still not rework -- the discriminating
+# case, because the loose reading ("any failure ever") would mark this and
+# read 100% rework forever (W2, W7).
+SESSION_C="sess-rework-c"
+rcost "$(start_json loop-build toolu-rwc1 "Build S5" "$REWORK_PROMPT" "$SESSION_C")" >/dev/null
+rcost "$(bash_test_json "$SESSION_C" loop-build RwCTest fail)" >/dev/null
+rcost "$(bash_test_json "$SESSION_C" loop-build RwCTest pass)" >/dev/null
+rcost "$(bash_test_json "$SESSION_C" loop-build RwCTest fail)" >/dev/null
+rcost "$(bash_test_json "$SESSION_C" loop-build RwCTest pass)" >/dev/null
+rcost "$(finish_json loop-build toolu-rwc1 "Build S5" "$REWORK_PROMPT" "$SESSION_C" completed 800 80 "")" >/dev/null
+expect "(c) red-green-red-green: finish record carries no phase_detail (discriminating case)" "MISSING" \
+  "$(field_of "$RLEDGER" toolu-rwc1 finish phase_detail)"
+
+# -- (d) rework and first-attempt records are separable by reading the
+# ledger alone -- a plain grep over the file, no external input (W3). At
+# this point exactly one finish (rwa1) is rework and two (rwb1, rwc1) are not.
+REWORK_FINISH_COUNT="$(grep '"event":"finish"' "$RLEDGER" | grep -c '"phase_detail":"rework"')"
+NONREWORK_FINISH_COUNT="$(grep '"event":"finish"' "$RLEDGER" | grep -vc '"phase_detail":"rework"')"
+expect "(d) grep alone partitions rework from first-attempt finish records" "1 2" \
+  "$REWORK_FINISH_COUNT $NONREWORK_FINISH_COUNT"
+
+# -- (e) no per-pass token figure anywhere: total_tokens is exactly what the
+# finish payload carried, untouched by refine_passes (W5).
+expect "(e) total_tokens is exactly the finish payload's value, never divided by refine_passes" "5000" \
+  "$(field_of "$RLEDGER" toolu-rwa1 finish total_tokens)"
+expect "(e) the script never computes a rework percentage/ratio/share (D3 rejected)" "0" \
+  "$(grep -qiE 'rework[_-]?(percent|ratio|share)' "$SCRIPTS/record-cost-event.sh" && echo 1 || echo 0)"
+
+# -- (f) a tripped cap writes its own terminal record naming the slice and
+# the rework total at whole-invocation granularity (W6).
+expect "(f) cap trip: terminal record names the slug" '"cost-measurement-v0.2"' \
+  "$(cap_trip_field "$RLEDGER" slug)"
+expect "(f) cap trip: terminal record names the slice" '"S5"' \
+  "$(cap_trip_field "$RLEDGER" slice)"
+expect "(f) cap trip: refine_passes is the whole-invocation total (3, the cap)" "3" \
+  "$(cap_trip_field "$RLEDGER" refine_passes)"
+
+# -- (g) the D3 granularity/over-attribution/non-comparability statement is
+# in the script header, in prose (W4) -- so S6 can lift it into README.
+expect "(g) script header states what the rework figure measures and its bias (W4)" "0" \
+  "$(grep -q 'the cost of slices that were not right first time' "$SCRIPTS/record-cost-event.sh" \
+     && grep -q 'over-attribut' "$SCRIPTS/record-cost-event.sh" \
+     && grep -q 'whole-invocation granularity' "$SCRIPTS/record-cost-event.sh" \
+     && grep -q '<15%' "$SCRIPTS/record-cost-event.sh" \
+     && echo 0 || echo 1)"
+
+# -- (h) enforce-refine-cap.sh is untouched, byte-for-byte (W8, X2).
+expect "(h) scripts/enforce-refine-cap.sh has no diff against the committed tree" "" \
+  "$(cd "$ROOT" && git diff -- scripts/enforce-refine-cap.sh)"
+
+# -- attribution rule, pinned in the brief: session_id + agent_type (+ cwd
+# when both sides carry one). When it cannot be narrowed to exactly one open
+# invocation, EVERY open invocation of that agent in that session is marked,
+# with rework_attribution:"ambiguous" -- over-attribution is the accepted
+# bias, never a silent guess.
+SESSION_AMB="sess-rework-amb"
+rcost "$(start_json loop-build toolu-amb1 "Build amb1" "$REWORK_PROMPT" "$SESSION_AMB")" >/dev/null
+rcost "$(start_json loop-build toolu-amb2 "Build amb2" "$REWORK_PROMPT" "$SESSION_AMB")" >/dev/null
+rcost "$(bash_test_json "$SESSION_AMB" loop-build AmbTest fail)" >/dev/null
+rcost "$(bash_test_json "$SESSION_AMB" loop-build AmbTest fail)" >/dev/null
+rcost "$(finish_json loop-build toolu-amb1 "Build amb1" "$REWORK_PROMPT" "$SESSION_AMB" completed 100 10 "")" >/dev/null
+rcost "$(finish_json loop-build toolu-amb2 "Build amb2" "$REWORK_PROMPT" "$SESSION_AMB" completed 200 20 "")" >/dev/null
+
+expect "ambiguous attribution: every open invocation in the session is marked rework" '"rework" "rework"' \
+  "$(field_of "$RLEDGER" toolu-amb1 finish phase_detail) $(field_of "$RLEDGER" toolu-amb2 finish phase_detail)"
+expect "ambiguous attribution: both carry rework_attribution:ambiguous" '"ambiguous" "ambiguous"' \
+  "$(field_of "$RLEDGER" toolu-amb1 finish rework_attribution) $(field_of "$RLEDGER" toolu-amb2 finish rework_attribution)"
+
+# cwd narrows the match to one invocation when both sides carry one --
+# concurrent build worktrees are the real case this covers.
+SESSION_CWD="sess-rework-cwd"
+rcost "$(start_json loop-build toolu-cwda "Build cwdA" "$REWORK_PROMPT" "$SESSION_CWD" "/worktrees/a")" >/dev/null
+rcost "$(start_json loop-build toolu-cwdb "Build cwdB" "$REWORK_PROMPT" "$SESSION_CWD" "/worktrees/b")" >/dev/null
+rcost "$(bash_test_json "$SESSION_CWD" loop-build CwdTest fail "/worktrees/a")" >/dev/null
+rcost "$(bash_test_json "$SESSION_CWD" loop-build CwdTest fail "/worktrees/a")" >/dev/null
+rcost "$(finish_json loop-build toolu-cwda "Build cwdA" "$REWORK_PROMPT" "$SESSION_CWD" completed 300 30 "")" >/dev/null
+rcost "$(finish_json loop-build toolu-cwdb "Build cwdB" "$REWORK_PROMPT" "$SESSION_CWD" completed 400 40 "")" >/dev/null
+
+expect "cwd narrows attribution to the matching-cwd invocation only" '"rework" MISSING' \
+  "$(field_of "$RLEDGER" toolu-cwda finish phase_detail) $(field_of "$RLEDGER" toolu-cwdb finish phase_detail)"
+
+rm -rf "$REWORKDIR"
 
 # ---------------------------------------------------------------------------
 echo "block-untested-commit.sh (test-with-the-code guard)"
