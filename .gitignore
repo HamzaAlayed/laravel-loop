@@ -5,3 +5,4 @@
 .claude/loop-cost.jsonl
 .claude/loop-cost-finished/
 .claude/loop-cost-evict.lock/
+.claude/loop-budget-state/
