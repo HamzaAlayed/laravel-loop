@@ -69,3 +69,5 @@ Deviating from any of these is fine when the codebase already does — match the
 ## Return
 
 Protocol shape, ≤10 lines. `VERIFIED` carries commands and their actual counts. An empty `VERIFIED` is a claim, not a return, and will be rejected. Echo `Unit` and `Slice` inside `DID` (e.g. `DID: cost-measurement-v0.2 S1 — <files touched>`). Briefed without either → say so instead of inventing one: `FLAGS: briefed without Unit/Slice`.
+
+Before returning, run `scripts/check-budget-gate.sh --phase build --unit <slug>`. It is optional, off unless a human has set `LARAVEL_LOOP_BUDGET_PHASE_BUILD`, and never blocks — if it prints a line, paste it into `FLAGS` verbatim; if it prints nothing, `FLAGS` is unaffected. Never extends the return past ≤10 lines.

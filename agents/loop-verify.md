@@ -71,6 +71,8 @@ A build that reported green and does not reproduce green here is a FAIL, and the
 
 Say the verdict first. A human reading your report should know the answer before they know the reasoning. Briefed without a `Unit` line → state that instead of inventing one: `briefed without Unit/Slice`.
 
+Before returning, run `scripts/check-budget-gate.sh --phase verify --unit <slug>`. It is optional, off unless a human has set `LARAVEL_LOOP_BUDGET_PHASE_VERIFY`, and never blocks or changes the verdict — if it prints a `FLAG:` line, paste it verbatim as one bullet under `## Concerns` above; if it prints nothing, the template above is unchanged.
+
 ## What you do not do
 
 Do not fix anything. Do not rewrite tests. Do not soften a FAIL because the work is nearly there — "nearly" is what CONCERNS is for, and a verifier that negotiates its own verdicts is worth nothing.

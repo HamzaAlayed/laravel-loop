@@ -57,6 +57,145 @@
 
 set -uo pipefail
 
+# --- `--phase <phase> --unit <slug>` mode (S5, spec.md PE1-PE6) ------------
+# A SECOND, entirely separate way to invoke this file: never wired to any
+# hook, never fed a hook payload on stdin. A phase agent (loop-spec,
+# loop-slice, loop-build, loop-verify) runs it directly, once, right before
+# it writes its own STATUS/DID/VERIFIED/FLAGS/NEXT return, and pastes
+# whatever single line it prints -- if any -- into that return's FLAGS. See
+# skills/loop-protocol/SKILL.md's "Per-phase expectations" section for the
+# fields, the reasoning, and the in-flight limitation below.
+#
+# Reuses is_valid_threshold (below) rather than a second parser (S5's own
+# constraint: one parser, not two) -- an unparseable
+# LARAVEL_LOOP_BUDGET_PHASE_* value disables that phase's comparison LOUDLY,
+# naming the field and the value, exactly the way an unparseable
+# LARAVEL_LOOP_BUDGET_WARN/_HARD does above. No per-phase number ships or is
+# defaulted anywhere in this file (G0-D2): unset means nothing at all --
+# zero bytes of output, on either stream -- the same discipline BG1 holds for
+# the two hook-mode thresholds.
+#
+# A phase whose invocations are all unpriced can never raise a flag (PE5):
+# there is nothing observed to compare against, and this never prints a
+# "within expectation" sentence to fill that silence (BG6, applied per
+# phase) -- silence here means either nothing was configured, coverage was
+# empty, or the observed total stayed under the expectation, and those are
+# never distinguished by this mode because doing so would itself be the
+# reassurance PE5 forbids.
+#
+# LOAD-BEARING LIMITATION, not incidental: record-cost-event.sh writes an
+# invocation's finish record only after that invocation returns, and this
+# check runs BEFORE the calling phase agent's own return is written. So the
+# totals read here can only ever reflect that phase's PREVIOUSLY RECORDED
+# invocations in this unit -- never the one currently running the check. For
+# a phase that runs once per unit (spec, slice, verify, and most builds),
+# that means the flag can never fire on the very invocation reading it; it
+# can only ever surface an EARLIER invocation of that same phase in the same
+# unit. Documented here and in SKILL.md rather than silently accepted,
+# because a phase-cost mechanism that quietly excludes the invocation
+# reading it is exactly the half-visible figure this whole unit exists to
+# refuse.
+#
+# Always exits 0, on every path (PE3): a configured overrun is information
+# for whoever reads the return, never a control, and a bug in this mode may
+# no more stop work than a bug in the hook-mode gate may (BG10's discipline,
+# held here too).
+is_valid_threshold() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+run_phase_check() {
+  local phase="" slug="" phase_upper var_name raw threshold
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --phase)
+        phase="${2:-}"
+        if [ "$#" -ge 2 ]; then shift 2; else shift; fi
+        ;;
+      --unit)
+        slug="${2:-}"
+        if [ "$#" -ge 2 ]; then shift 2; else shift; fi
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  phase_upper="$(printf '%s' "$phase" | tr '[:lower:]' '[:upper:]')"
+  case "$phase_upper" in
+    SPEC|SLICE|BUILD|VERIFY) : ;;
+    *) exit 0 ;;
+  esac
+
+  var_name="LARAVEL_LOOP_BUDGET_PHASE_${phase_upper}"
+  raw="$(printenv "$var_name" 2>/dev/null)" || raw=""
+
+  # PE1 -- unset means nothing at all: no comparison, no flag, zero output on
+  # either stream, before anything else (including the ledger) is touched.
+  if [ -z "$raw" ]; then
+    exit 0
+  fi
+
+  if ! is_valid_threshold "$raw"; then
+    echo "budget gate: $var_name=\"$raw\" is not a bare non-negative integer -- the ${phase_upper} phase's expectation is DISABLED, not defaulted to any number. Accepted form: digits only." >&2
+    exit 0
+  fi
+  threshold="$raw"
+
+  [ -z "$slug" ] && slug="unknown"
+
+  local root script_dir ledger have_jq=0 have_py=0
+  root="${CLAUDE_PROJECT_DIR:-$PWD}"
+  script_dir="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
+  ledger="$root/.claude/loop-cost.jsonl"
+  command -v jq >/dev/null 2>&1 && have_jq=1
+  command -v python3 >/dev/null 2>&1 && have_py=1
+  if [ "$have_jq" -eq 0 ] && [ "$have_py" -eq 0 ]; then
+    exit 0
+  fi
+
+  # shellcheck source=cost-ledger-lib.sh
+  source "$script_dir/cost-ledger-lib.sh"
+
+  # CV7/CV8 -- the one and only ledger read, through the identical arithmetic
+  # /cost and the hook-mode gate both use. Never a second implementation.
+  cost_scan "$ledger" "$slug"
+  case "$COST_SCAN_STATE" in
+    no-parser|scan-error) exit 0 ;;
+  esac
+
+  local pv_name="COST_N_PRICED_${phase_upper}"
+  local tv_name="COST_TOKENS_PRICED_${phase_upper}"
+  local uv_name="COST_N_UNPRICED_${phase_upper}"
+  local inv_name="COST_N_INVOCATIONS_${phase_upper}"
+  local priced="${!pv_name}"
+  local tokens="${!tv_name}"
+  local unpriced="${!uv_name}"
+  local total_inv="${!inv_name}"
+
+  # PE5/BG6 -- all-unpriced can never flag, and the absence of a flag is
+  # never printed as evidence the phase was fine: no output at all.
+  if [ "$priced" -eq 0 ]; then
+    exit 0
+  fi
+
+  if [ "$tokens" -ge "$threshold" ]; then
+    printf 'FLAG: %s phase recorded spend is %s token(s), at or above its configured expectation of %s token(s) (%s) -- based on %s of %s recorded invocation(s) in this phase that carry a token figure (%s unpriced, not counted; excludes the invocation currently running this check, since its own finish record is not written until after it returns). Informational only -- blocks nothing.\n' \
+      "$(printf '%s' "$phase_upper" | tr '[:upper:]' '[:lower:]')" "$tokens" "$threshold" "$var_name" "$priced" "$total_inv" "$unpriced"
+  fi
+
+  exit 0
+}
+
+if [ "${1:-}" = "--phase" ]; then
+  run_phase_check "$@"
+  exit $?
+fi
+
 INPUT="$(cat)" || exit 0
 
 WARN_RAW="${LARAVEL_LOOP_BUDGET_WARN:-}"
@@ -137,14 +276,8 @@ SLUG="${SLUG:0:200}"
 # integer -- no sign, no decimal point, no exponent, no suffix, no
 # surrounding space. Anything else disables that variable's role in this
 # evaluation and is reported by name and value; it is never coerced into a
-# number nobody chose. -------------------------------------------------------
-is_valid_threshold() {
-  case "$1" in
-    ''|*[!0-9]*) return 1 ;;
-    *) return 0 ;;
-  esac
-}
-
+# number nobody chose. is_valid_threshold is defined once, near the top of
+# this file, and reused here -- see S5's comment there for why. -------------
 WARN_VALID=0; WARN_VALUE=0
 if [ -n "$WARN_RAW" ]; then
   if is_valid_threshold "$WARN_RAW"; then

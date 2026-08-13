@@ -73,6 +73,8 @@ Use `AskUserQuestion` when running main-thread. As a subagent, print the questio
 
 **5. Return** in the protocol shape, echoing `Unit` inside `DID` (`Slice` is omitted — this phase runs before any slice exists). Briefed without a `Unit` line → say so instead of inventing one: `FLAGS: briefed without Unit/Slice`. `NEXT` is always the `/slice` invocation, never an offer to start building.
 
+Before returning, run `scripts/check-budget-gate.sh --phase spec --unit <slug>`. It is optional, off unless a human has set `LARAVEL_LOOP_BUDGET_PHASE_SPEC`, and never blocks — if it prints a line, paste it into `FLAGS` verbatim; if it prints nothing, `FLAGS` is unaffected. Never extends the return past ≤10 lines.
+
 ## Gate G0
 
 Your output goes to a human before anything else happens. Present it as: the problem in one line, in-scope bullets, **the non-goals read out loud**, open questions, then numbered options with a recommended default. The human is answering two questions — *is the problem framed right* and *are the non-goals right*. Ask them directly rather than assuming the file gets read.
