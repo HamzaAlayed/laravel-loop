@@ -1343,6 +1343,115 @@ skill_check() {
 }
 expect "SKILL.md states the ordering rule and its rationale (C1)" "0" "$(skill_check)"
 
+# ---------------------------------------------------------------------------
+echo
+echo "warn-full-suite.sh (full-suite guard, R4.4)"
+
+suite_json() { # $1 agent_type ("" for none/main-thread) $2 command
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+agent, command = sys.argv[1:3]
+payload = {"tool_input": {"command": command}}
+if agent:
+    payload["agent_type"] = agent
+print(json.dumps(payload))
+PY
+}
+
+warn_exit() { # $1 json
+  printf '%s' "$1" | bash "$SCRIPTS/warn-full-suite.sh" >/dev/null 2>&1
+  echo $?
+}
+warn_stderr() { # $1 json
+  printf '%s' "$1" | bash "$SCRIPTS/warn-full-suite.sh" 2>&1 1>/dev/null
+}
+warned() { # $1 json -> "warn" or "silent"
+  printf '%s' "$(warn_stderr "$1")" | grep -qi 'warn' && echo warn || echo silent
+}
+
+# -- (a) unfiltered `php artisan test` from loop-build warns AND exits 0 --
+# exit code and stderr asserted as separate cases (FS1).
+FS_A="$(suite_json loop-build "php artisan test")"
+expect "FS1: unfiltered 'php artisan test' from loop-build exits 0" "0" "$(warn_exit "$FS_A")"
+expect "FS1: unfiltered 'php artisan test' from loop-build warns on stderr" "warn" "$(warned "$FS_A")"
+
+# -- (b) Sail-prefixed form warns too (FS4) --
+FS_B="$(suite_json loop-build "./vendor/bin/sail artisan test")"
+expect "FS4: unfiltered sail-prefixed 'artisan test' exits 0" "0" "$(warn_exit "$FS_B")"
+expect "FS4: unfiltered sail-prefixed 'artisan test' warns" "warn" "$(warned "$FS_B")"
+
+# -- (c) a filter, or a path/file argument, means filtered: never warns (FS4) --
+FS_C1="$(suite_json loop-build "php artisan test --compact --filter=InvoiceTest")"
+expect "FS4: filtered 'php artisan test --filter=' does not warn" "silent" "$(warned "$FS_C1")"
+expect "FS4: filtered 'php artisan test --filter=' exits 0" "0" "$(warn_exit "$FS_C1")"
+
+FS_C2="$(suite_json loop-build "vendor/bin/pest tests/Feature/InvoiceTest.php")"
+expect "FS4: 'vendor/bin/pest' with a path argument does not warn" "silent" "$(warned "$FS_C2")"
+expect "FS4: 'vendor/bin/pest' with a path argument exits 0" "0" "$(warn_exit "$FS_C2")"
+
+# -- (d) never warns on loop-verify or the main thread (FS2) -- two cases --
+FS_D1="$(suite_json loop-verify "php artisan test")"
+expect "FS2: unfiltered run from loop-verify does not warn" "silent" "$(warned "$FS_D1")"
+expect "FS2: unfiltered run from loop-verify exits 0" "0" "$(warn_exit "$FS_D1")"
+
+FS_D2="$(suite_json "" "php artisan test")"
+expect "FS2: unfiltered run with no agent_type (main thread) does not warn" "silent" "$(warned "$FS_D2")"
+expect "FS2: unfiltered run with no agent_type exits 0" "0" "$(warn_exit "$FS_D2")"
+
+# -- (e) escape hatch silences it; the warning names the variable (FS3) --
+expect "FS3: LARAVEL_LOOP_ALLOW_FULL_SUITE=1 silences the warning" "silent" \
+  "$(LARAVEL_LOOP_ALLOW_FULL_SUITE=1 warned "$FS_A")"
+expect "FS3: LARAVEL_LOOP_ALLOW_FULL_SUITE=1 still exits 0" "0" \
+  "$(LARAVEL_LOOP_ALLOW_FULL_SUITE=1 warn_exit "$FS_A")"
+expect "FS3: the warning names LARAVEL_LOOP_ALLOW_FULL_SUITE" "found" \
+  "$(printf '%s' "$(warn_stderr "$FS_A")" | grep -q 'LARAVEL_LOOP_ALLOW_FULL_SUITE' && echo found || echo missing)"
+
+# -- (f) false positives never warn (FS5) -- asserted per command --
+FS_F1="$(suite_json loop-build "ls tests/")"
+expect "FS5: 'ls tests/' from loop-build does not warn" "silent" "$(warned "$FS_F1")"
+expect "FS5: 'ls tests/' from loop-build exits 0" "0" "$(warn_exit "$FS_F1")"
+
+FS_F2="$(suite_json loop-build "grep -r foo tests/")"
+expect "FS5: 'grep -r foo tests/' from loop-build does not warn" "silent" "$(warned "$FS_F2")"
+expect "FS5: 'grep -r foo tests/' from loop-build exits 0" "0" "$(warn_exit "$FS_F2")"
+
+FS_F3="$(suite_json loop-build "git add tests/InvoiceTest.php")"
+expect "FS5: 'git add tests/InvoiceTest.php' from loop-build does not warn" "silent" "$(warned "$FS_F3")"
+expect "FS5: 'git add tests/InvoiceTest.php' from loop-build exits 0" "0" "$(warn_exit "$FS_F3")"
+
+# -- (g) exit 0 on every degenerate input, asserted individually (FS6) --
+expect "FS6: malformed payload exits 0" "0" \
+  "$(warn_exit '{"agent_type":"loop-build","tool_input": not valid json')"
+expect "FS6: empty payload exits 0" "0" "$(warn_exit '')"
+
+FS_NOPARSER_BIN="$(mktemp -d)"
+for b in cat grep tr bash; do
+  p="$(command -v "$b" 2>/dev/null)"
+  [ -n "$p" ] && ln -s "$p" "$FS_NOPARSER_BIN/$b"
+done
+FS_NOPARSER_JSON="$(suite_json loop-build "php artisan test")"
+FS_NOPARSER_EXIT="$(printf '%s' "$FS_NOPARSER_JSON" | PATH="$FS_NOPARSER_BIN" bash "$SCRIPTS/warn-full-suite.sh" >/dev/null 2>&1; echo $?)"
+expect "FS6: PATH stripped of jq+python3 exits 0" "0" "$FS_NOPARSER_EXIT"
+rm -rf "$FS_NOPARSER_BIN"
+
+# -- (h) new registration doesn't disturb the structure check (X5), and the
+# script is not registered anywhere that could fire mid-invocation.
+expect "FS: warn-full-suite.sh is registered on PreToolUse/Bash, not elsewhere" "1" \
+  "$(python3 - "$ROOT" <<'PY'
+import json, os, sys
+root = sys.argv[1]
+h = json.load(open(os.path.join(root, "hooks", "hooks.json")))["hooks"]
+count = 0
+for event, entries in h.items():
+    for e in entries:
+        for hk in e["hooks"]:
+            if hk["command"].endswith("warn-full-suite.sh"):
+                count += 1
+                assert event == "PreToolUse" and e["matcher"] == "Bash", "wrong event/matcher"
+print(count)
+PY
+)"
+
 echo
 echo "----------------------------------------"
 printf 'total: %d passed, %d failed\n' "$PASS" "$FAIL"
