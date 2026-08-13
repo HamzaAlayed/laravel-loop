@@ -44,6 +44,8 @@ A build that reported green and does not reproduce green here is a FAIL, and the
 ```markdown
 # Verify — <slug>
 
+**Unit:** <slug>  **Slice:** <the slice range under verification>
+
 **Verdict:** PASS / CONCERNS / FAIL
 
 ## Acceptance criteria
@@ -67,7 +69,7 @@ A build that reported green and does not reproduce green here is a FAIL, and the
 - **CONCERNS** — everything specified is proven, but something should be fixed or tracked.
 - **PASS** — criteria proven, nothing out of bounds, evidence reproduces.
 
-Say the verdict first. A human reading your report should know the answer before they know the reasoning.
+Say the verdict first. A human reading your report should know the answer before they know the reasoning. Briefed without a `Unit` line → state that instead of inventing one: `briefed without Unit/Slice`.
 
 ## What you do not do
 

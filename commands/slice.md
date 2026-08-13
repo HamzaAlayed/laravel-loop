@@ -14,7 +14,7 @@ G1 without the rest of the loop. Use it when a spec already exists — written b
 
 1. **Resolve the spec.** `{{args}}` is a path or a slug; look under `docs/loop/`. No spec on disk → stop and say so. Do not reconstruct one from the ticket title: slicing an unwritten spec produces a plan for a problem nobody agreed on, which is worse than no plan because it looks like progress.
 
-2. **Brief `loop-slice`** with the spec path, `docs/loop/conventions.md`, and `docs/loop/decisions.md`. Require the five-test justification per slice and a nominated riskiest slice.
+2. **Brief `loop-slice`** with the spec path, `docs/loop/conventions.md`, and `docs/loop/decisions.md`. Require the five-test justification per slice and a nominated riskiest slice. Every brief carries `Unit:  <slug>` (`Slice:` omitted — this command produces the slice list, it does not operate inside one).
 
 3. **Audit what comes back** before showing the human. Send it back for any slice that has two owners, cannot name its failing-then-passing test, plainly exceeds one commit, has an empty `Do NOT`, or depends on something later in the list. A coarse slice surfaces downstream as a tripped refine cap — and by then it costs the whole task instead of a sentence.
 

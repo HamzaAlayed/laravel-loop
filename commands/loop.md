@@ -32,7 +32,7 @@ Print after planning and after every phase resolves. Never make the human ask wh
 - Already a scoped, testable change with a spec behind it → skip to step 3; a full loop on a one-slice task is pure latency.
 - A production fault → capture origin, context, and what was tried, *then* treat that as the intent.
 
-**1. Spec — `loop-spec`.** Brief with the intent, plus a pointer to `docs/loop/conventions.md` and `docs/loop/decisions.md`. It returns a spec path.
+**1. Spec — `loop-spec`.** Brief with the intent, plus a pointer to `docs/loop/conventions.md` and `docs/loop/decisions.md`. It returns a spec path. Every brief carries `Unit:  <slug>` (`Slice:` omitted — spec operates on the whole unit before any slice exists).
 
 **⏸ Gate G0.** Present: problem in one line, in-scope bullets, **the non-goals read out loud**, open questions. Then:
 
@@ -45,17 +45,17 @@ Print after planning and after every phase resolves. Never make the human ask wh
 
 Do not proceed on silence. An unanswered gate stops the lane.
 
-**2. Slice — `loop-slice`.** Brief with the approved spec path. It returns a slice list, a dependency order, and its nominated riskiest slice.
+**2. Slice — `loop-slice`.** Brief with the approved spec path. It returns a slice list, a dependency order, and its nominated riskiest slice. Every brief carries `Unit:  <slug>` (`Slice:` omitted — this phase produces the slice list, it does not operate inside one).
 
 **⏸ Gate G1.** Present the slice list, the critical path, the parallelisable set, and the riskiest slice with its reason. Approve / re-slice / back to spec.
 
-**3. Build — `loop-build`, once per slice.** Pass the slice envelope **verbatim**; do not paraphrase it, and do not add to it. Independent slices run concurrently — cap at 2–3 in flight regardless of how many are independent. More work in progress means longer cycle time for everything, and every open worktree is unmerged integration risk.
+**3. Build — `loop-build`, once per slice.** Pass the slice envelope **verbatim**; do not paraphrase it, and do not add to it. Every brief carries `Unit:  <slug>` and `Slice: S<n>`, so the invocation is traceable to the work it belongs to. Independent slices run concurrently — cap at 2–3 in flight regardless of how many are independent. More work in progress means longer cycle time for everything, and every open worktree is unmerged integration risk.
 
 Sequence dependent slices along the real dependency chain. Merge in that same order.
 
 **On a blocked return:** the refine cap tripped, or the envelope was ambiguous. Re-brief **once**, naming the exact gap. Blocked again → stop the lane and take it back to G1 as a re-slice. Never a third brief on the same slice, and never patch the work yourself.
 
-**4. Verify — `loop-verify`.** Once all slices for the unit are merged. It reads the spec's acceptance criteria, checks the diff against every `Do NOT`, reproduces the evidence itself, and returns PASS / CONCERNS / FAIL.
+**4. Verify — `loop-verify`.** Once all slices for the unit are merged. It reads the spec's acceptance criteria, checks the diff against every `Do NOT`, reproduces the evidence itself, and returns PASS / CONCERNS / FAIL. Every brief carries `Unit:  <slug>` and `Slice:` naming the slice range under verification (e.g. `Slice: S1–S4`).
 
 **⏸ Gate G2.** Relay the verdict, then the human reads the diff. FAIL → route findings back to `loop-build` as re-briefs, one per finding, then re-verify. Do not argue a FAIL down.
 

@@ -71,6 +71,8 @@ Brief every agent in this shape. Improvised prose briefs are where scope leaks.
 ```
 Task:        <one line, imperative>
 Owner:       <agent>
+Unit:  <slug>
+Slice: S<n>
 Context:     <paths, prior art — the minimum to succeed, not everything>
 Constraints: - <framework rules that apply>
              - <project rules from docs/loop/conventions.md>
@@ -78,6 +80,8 @@ Output:      <exact artifacts expected back>
 Done when:   <observable behaviour + the test that proves it>
 Do NOT:      <files, packages, or scope explicitly out of bounds>
 ```
+
+`Unit:` and `Slice:` are mandatory on every brief — they are what lets anything downstream trace a run back to the work it belongs to. Write them exactly as shown, at line start, with no bold, no backticks, and no reordering: a hook greps them literally. `Slice` is **omitted** (not blank, not "n/a") for the spec and slice phases, which operate on the whole unit rather than inside one slice.
 
 `Do NOT` is mandatory and "nothing" is not a valid value. It is the cheapest scope control available, and its absence is the commonest cause of a diff touching four things nobody asked for.
 
@@ -94,6 +98,8 @@ VERIFIED: command → actual result — evidence, not claims
 FLAGS: corrections, risks, rejected approaches — or "none"
 NEXT: handoff or "none"
 ```
+
+Every return also names the `Unit` and `Slice` it was briefed with — fold them into `DID` (e.g. `DID: cost-measurement-v0.2 S1 — <files touched>`) rather than adding a line, so the shape stays ≤10 lines. An agent briefed without a `Unit` line says so instead of inventing or guessing one — pin the wording so it is greppable: `FLAGS: briefed without Unit/Slice`.
 
 **An empty `VERIFIED` is a claim, not a return.** Reject it and re-brief. "Tests pass" is a claim; `php artisan test --filter=Invoice → 12 passed` is evidence.
 

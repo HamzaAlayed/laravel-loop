@@ -68,4 +68,4 @@ Deviating from any of these is fine when the codebase already does — match the
 
 ## Return
 
-Protocol shape, ≤10 lines. `VERIFIED` carries commands and their actual counts. An empty `VERIFIED` is a claim, not a return, and will be rejected.
+Protocol shape, ≤10 lines. `VERIFIED` carries commands and their actual counts. An empty `VERIFIED` is a claim, not a return, and will be rejected. Echo `Unit` and `Slice` inside `DID` (e.g. `DID: cost-measurement-v0.2 S1 — <files touched>`). Briefed without either → say so instead of inventing one: `FLAGS: briefed without Unit/Slice`.
