@@ -60,16 +60,17 @@ Loaded on demand via the `Skill` tool, so the detail costs nothing until a task 
 
 ## Guardrails
 
-Two hooks. Both scoped to **subagents** via the payload's `agent_type` — a human on the main thread is never blocked, because a human doing these things is a deliberate, visible act and an agent doing them mid-refine is not.
+Three hooks. All scoped to **subagents** via the payload's `agent_type` — a human on the main thread is never blocked or warned, because a human doing these things is a deliberate, visible act and an agent doing them mid-refine or mid-slice is not.
 
 | Script | Event | Blocks |
 |---|---|---|
 | `enforce-refine-cap.sh` | `PostToolUse` / `Bash` | The 3rd consecutive **failing** run of the same test target. Wired PostToolUse deliberately: it needs the command's *result*, so it counts failures rather than attempts, and a green run resets that target — normal red→green TDD never trips it. Cap via `LARAVEL_LOOP_REFINE_CAP` (default `3`, `0` disables). |
 | `block-untested-commit.sh` | `PreToolUse` / `Bash` | A `git commit` staging application code with no test staged alongside it. Migrations, config, docs, assets, and framework service providers are carved out. Escape hatch: `LARAVEL_LOOP_ALLOW_UNTESTED=1`. |
+| `warn-full-suite.sh` | `PreToolUse` / `Bash` | Nothing — the one guard here that **warns instead of refusing**. When a `loop-build` subagent runs an unfiltered test suite mid-slice instead of the filtered per-slice run `laravel-validate` prescribes, it prints a message to stderr and exits `0`; the command underneath it still runs, unchanged. Scoped to `loop-build` only — a human on the main thread and `loop-verify`'s own broad re-runs are never warned. Escape hatch: `LARAVEL_LOOP_ALLOW_FULL_SUITE=1`, named inline in the warning. |
 
-Together they close both exits from a red test: grinding on it, and making it go away.
+Together the first two close both exits from a red test: grinding on it, and making it go away. The third is different in kind — advice, not refusal, because a wrong block here would cost more than the suite run it might have prevented.
 
-**Guards need escape hatches.** Both have one, and each block message names it. A guard that is occasionally wrong and cannot be overridden gets disabled wholesale the first time it is wrong — which is worse than not having it.
+**Guards need escape hatches.** All three have one, and each message names it. A guard that is occasionally wrong and cannot be overridden gets disabled wholesale the first time it is wrong — which is worse than not having it.
 
 ## Cost ledger
 
@@ -86,6 +87,18 @@ Rework is attributed at whole-invocation granularity: if a slice needed even one
 Disable it entirely with `LARAVEL_LOOP_COST_LEDGER=0`. Bound it with `LARAVEL_LOOP_COST_MAX_LINES` (default 5,000; oldest lines evicted first). Delete `.claude/loop-cost.jsonl` at any time — the next event recreates it, and nothing else depends on its contents. It never leaves the machine: no network call, no account, nothing but a local file.
 
 This is entirely separate from Laravel Guild's `.claude/agents-board.jsonl`, if that plugin is also installed — neither file reads the other, and both coexist without collision.
+
+## Cost reporting and the budget gate
+
+`/cost [slug]` reads **only** `.claude/loop-cost.jsonl` — no network call, no account, and no reading of Laravel Guild's `.claude/agents-board.jsonl` even when that file happens to sit right next to it and see more. Coverage is printed **before any total, always**: how many invocations the ledger holds for the unit, how many carry a token figure, how many do not, per phase. A total built from only the priced subset is labelled as covering that subset, never presented as the unit's whole cost, and where nothing for a unit is priced no token table is printed at all — the report says plainly that nothing about that unit's cost is observable, and why. No currency figure is ever produced: tokens, counts, and durations, never a dollar figure, never a rate card.
+
+A per-unit budget gate (`scripts/check-budget-gate.sh`) exists, is configurable, and does **nothing at all** until a human sets a number. `LARAVEL_LOOP_BUDGET_WARN` and `LARAVEL_LOOP_BUDGET_HARD` ship with no default value anywhere in this plugin — unset means disabled, not "falls back to a number." A value that cannot be parsed disables that threshold loudly, naming the variable and the value it could not use, rather than falling back to anything. At the hard threshold the loop pauses **before the next spawn** and presents numbered options; a slice already in flight always completes — the gate pauses work, it never kills it. Raising the cap at that pause applies to the current unit only and is never carried forward as a standing value.
+
+Per-phase expectations follow the same discipline: `LARAVEL_LOOP_BUDGET_PHASE_SPEC`, `_SLICE`, `_BUILD`, and `_VERIFY` are each unset by default, compare nothing, and raise no flag until a human sets one — see `loop-protocol`'s Per-phase expectations section for the mechanism.
+
+**No number for any of these five variables ships anywhere in this plugin** — not in the code, not in this README, not as a "suggested starting value" in a code fence. There is no baseline to derive one from: this repository has never seen a completed `/loop` run produce a full ledger, and most invocations recorded so far carry no token figure at all — a number offered under either condition would be a guess wearing a default's clothes. Set a threshold from your own ledger's observed totals once you have some, never from a number in a document. A budget is denominated in tokens, never in money.
+
+An unfired gate is never reported as reassurance, anywhere — not in `/cost`'s output, not in a return, not in `log.md`. Silence means either no threshold was set or the observed total has not reached it, and `/cost` always shows which.
 
 ## Install
 
@@ -140,7 +153,7 @@ They answer different questions. Reach for the **Guild** when you want a named s
 ## Development
 
 ```bash
-bash tests/guardrails.test.sh   # 57 cases, zero dependencies
+bash tests/guardrails.test.sh   # 326 cases, zero dependencies
 shellcheck scripts/*.sh
 ```
 

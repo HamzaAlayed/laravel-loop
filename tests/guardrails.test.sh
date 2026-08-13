@@ -2103,6 +2103,66 @@ readme_ledger_check() {
 expect "docs: README documents the cost ledger (path, env vars, machine, money, rework wording)" \
   "0" "$(readme_ledger_check)"
 
+# S8 (spec.md X6) -- README documents /cost, the budget gate (both env
+# vars), the per-phase family, the full-suite guard's escape hatch, "unset
+# means disabled", the no-default reasoning, and the never-money statement.
+# Each of these strings is absent from README before this slice's edit.
+readme_cost_report_and_budget_names_check() {
+  local bad=0 readme="$README_MD"
+  grep -q '/cost' "$readme" || bad=1
+  grep -q '\.claude/loop-cost\.jsonl' "$readme" || bad=1
+  grep -q 'LARAVEL_LOOP_BUDGET_WARN' "$readme" || bad=1
+  grep -q 'LARAVEL_LOOP_BUDGET_HARD' "$readme" || bad=1
+  grep -q 'LARAVEL_LOOP_ALLOW_FULL_SUITE' "$readme" || bad=1
+  grep -q 'LARAVEL_LOOP_BUDGET_PHASE_SPEC' "$readme" || bad=1
+  grep -qi 'unset means disabled' "$readme" || bad=1
+  grep -qi 'no baseline' "$readme" || bad=1
+  grep -qi 'never from a number in a document' "$readme" || bad=1
+  grep -qi 'never in money' "$readme" || bad=1
+  echo $bad
+}
+expect "docs: README names /cost, both budget env vars, the full-suite escape hatch, the per-phase family, 'unset means disabled', the no-default reasoning, and the never-money statement (X6)" \
+  "0" "$(readme_cost_report_and_budget_names_check)"
+
+# (b) -- every env var and script path this section names actually exists in
+# the scripts that implement it, mirroring readme_ledger_check's own pattern:
+# the docs cannot describe a switch that was never built.
+readme_cost_report_and_budget_switches_exist_check() {
+  local bad=0
+  grep -q 'LARAVEL_LOOP_BUDGET_WARN' "$ROOT/scripts/check-budget-gate.sh" || bad=1
+  grep -q 'LARAVEL_LOOP_BUDGET_HARD' "$ROOT/scripts/check-budget-gate.sh" || bad=1
+  grep -q 'LARAVEL_LOOP_BUDGET_PHASE_' "$ROOT/scripts/check-budget-gate.sh" || bad=1
+  grep -q 'LARAVEL_LOOP_ALLOW_FULL_SUITE' "$ROOT/scripts/warn-full-suite.sh" || bad=1
+  [ -x "$ROOT/scripts/cost-report.sh" ] || bad=1
+  [ -x "$ROOT/scripts/check-budget-gate.sh" ] || bad=1
+  [ -x "$ROOT/scripts/warn-full-suite.sh" ] || bad=1
+  [ -x "$ROOT/scripts/write-cost-log-section.sh" ] || bad=1
+  echo $bad
+}
+expect "docs: every env var and script path README names for /cost and the budget gate exists and is executable in the scripts (b)" \
+  "0" "$(readme_cost_report_and_budget_switches_exist_check)"
+
+# (c) -- negative: G0-D1 forbids a suggested value anywhere near either
+# budget variable or the per-phase family. No digit ever shares a line with
+# a LARAVEL_LOOP_BUDGET* name in README, so a "helpful" example can never
+# reintroduce a default.
+expect "docs: no digit shares a line with any LARAVEL_LOOP_BUDGET* name in README (G0-D1)" "0" \
+  "$(grep 'LARAVEL_LOOP_BUDGET' "$README_MD" | grep -cE '[0-9]')"
+
+# (d) -- negative: BG6's discipline applies to README too. No unfired gate
+# is ever framed as reassurance.
+expect "docs: no 'within budget'/'under budget'/checkmark framing anywhere in README (BG6)" "1" \
+  "$(grep -iE 'within budget|under budget|✓' "$README_MD" >/dev/null 2>&1; echo $?)"
+
+# (e) -- X7: ship-check.sh's own version-consistency gate, run against this
+# repository's REAL VERSION / plugin.json / marketplace.json (not a
+# fixture), reads them as agreeing post-bump. Sourced rather than executed
+# so only gate3_version runs -- executing the whole script here would invoke
+# gate 1, which runs this very test file.
+expect "docs: ship-check.sh's version gate reads this repo's real VERSION/plugin.json/marketplace.json as agreeing (X7)" \
+  "passed" \
+  "$(bash -c 'source "'"$ROOT"'/scripts/ship-check.sh"; ROOT="'"$ROOT"'"; gate3_version; printf "%s" "$GATE3_STATE"')"
+
 # ---------------------------------------------------------------------------
 echo "manifest + component structure"
 structure_check() {
@@ -2540,6 +2600,22 @@ rm -rf "$LOGDIR2"
 # -- executable bit + shellcheck (X1) --
 expect "write-cost-log-section.sh is executable" "yes" \
   "$([ -x "$SCRIPTS/write-cost-log-section.sh" ] && echo yes || echo no)"
+
+# ---------------------------------------------------------------------------
+# S8 (spec.md, §Development case count) -- this MUST be the last case in the
+# file. The harness's actual total is only known once every case above has
+# run, including any inside a loop that fires more than once per source
+# line -- a static grep over `expect "` call sites undercounts those, so the
+# only honest source of truth is the live PASS/FAIL tally this file has kept
+# all along. This case's own contribution is the last one counted, so
+# PASS+FAIL+1 here *is* the grand total the closing printf below reports.
+echo
+echo "docs (case count)"
+DEV_SECTION="$(sed -n '/^## Development/,/^## /p' "$ROOT/README.md")"
+README_CASE_COUNT="$(printf '%s\n' "$DEV_SECTION" | grep -oE '[0-9]+ cases' | grep -oE '[0-9]+')"
+EXPECTED_TOTAL=$((PASS + FAIL + 1))
+expect "docs: README's Development section case count equals the harness's actual total" \
+  "$EXPECTED_TOTAL" "${README_CASE_COUNT:-}"
 
 echo
 echo "----------------------------------------"

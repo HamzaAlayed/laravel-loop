@@ -5,6 +5,56 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-13
+
+Closes the reporting gap v0.2 deliberately left open: the ledger existed but nothing read
+it, and nothing could pause a spawn on spend. Ships the full v0.3 row of the
+cost-optimization requirements doc in one release — `/cost`, the budget gate, per-phase
+expectations, cost in the delivery log, and the full-suite guard — with no threshold
+shipped as a default anywhere, by explicit decision (G0-D1): this repo holds no spend
+baseline, and most invocations recorded so far carry no token figure at all, so any number
+offered would be a guess dressed as a default.
+
+### Added
+
+- **`/cost [slug]`** — reports what `.claude/loop-cost.jsonl` can see for one unit of
+  work, coverage stated before any total, always: how many invocations were observed, how
+  many carry a token figure, how many do not, per phase. A partial total is labelled as
+  covering only the priced subset, never presented as the whole, and where nothing for a
+  unit is priced no token table is printed at all. Rework is reported as invocation counts,
+  with a token share only where those invocations are priced, and no verdict is ever
+  printed against the source requirements doc's rework target — v0.2's whole-invocation
+  attribution already made that comparison invalid by definition. Reads only the ledger:
+  no network call, no account, no reading of Laravel Guild's `agents-board.jsonl`.
+- **Budget gate** (`scripts/check-budget-gate.sh`) — `LARAVEL_LOOP_BUDGET_WARN` and
+  `LARAVEL_LOOP_BUDGET_HARD`, both unset by default and doing nothing at all until a human
+  sets a number. An unparseable value disables that threshold loudly, naming the variable
+  and the value, rather than falling back to anything. At the hard threshold the loop
+  pauses before the next spawn and presents numbered options; a slice already in flight
+  always completes. Raising the cap at that pause applies to the current unit only.
+- **Per-phase expectations** — `LARAVEL_LOOP_BUDGET_PHASE_SPEC` / `_SLICE` / `_BUILD` /
+  `_VERIFY`, same discipline: unset by default, flags an overrun in that phase's own
+  return without ever blocking, and the flag always carries its own coverage caveat.
+- **Full-suite guard** (`scripts/warn-full-suite.sh`) — the one guard in this plugin that
+  warns instead of refusing: an unfiltered test suite run by `loop-build` mid-slice prints
+  to stderr and exits 0, naming its escape hatch (`LARAVEL_LOOP_ALLOW_FULL_SUITE=1`)
+  inline. The command underneath it still runs, unchanged.
+- **Cost in the delivery log** — `/loop`'s close step now writes a `## Cost` section into
+  `docs/loop/<slug>/log.md`, replaced rather than duplicated on a re-run, carrying its own
+  coverage statement and any budget event that fired during the unit.
+
+### Notes
+
+- No threshold ships as a default for any of the five new variables above, anywhere in
+  this plugin or this README — not baked in, not commented out, not offered as a
+  "suggested starting value." Set one from your own ledger's observed totals once you
+  have some.
+- Harness grew from 121 to 326 cases; shellcheck stays clean throughout.
+- DC2 and DC3 (the report recognised against a real run; the gate observed doing nothing,
+  then observed firing) are open, human-judged conditions, the same footing as v0.2's
+  still-open DC1 — passing verify means this is built, not yet that it is trusted in the
+  field.
+
 ## [0.2.0] - 2026-08-13
 
 Closes two of v0.1's named gaps (Ship automation, Observe phase) and adds the
