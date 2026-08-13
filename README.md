@@ -70,6 +70,22 @@ Together they close both exits from a red test: grinding on it, and making it go
 
 **Guards need escape hatches.** Both have one, and each block message names it. A guard that is occasionally wrong and cannot be overridden gets disabled wholesale the first time it is wrong — which is worse than not having it.
 
+## Cost ledger
+
+A third hook that only observes — it never blocks a spawn. `record-cost-event.sh` is wired on `PreToolUse` and `PostToolUse` for matcher `Agent|Task` (plus `PostToolUse` / `Bash`, alongside `enforce-refine-cap.sh`, purely to detect refine passes), and writes one JSONL record per agent-invocation lifecycle signal to `.claude/loop-cost.jsonl` — a start record and a finish record per invocation, so a completed `/loop` run can be priced per invocation, per phase, and per slice.
+
+| Script | Event | Writes |
+|---|---|---|
+| `record-cost-event.sh` | `PreToolUse` / `PostToolUse` (`Agent\|Task`), `PostToolUse` (`Bash`, rework detection only) | One JSONL line per lifecycle signal, appended to `.claude/loop-cost.jsonl` |
+
+It records tokens and durations, never a dollar figure — it counts tokens and durations, it is not money, and no arithmetic ever invents a price. A `null` field means the value was unavailable, never a measured zero: an asynchronously-launched invocation, for example, may report no tokens at all and is recorded that way rather than as `0`.
+
+Rework is attributed at whole-invocation granularity: if a slice needed even one refine pass, that build invocation's entire cost is tagged `phase_detail: "rework"`. This deliberately over-attributes — the figure measures the cost of slices that were not right first time, not the cost of retrying — so a v0.2 rework share is not directly comparable to a narrower, per-pass definition.
+
+Disable it entirely with `LARAVEL_LOOP_COST_LEDGER=0`. Bound it with `LARAVEL_LOOP_COST_MAX_LINES` (default 5,000; oldest lines evicted first). Delete `.claude/loop-cost.jsonl` at any time — the next event recreates it, and nothing else depends on its contents. It never leaves the machine: no network call, no account, nothing but a local file.
+
+This is entirely separate from Laravel Guild's `.claude/agents-board.jsonl`, if that plugin is also installed — neither file reads the other, and both coexist without collision.
+
 ## Install
 
 ```bash
@@ -103,13 +119,14 @@ Wire the hooks into `.claude/settings.json`:
 
 ## Project memory
 
-Three files, in your repo, human-readable and deletable. Agents propose; you approve; the repo remembers.
+Four files, in your repo, human-readable and deletable. Three are agent-authored — agents propose, you approve, the repo remembers. The fourth, the cost ledger, is written automatically by a hook and never leaves your machine.
 
 | File | Holds |
 |---|---|
 | `docs/loop/conventions.md` | Rules you taught — every agent treats these as overrides |
 | `docs/loop/decisions.md` | Approaches **tried and rejected**, with why |
 | `docs/loop/<slug>/` | `spec.md`, `slices.md`, `verify.md`, `log.md` for one unit of work |
+| `.claude/loop-cost.jsonl` | Cost ledger — tokens and durations per agent invocation, not money. See [Cost ledger](#cost-ledger) above |
 
 `decisions.md` is the one teams skip and then regret. Git tells an agent what the code *is*; nothing else records "we tried this in March, it broke under load, stop proposing it." Without it, every new session re-proposes your rejected designs and you re-litigate them by hand.
 
