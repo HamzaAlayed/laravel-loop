@@ -659,6 +659,215 @@ expect "cwd narrows attribution to the matching-cwd invocation only" '"rework" M
 rm -rf "$REWORKDIR"
 
 # ---------------------------------------------------------------------------
+echo "cost report (/cost — scripts/cost-report.sh, scripts/cost-ledger-lib.sh)"
+
+report() { # $1 CLAUDE_PROJECT_DIR $2 slug (optional)
+  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/cost-report.sh" "${2:-}"
+}
+report_exit() { # $1 CLAUDE_PROJECT_DIR $2 slug (optional)
+  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/cost-report.sh" "${2:-}" >/dev/null 2>&1
+  echo $?
+}
+
+# The mixed fixture: one priced spec invocation, one unpriced (async_launched)
+# build invocation, one in-flight build invocation, a cap_trip terminal
+# record naming the same slug, one malformed raw line, one verify invocation
+# whose finish fell back to the line_too_long shape (E6), and a fifth
+# invocation under slug:"unknown" carrying its own distinct token figure so
+# a bug that merged it into "mixed-unit" would be caught, not just unnoticed.
+MIXDIR="$(mktemp -d)"
+mkdir -p "$MIXDIR/.claude"
+MIXLEDGER="$MIXDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"a1","session_id":"s1","slug":"mixed-unit","slice":"S1","phase":"spec","agent":"loop-spec","model":"claude-opus-4","model_source":"observed"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"a1","session_id":"s1","slug":"mixed-unit","slice":"S1","phase":"spec","agent":"loop-spec","model":"claude-opus-4","model_source":"observed","status":"completed","duration_ms":5000,"total_tokens":60787,"input_tokens":50000,"output_tokens":10787}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"a2","session_id":"s1","slug":"mixed-unit","slice":"S2","phase":"build","agent":"loop-build","model":"claude-sonnet-4","model_source":"derived"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"a2","session_id":"s1","slug":"mixed-unit","slice":"S2","phase":"build","agent":"loop-build","model":"claude-sonnet-4","model_source":"derived","status":"async_launched"}'
+  printf '%s\n' '{"ts":5,"event":"start","invocation_id":"a3","session_id":"s1","slug":"mixed-unit","slice":"S3","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":6,"event":"cap_trip","session_id":"s1","agent":"loop-build","target":"suite","slug":"mixed-unit","slice":"S4","phase_detail":"rework","refine_passes":3}'
+  printf '%s\n' 'this line is not valid json at all {'
+  printf '%s\n' '{"ts":7,"event":"start","invocation_id":"a4","session_id":"s1","slug":"mixed-unit","phase":"verify","agent":"loop-verify"}'
+  printf '%s\n' '{"ts":8,"event":"finish","invocation_id":"a4","slug":"mixed-unit","phase":"verify","agent":"loop-verify","status":"line_too_long"}'
+  printf '%s\n' '{"ts":9,"event":"start","invocation_id":"a5","slug":"unknown","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":10,"event":"finish","invocation_id":"a5","slug":"unknown","phase":"build","agent":"loop-build","status":"completed","total_tokens":42}'
+} > "$MIXLEDGER"
+
+MIX_OUT="$(report "$MIXDIR" mixed-unit)"
+
+# (a) CV1 — Coverage: appears at a lower line number than any token figure.
+mix_coverage_line="$(printf '%s\n' "$MIX_OUT" | grep -n '^Coverage:' | head -1 | cut -d: -f1)"
+mix_tokens_line="$(printf '%s\n' "$MIX_OUT" | grep -n 'total priced tokens' | head -1 | cut -d: -f1)"
+expect "(a) mixed fixture: Coverage: precedes any token figure (CV1)" "yes" \
+  "$( [ -n "$mix_coverage_line" ] && [ -n "$mix_tokens_line" ] && [ "$mix_coverage_line" -lt "$mix_tokens_line" ] && echo yes || echo no )"
+
+# (c) CV3/CV5 — total labelled as covering the priced subset, unpriced count
+# in the SAME section (within a few lines of the heading, not a footnote).
+mix_heading_line="$(printf '%s\n' "$MIX_OUT" | grep -n 'priced subset only' | head -1 | cut -d: -f1)"
+mix_unpriced_line="$(printf '%s\n' "$MIX_OUT" | grep -n 'unpriced, not counted' | tail -1 | cut -d: -f1)"
+expect "(c) mixed fixture: priced-subset label and unpriced count share the Tokens section (CV3, CV5)" "yes" \
+  "$( [ -n "$mix_heading_line" ] && [ -n "$mix_unpriced_line" ] && [ "$mix_unpriced_line" -ge "$mix_heading_line" ] && [ $((mix_unpriced_line - mix_heading_line)) -le 3 ] && echo yes || echo no )"
+expect "(c) mixed fixture: priced total is exactly the priced invocation's tokens, never diluted by unpriced-as-zero (CV5)" "60787" \
+  "$(printf '%s\n' "$MIX_OUT" | grep 'total priced tokens' | grep -oE '[0-9]+')"
+
+# (f) CO9 — slug:"unknown" is its own bucket: mixed-unit's total must not
+# absorb the unknown-slug invocation's 42 tokens, and unknown's own report
+# must show exactly that 42, isolated.
+UNKNOWN_OUT="$(report "$MIXDIR" unknown)"
+expect "(f) slug:unknown is its own bucket, not merged into mixed-unit (CO9)" "42" \
+  "$(printf '%s\n' "$UNKNOWN_OUT" | grep 'total priced tokens' | grep -oE '[0-9]+')"
+
+# (g) CO10 — verified directly against the lib's own counters, the most
+# precise place to prove cap_trip/line_too_long/in-flight are each handled
+# as spec.md requires rather than inferring it from prose.
+co10_check() {
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$MIXLEDGER" "mixed-unit"
+  # 4 invocations: a1 (priced), a2 (unpriced), a3 (in-flight), a4 (unpriced,
+  # line_too_long) -- cap_trip contributes to neither COST_N_INVOCATIONS nor
+  # COST_N_UNPRICED.
+  [ "$COST_N_INVOCATIONS" = "4" ] || { echo "bad invocations $COST_N_INVOCATIONS"; return 1; }
+  [ "$COST_N_PRICED" = "1" ] || { echo "bad priced $COST_N_PRICED"; return 1; }
+  [ "$COST_N_UNPRICED" = "2" ] || { echo "bad unpriced $COST_N_UNPRICED"; return 1; }
+  [ "$COST_N_INFLIGHT" = "1" ] || { echo "bad inflight $COST_N_INFLIGHT"; return 1; }
+  [ "$COST_N_CAPTRIP" = "1" ] || { echo "bad captrip $COST_N_CAPTRIP"; return 1; }
+  echo ok
+}
+expect "(g) cap_trip excluded, line_too_long unpriced, in-flight its own bucket (CO10)" "ok" "$(co10_check)"
+
+# (e) CO8 — the one malformed line above is skipped and counted, never
+# silently dropped from the total without saying so.
+expect "(e) one malformed line: skipped-count reported, never silent (CO8)" "yes" \
+  "$(printf '%s\n' "$MIX_OUT" | grep -q '1 ledger line(s) skipped' && echo yes || echo no)"
+
+THREEBAD_DIR="$(mktemp -d)"
+mkdir -p "$THREEBAD_DIR/.claude"
+THREEBAD_LEDGER="$THREEBAD_DIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' 'not json 1'
+  printf '%s\n' 'not json 2 {{{'
+  printf '%s\n' '{"broken truncated line with no closing'
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"z1","slug":"three-bad","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"z1","slug":"three-bad","phase":"build","agent":"loop-build","status":"completed","total_tokens":10}'
+} > "$THREEBAD_LEDGER"
+THREEBAD_OUT="$(report "$THREEBAD_DIR" three-bad)"
+expect "(e) three malformed/truncated lines: skipped count is 3, exit 0 (CO8)" "yes" \
+  "$(printf '%s\n' "$THREEBAD_OUT" | grep -q '3 ledger line(s) skipped' && echo yes || echo no)"
+expect "(e) three malformed lines: report still exits 0" "0" "$(report_exit "$THREEBAD_DIR" three-bad)"
+rm -rf "$THREEBAD_DIR"
+
+# (b) CV6/CV2 — every invocation unpriced: no Tokens table, no token figure
+# of 0, and the reason is stated in its own plain sentence.
+COLDDIR="$(mktemp -d)"
+mkdir -p "$COLDDIR/.claude"
+COLDLEDGER="$COLDDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"b1","slug":"cold-unit","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"b1","slug":"cold-unit","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"b2","slug":"cold-unit","phase":"verify","agent":"loop-verify"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"b2","slug":"cold-unit","phase":"verify","agent":"loop-verify","status":"async_launched"}'
+} > "$COLDLEDGER"
+COLD_OUT="$(report "$COLDDIR" cold-unit)"
+expect "(b) all-unpriced fixture: no Tokens (priced subset) heading is printed (CV6)" "no" \
+  "$(printf '%s\n' "$COLD_OUT" | grep -q 'priced subset only' && echo yes || echo no)"
+expect "(b) all-unpriced fixture: the reason is stated plainly (CV6)" "yes" \
+  "$(printf '%s\n' "$COLD_OUT" | grep -qi "nothing about this unit's token cost is observable" && echo yes || echo no)"
+expect "(b) all-unpriced fixture: no line reads a token figure of 0 (CV2)" "0" \
+  "$(printf '%s\n' "$COLD_OUT" | grep -icE 'tokens?:[[:space:]]*0\b')"
+
+# (d) CO3 — three distinguishable, non-crashing, non-tabular empty states.
+ABSENTDIR="$(mktemp -d)"
+ABSENT_OUT="$(report "$ABSENTDIR")"
+expect "(d) absent ledger: names hooks-not-wired (CO3)" "yes" \
+  "$(printf '%s\n' "$ABSENT_OUT" | grep -qi 'hooks are not wired' && echo yes || echo no)"
+expect "(d) absent ledger: names LARAVEL_LOOP_COST_LEDGER=0 (CO3)" "yes" \
+  "$(printf '%s\n' "$ABSENT_OUT" | grep -q 'LARAVEL_LOOP_COST_LEDGER=0' && echo yes || echo no)"
+expect "(d) absent ledger: exits 0" "0" "$(report_exit "$ABSENTDIR")"
+expect "(d) absent ledger: prints no table" "no" \
+  "$(printf '%s\n' "$ABSENT_OUT" | grep -q 'Coverage:' && echo yes || echo no)"
+rm -rf "$ABSENTDIR"
+
+EMPTYDIR="$(mktemp -d)"
+mkdir -p "$EMPTYDIR/.claude"
+: > "$EMPTYDIR/.claude/loop-cost.jsonl"
+EMPTY_OUT="$(report "$EMPTYDIR")"
+expect "(d) empty ledger: distinct message from the absent case (CO3)" "yes" \
+  "$(printf '%s\n' "$EMPTY_OUT" | grep -qi 'holds no records yet' && echo yes || echo no)"
+expect "(d) empty ledger: exits 0" "0" "$(report_exit "$EMPTYDIR")"
+expect "(d) empty ledger: prints no table" "no" \
+  "$(printf '%s\n' "$EMPTY_OUT" | grep -q 'Coverage:' && echo yes || echo no)"
+rm -rf "$EMPTYDIR"
+
+NOSLUG_OUT="$(report "$MIXDIR" totally-unrequested-slug)"
+expect "(d) unknown slug: distinct message listing the slugs present (CO3)" "yes" \
+  "$(printf '%s\n' "$NOSLUG_OUT" | grep -qi 'No records for unit' && echo yes || echo no)"
+expect "(d) unknown slug: lists mixed-unit as a present slug" "yes" \
+  "$(printf '%s\n' "$NOSLUG_OUT" | grep -q 'mixed-unit' && echo yes || echo no)"
+expect "(d) unknown slug: exits 0" "0" "$(report_exit "$MIXDIR" totally-unrequested-slug)"
+expect "(d) unknown slug: prints no table" "no" \
+  "$(printf '%s\n' "$NOSLUG_OUT" | grep -q 'Coverage:' && echo yes || echo no)"
+
+# (h) CO1 — no slug: one line per unit, most recent first, each with its
+# coverage.
+LIST_OUT="$(report "$MIXDIR")"
+expect "(h) no-slug listing: mentions every unit present" "yes" \
+  "$(printf '%s\n' "$LIST_OUT" | grep -q 'mixed-unit' && printf '%s\n' "$LIST_OUT" | grep -q 'unknown' && echo yes || echo no)"
+UNK_LN="$(printf '%s\n' "$LIST_OUT" | grep -n '  unknown ' | head -1 | cut -d: -f1)"
+MIX_LN="$(printf '%s\n' "$LIST_OUT" | grep -n '  mixed-unit ' | head -1 | cut -d: -f1)"
+expect "(h) no-slug listing: most recent unit first (unknown's last ts is 10, mixed-unit's is 8)" "yes" \
+  "$( [ -n "$UNK_LN" ] && [ -n "$MIX_LN" ] && [ "$UNK_LN" -lt "$MIX_LN" ] && echo yes || echo no )"
+expect "(h) no-slug listing: each unit line carries its own coverage sentence (2 units)" "2" \
+  "$(printf '%s\n' "$LIST_OUT" | grep -c 'invocations that carry a token figure')"
+
+# (i) CV7 — the identical ledger produces byte-identical stdout on a repeat run.
+MIX_OUT_2="$(report "$MIXDIR" mixed-unit)"
+expect "(i) same fixture run twice: byte-identical stdout (CV7)" "" \
+  "$(diff <(printf '%s' "$MIX_OUT") <(printf '%s' "$MIX_OUT_2"))"
+
+# (j) CO13 — PATH stripped of jq and python3: says so, exits 0, no partial report.
+COST_NOPARSER_BIN="$(mktemp -d)"
+for b in cat mkdir date sed bash grep; do
+  p="$(command -v "$b" 2>/dev/null)"
+  [ -n "$p" ] && ln -s "$p" "$COST_NOPARSER_BIN/$b"
+done
+COST_NOPARSER_OUT="$(PATH="$COST_NOPARSER_BIN" report "$MIXDIR" mixed-unit)"
+COST_NOPARSER_EXIT="$(PATH="$COST_NOPARSER_BIN" report_exit "$MIXDIR" mixed-unit)"
+expect "(j) PATH stripped of jq+python3: exits 0 (CO13)" "0" "$COST_NOPARSER_EXIT"
+expect "(j) PATH stripped of jq+python3: says it cannot read the ledger (CO13)" "yes" \
+  "$(printf '%s\n' "$COST_NOPARSER_OUT" | grep -qi 'neither jq nor python3' && echo yes || echo no)"
+expect "(j) PATH stripped of jq+python3: prints no partial report" "no" \
+  "$(printf '%s\n' "$COST_NOPARSER_OUT" | grep -q 'Coverage:' && echo yes || echo no)"
+rm -rf "$COST_NOPARSER_BIN"
+
+# (k) CO2 — no network tooling and no reading of another plugin's feed.
+expect "(k) no curl/wget/nc/agents-board reference in the cost scripts (CO2)" "1" \
+  "$(grep -E 'curl|wget|nc |agents-board' "$SCRIPTS/cost-report.sh" "$SCRIPTS/cost-ledger-lib.sh" >/dev/null 2>&1; echo $?)"
+
+# (l) BG6 — no reassurance token anywhere in any fixture's output above.
+ALL_COST_OUTPUT="$MIX_OUT
+$UNKNOWN_OUT
+$COLD_OUT
+$ABSENT_OUT
+$EMPTY_OUT
+$NOSLUG_OUT
+$LIST_OUT"
+expect "(l) no reassurance token in any fixture's output (BG6)" "1" \
+  "$(printf '%s\n' "$ALL_COST_OUTPUT" | grep -iE 'within budget|under budget|✓' >/dev/null 2>&1; echo $?)"
+
+# (m) commands/cost.md declares no write-capable tool -- the ship.md pattern.
+COSTMD="$ROOT/commands/cost.md"
+expect "(m) commands/cost.md declares no write-capable tool" "0" \
+  "$( grep '^allowed-tools:' "$COSTMD" | grep -qE '\b(Write|Edit|MultiEdit|NotebookEdit|Agent)\b' && echo 1 || echo 0 )"
+expect "(m) commands/cost.md relays the report script's output verbatim" "0" \
+  "$( grep -q 'scripts/cost-report.sh' "$COSTMD" && grep -qi 'relay' "$COSTMD" && echo 0 || echo 1 )"
+
+# (n) the pre-existing "every commands/*.md has a row in README's Commands
+# table" case (line ~1174 below) now exercises commands/cost.md too -- no
+# separate case needed here; confirmed still green in the docs section below.
+
+rm -rf "$MIXDIR"
+
+# ---------------------------------------------------------------------------
 echo "block-untested-commit.sh (test-with-the-code guard)"
 REPO="$(mktemp -d)"
 git -C "$REPO" init --quiet

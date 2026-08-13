@@ -47,6 +47,7 @@ Four agents is also small enough to hold in your head. You always know which one
 | `/verify [slug\|base]` | G2 alone, before opening or merging a PR — including when the claim of "done" is your own. |
 | `/ship` | G3 alone — runs `scripts/ship-check.sh`'s three release-readiness gates and relays the go/hold verdict verbatim. Checks **laravel-loop's own** release readiness only, never a downstream Laravel app's gates, and does not overlap `laravel-team:ship-checklist`. |
 | `/observe [fault]` | The `↺` — captures a fault or observation as a new `docs/loop/<slug>/intent.md` (what, where, when, tried, suspected unit), then hands off to `/loop` at G0. Never diagnoses, never builds. |
+| `/cost [slug]` | Reports what `.claude/loop-cost.jsonl` can see for one unit of work — coverage stated before any total, always — or lists every unit the ledger holds with no argument. Reads only that file; no network call, no account, no dollar figure. |
 
 ## Skills
 
