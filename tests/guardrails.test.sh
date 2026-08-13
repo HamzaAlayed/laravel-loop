@@ -638,6 +638,57 @@ PY
 expect "agent, command, and skill frontmatter present" "0" "$(frontmatter_check)"
 
 echo
+echo "prompt ordering (cache-friendly ordering, R4.1)"
+
+# "Top half" of a file = its first 50% of lines, rounded down. Stated here
+# because C3 requires the definition to live in the test, not be assumed.
+top_half() {
+  local file="$1" total half
+  total=$(wc -l < "$file")
+  half=$((total / 2))
+  head -n "$half" "$file"
+}
+
+# The violation set is the literal one from the spec: timestamp, run id,
+# counter. {{args}} is explicitly NOT a violation (D5) — asserted below by a
+# dedicated case rather than left to chance.
+has_ordering_violation() {
+  top_half "$1" | grep -Eiq '\{\{[[:space:]]*(timestamp|run[_-]?id|counter)[[:space:]]*\}\}'
+}
+
+ordering_check() {
+  local dir="$1" bad=0 f
+  for f in "$dir"/*.md; do
+    [ -f "$f" ] || continue
+    if has_ordering_violation "$f"; then bad=1; fi
+  done
+  echo "$bad"
+}
+
+expect "no volatile interpolation in top half of agents/*.md" "0" "$(ordering_check "$ROOT/agents")"
+expect "no volatile interpolation in top half of commands/*.md" "0" "$(ordering_check "$ROOT/commands")"
+
+ARGSDIR="$(mktemp -d)"
+printf -- '---\ndesc\n---\n\n# Title -- `{{args}}`\n\nbody\n' > "$ARGSDIR/cmd.md"
+expect "{{args}} in a command title does not trip the check (D5)" "0" "$(ordering_check "$ARGSDIR")"
+rm -rf "$ARGSDIR"
+
+VIOLDIR="$(mktemp -d)"
+cp "$ROOT"/agents/*.md "$VIOLDIR/"
+TARGET="$(ls "$VIOLDIR"/*.md | head -n1)"
+awk 'NR==2{print "Seeded violation: {{timestamp}}"} {print}' "$TARGET" > "$TARGET.tmp" && mv "$TARGET.tmp" "$TARGET"
+expect "seeded {{timestamp}} in the top half is caught (proves the case can fail)" "1" "$(ordering_check "$VIOLDIR")"
+rm -rf "$VIOLDIR"
+
+skill_check() {
+  local f="$ROOT/skills/loop-protocol/SKILL.md" bad=0
+  grep -q 'never interpolate a timestamp, run id, or counter above the task envelope' "$f" || bad=1
+  grep -q 'invalidates the whole cached prefix behind it' "$f" || bad=1
+  echo "$bad"
+}
+expect "SKILL.md states the ordering rule and its rationale (C1)" "0" "$(skill_check)"
+
+echo
 echo "----------------------------------------"
 printf 'total: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && echo "ALL GREEN" || echo "FAILURES PRESENT"

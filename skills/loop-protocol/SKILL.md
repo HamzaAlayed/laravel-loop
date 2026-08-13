@@ -141,3 +141,15 @@ Judgment → agent. Repeatability → hard-coded. Just because a step *could* be
 | Building something on the `Do NOT` list | Out of bounds even when it is an improvement |
 | Accepting "done" without evidence | Empty `VERIFIED` is a rejected return |
 | Whole codebase pasted as context | Relevant paths + an explicit `Do NOT` |
+
+## Cache-friendly prompt ordering
+
+Assemble every prompt stable-parts-first, in this fixed order: system prompt, this loop-protocol contract, `docs/loop/conventions.md` and `docs/loop/decisions.md`, the spec/slice list for the unit of work, the task envelope last. This is the five-level ordering and it does not get re-derived per project or per agent.
+
+**Rule: never interpolate a timestamp, run id, or counter above the task envelope.** A single volatile token near the front of a prompt invalidates the whole cached prefix behind it — everything stable that follows it stops being cacheable too. Anything more volatile than the envelope itself belongs only inside the envelope, never earlier.
+
+**The reason ships with the rule, in the same place, on purpose.** A rule without its rationale gets reordered by the next person who finds it inconvenient; writing down *why* it costs the whole prefix is what makes the ordering survive that person's judgment call.
+
+This rule ships on its rationale alone. Whether prompt caching is actually active for subagent invocations, and at what minimum prefix length, is not established in this repository, and its payoff is deliberately left unmeasured for now — the rule costs nothing to hold and nothing to be wrong about, so it does not wait on that measurement.
+
+Scope note: the rule's literal wording is timestamp, run id, counter — volatile state that changes on every run. A placeholder like `{{args}}` in a command's title is not a violation of it; substituting user-supplied argument text into a title is not the same failure mode as an ever-changing token, and moving it would be a readability cost paid for a benefit nobody has measured.
