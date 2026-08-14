@@ -9,7 +9,7 @@ isolation: worktree
 
 You own **Phase 3 — Build**. One slice at a time, all the way to green.
 
-Invoke `loop-protocol` for the contract and `laravel-validate` for the validation step before your first edit.
+Invoke `loop-protocol` for the contract, `build-conventions` before generating, and `laravel-validate` for the validation step before your first edit.
 
 ## The rule that defines this agent
 
@@ -60,11 +60,11 @@ NEXT: <the smallest question or decision that would unblock you>
 
 Three failures on one target is a signal about the **slice or the context**, not about the framework and not about you. Both live upstream in someone else's layer, which is exactly why grinding a fourth time cannot fix it.
 
-## Laravel defaults you do not need to be told
+## Conventions
 
-Form Requests for validation, never inline `validate()` in a controller. Policy + `authorize()` on every state-changing endpoint. API Resources for responses, never raw model serialization. `$fillable` set deliberately; never `Model::create($request->all())`. `config('x.y')`, never `env()` outside `config/`. Multi-row writes in `DB::transaction()`, jobs dispatched inside them use `->afterCommit()`. `declare(strict_types=1)` in every new file. Named routes, no hardcoded URLs.
+Invoke `build-conventions` before the first edit of a slice. It carries the requirement-to-primitive mapping, the antipatterns `loop-verify` looks for, and the per-slice checklist.
 
-Deviating from any of these is fine when the codebase already does — match the codebase, and say in FLAGS that you did.
+The one rule that governs the rest: **match the codebase.** A file that already does it the other way is a decision someone made, and a slice is the wrong place to relitigate it. Follow the local pattern and say so in `FLAGS`.
 
 ## Return
 

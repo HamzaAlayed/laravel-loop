@@ -2,7 +2,7 @@
 
 **A 4-agent Laravel team organized by delivery phase instead of job title.**
 
-Most agent packs give you a org chart — a backend developer, a QA engineer, a tech lead. Laravel Loop gives you a **loop**. Four agents, one per phase, each owning its stage end to end, with human gates between them, six on-demand cookbooks carrying each phase's method, and five hooks that make the rules real instead of aspirational.
+Most agent packs give you a org chart — a backend developer, a QA engineer, a tech lead. Laravel Loop gives you a **loop**. Four agents, one per phase, each owning its stage end to end, with human gates between them, seven on-demand cookbooks carrying each phase's method, and five hooks that make the rules real instead of aspirational.
 
 ```
 OUTER — per unit of work
@@ -56,6 +56,7 @@ Loaded on demand via the `Skill` tool, so the detail costs nothing until a task 
 | Skill | Cookbook |
 |---|---|
 | `loop-protocol` | The contract — gates, phase placement, slice-quality test, task envelope, return shape, refine cap, determinism boundary |
+| `build-conventions` | The Generate step — requirement-to-primitive mapping, the antipatterns `loop-verify` looks for, the three reasons people get wrong under pressure, and why matching the codebase outranks the cookbook |
 | `laravel-validate` | The Validate step — toolchain detection (Sail/Pest/Larastan/Pint), command order, reading a failure into a next action, the pre-return self-check |
 | `test-design` | Which tests a slice needs (G1) — red-before-green, pairwise selection when the cross-product is unaffordable, the minimum set, which level to test at, and when a test set means the slice should have been two |
 | `loop-debug` | The Refine step as an experiment — classifying a failure as a code, test, or slice defect, one falsifiable hypothesis per pass, the isolation ladder, and what a useful `blocked` escalation carries |

@@ -2253,6 +2253,8 @@ for d, ext in (("agents", ".md"), ("commands", ".md")):
     files = [f for f in os.listdir(os.path.join(root, d)) if f.endswith(ext)]
     assert files, d + " empty"
 for s in os.listdir(os.path.join(root, "skills")):
+    if s.startswith(".") or not os.path.isdir(os.path.join(root, "skills", s)):
+        continue
     assert os.path.isfile(os.path.join(root, "skills", s, "SKILL.md")), s + " missing SKILL.md"
 # every script named in hooks.json exists and is executable
 named = set()
@@ -2284,6 +2286,8 @@ for d in ("agents", "commands"):
         key = "name:" if d == "agents" else "description:"
         assert key in fm, d + "/" + f + ": missing " + key
 for s in sorted(os.listdir(os.path.join(root, "skills"))):
+    if s.startswith(".") or not os.path.isdir(os.path.join(root, "skills", s)):
+        continue
     text = open(os.path.join(root, "skills", s, "SKILL.md")).read()
     assert text.startswith("---\n"), s + ": no frontmatter"
     fm = text.split("---\n", 2)[1]

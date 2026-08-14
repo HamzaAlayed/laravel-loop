@@ -5,6 +5,39 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-14
+
+### Added
+
+- **`build-conventions` skill** — the Generate step's cookbook, the last inner-loop step
+  without one. `loop-build` carried a single paragraph of Laravel defaults inline, in a prompt
+  loaded in full on every invocation, covering the step where the most tokens are spent and
+  the most code is produced. The skill carries the requirement-to-primitive mapping (Form
+  Request, Policy, API Resource, `$fillable`, `config()`, transactions, `afterCommit`, Action
+  classes, `make:*`), each paired with the antipattern `loop-verify` already looks for, a
+  four-question per-slice checklist, and the three reasons that actually change behaviour
+  under time pressure — `env()` after `config:cache`, mass assignment as an authorization
+  hole, and `afterCommit` race conditions.
+
+### Changed
+
+- **`agents/loop-build.md`** — the inline "Laravel defaults" paragraph is replaced by a skill
+  invocation plus the one rule that governs the rest (match the codebase, flag that you did).
+  The agent prompt is shorter than before; method moved rather than copied.
+- Skill count 6 → 7. Every inner-loop step now has cookbook coverage:
+  Parse/Plan (`loop-protocol`) → Generate (`build-conventions`) → Validate (`laravel-validate`)
+  → Refine (`loop-debug`) → Integrate (`worktree-merge`).
+
+### Fixed
+
+- **`tests/guardrails.test.sh` no longer fails on a stray dotfile in `skills/`.** Both the
+  structure and frontmatter checks iterated `skills/` assuming every entry was a skill
+  directory, so a `.DS_Store` left by Finder became `skills/.DS_Store/SKILL.md` and red-lined
+  two cases for every macOS contributor. Both loops now skip dotfiles and non-directories.
+  Adding `.DS_Store` to `.gitignore` stops git tracking it but does not stop the harness
+  reading it off disk — the check itself had to change. Verified still catching real defects:
+  a skill directory without `SKILL.md`, and a `SKILL.md` without frontmatter, both still fail.
+
 ## [0.4.0] - 2026-08-14
 
 Four cookbooks, taking the skills count from two to six. Each closes a specific gap

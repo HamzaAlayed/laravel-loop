@@ -8,3 +8,4 @@
 .claude/loop-budget-state/
 laravel-loop.plugin
 laravel-loop.plugin.zip
+.DS_Store
