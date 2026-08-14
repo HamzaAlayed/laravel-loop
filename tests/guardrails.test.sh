@@ -1659,6 +1659,24 @@ expect "observe: procedure refuses a slug collision" "0" \
 expect "observe: capture carries no acceptance criteria and hands off at G0" "0" \
   "$( grep -qi 'no acceptance criteria' "$OBSERVE" && grep -q 'G0' "$OBSERVE" && echo 0 || echo 1 )"
 
+expect "observe: O4 — attribution recorded as a followable reference, never a guess" "0" \
+  "$( grep -qi 'followable' "$OBSERVE" \
+      && grep -qi 'no guess' "$OBSERVE" \
+      && grep -qi 'commit SHA' "$OBSERVE" \
+      && echo 0 || echo 1 )"
+
+expect "observe: O5 — no credentials, no telemetry client, no network call" "0" \
+  "$( ! grep -qiE 'curl |wget |\btoken\b|api[._-]?key' "$OBSERVE" \
+      && grep -qi 'not telemetry' "$OBSERVE" \
+      && grep -qi 'no network call' "$OBSERVE" \
+      && grep -qi 'credential' "$OBSERVE" \
+      && echo 0 || echo 1 )"
+
+expect "observe: O6 — project-agnostic, assumes nothing about language or toolchain" "0" \
+  "$( grep -qi 'regardless of language or toolchain' "$OBSERVE" \
+      && grep -qi 'repository' "$OBSERVE" \
+      && echo 0 || echo 1 )"
+
 # ---------------------------------------------------------------------------
 echo "loop-protocol (outer loop's ↺ resolution — skills/loop-protocol/SKILL.md)"
 LOOP_PROTOCOL_SKILL="$ROOT/skills/loop-protocol/SKILL.md"
