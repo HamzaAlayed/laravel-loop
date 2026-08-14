@@ -2622,6 +2622,42 @@ expect "docs: ship-check.sh's version gate reads this repo's real VERSION/plugin
   "passed" \
   "$(bash -c 'source "'"$ROOT"'/scripts/ship-check.sh"; ROOT="'"$ROOT"'"; gate3_version; printf "%s" "$GATE3_STATE"')"
 
+# (f) -- S5 (spec.md X5, X6 -- cost-ledger-blind-to-background-agents):
+# README states what the ledger can and cannot see about background-launched
+# invocations, names the coverage-floor variable and its unset behaviour with
+# no number attached, and decisions.md's superseded bullet is corrected in
+# place while the 4%-coverage rejection stands untouched.
+readme_background_majority_check() {
+  local bad=0 readme="$README_MD"
+  grep -qi 'majority of a' "$readme" || bad=1
+  grep -q 'launched in background, outcome never observed' "$readme" || bad=1
+  echo $bad
+}
+expect "docs: README states background-launched invocations are the majority of a /loop run and how they are treated (X5)" \
+  "0" "$(readme_background_majority_check)"
+
+readme_min_coverage_named_check() {
+  local bad=0 readme="$README_MD"
+  grep -q 'LARAVEL_LOOP_COST_MIN_COVERAGE' "$readme" || bad=1
+  grep -qi "unset means today's behaviour" "$readme" || bad=1
+  echo $bad
+}
+expect "docs: README names LARAVEL_LOOP_COST_MIN_COVERAGE and states unset means today's behaviour (X5)" \
+  "0" "$(readme_min_coverage_named_check)"
+
+expect "docs: no digit shares a line with LARAVEL_LOOP_COST_MIN_COVERAGE in README (X5/CL5)" "0" \
+  "$(grep 'LARAVEL_LOOP_COST_MIN_COVERAGE' "$README_MD" | grep -cE '[0-9]')"
+
+decisions_superseded_check() {
+  local bad=0 dec="$ROOT/docs/loop/decisions.md"
+  grep -qi 'upstream of this plugin' "$dec" && bad=1
+  grep -qF '**4%**' "$dec" || bad=1
+  grep -qF 'Rejected as a **spend control**: only invocations run in the **foreground** return a payload' "$dec" || bad=1
+  echo $bad
+}
+expect "docs: decisions.md no longer claims the figure is upstream of this plugin, and the 4%-coverage rejection stands verbatim (X6)" \
+  "0" "$(decisions_superseded_check)"
+
 # ---------------------------------------------------------------------------
 echo "manifest + component structure"
 structure_check() {

@@ -39,9 +39,13 @@ Instead:
 - **Do not "fix" this by summing elapsed time as a proxy for cost.** v0.3.0's CO11 already
   refuses it: overlapping backgrounded invocations make an elapsed-time total meaningless,
   and a fabricated denominator is worse than a stated gap.
-- Closing the gap needs a **token figure for backgrounded invocations** from the harness
-  itself. That is upstream of this plugin, not a slice inside it — see
-  `docs/loop/cost-ledger-blind-to-background-agents/intent.md`.
+- **Corrected 2026-08-14 — superseded by E2:** closing the gap does *not* need a token figure
+  from the harness; the harness already produces one and already delivers it. A controlled probe
+  (`cost-ledger-blind-to-background-agents` spec.md **E2**) shows a backgrounded invocation's real
+  token total arrives, exact, in the agent's own completion notification the moment it finishes.
+  The gap is inside this plugin's own hook registration, not somewhere the harness has yet to
+  build: no registered hook subscribes to the channel that notification arrives on (see this
+  file's own OQ2 spike entry, below).
 
 ## Verifying the plugin's hooks by running the repository's test harness (2026-08-14)
 
