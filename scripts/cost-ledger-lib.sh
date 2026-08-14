@@ -95,6 +95,15 @@
 #   record's own `status` field, per invocation, and nothing else -- never inferred from
 #   phase, agent, or duration (CL1's own words).
 #
+# S2 addition (CL4, CL6): cost_coverage_sentence() now appends a coverage
+# SHARE (COST_N_PRICED / COST_N_INVOCATIONS, as a percentage) and names every
+# phase, of the five per-phase families above, that is *wholly* unobserved --
+# at least one invocation and zero priced. Both are derived entirely from the
+# COUNT variables already listed above; nothing new is added to cost_scan's
+# output for this. Same sentence, same call sites (the report and the budget
+# gate), so CL6 holds by construction rather than by two call sites agreeing
+# to format the same numbers twice.
+#
 # S3 additions to cost_scan (same rules: never a fabricated 0, never a re-parse elsewhere):
 #   COST_MODELS_SPEC / _SLICE / _BUILD / _VERIFY / _UNKNOWN
 #                             comma-separated "model::model_source" pairs, one per distinct
@@ -173,9 +182,43 @@ cost_coverage_sentence() {
   # budget gate that both just called cost_scan say the identical sentence
   # from the identical numbers -- never two call sites each formatting their
   # own copy of the same three figures (pinned shape, slices.md contract table).
+  #
+  # cost-ledger-blind-to-background-agents S2 (CL4, CL6): the sentence above
+  # is kept as a literal, unmodified prefix -- tests/guardrails.test.sh:1123's
+  # grep -qF for it verbatim (BG3's coverage-honesty case) is exactly what
+  # makes CL8 achievable, so nothing here reorders or rewords it. Everything
+  # below is APPENDED: a coverage share, and the phases (of the per-phase
+  # variables cost_scan already sets -- no second parse, CV7) that are
+  # *wholly* unobserved -- at least one invocation and zero priced. A phase
+  # with zero invocations at all is never named: absence is not a gap.
   local p="${COST_N_PRICED:-0}" n="${COST_N_INVOCATIONS:-0}" u="${COST_N_UNPRICED:-0}"
-  printf 'based on %s of %s invocations that carry a token figure (%s unpriced, not counted)' \
-    "$p" "$n" "$u"
+  local share=0
+  [ "$n" -gt 0 ] && share=$(( p * 100 / n ))
+  local ph inv_var pv_var inv pv label unobserved=""
+  for ph in SPEC SLICE BUILD VERIFY UNKNOWN; do
+    inv_var="COST_N_INVOCATIONS_$ph"
+    pv_var="COST_N_PRICED_$ph"
+    inv="${!inv_var}"
+    pv="${!pv_var}"
+    if [ "$inv" -gt 0 ] && [ "$pv" -eq 0 ]; then
+      label="$(printf '%s' "$ph" | tr '[:upper:]' '[:lower:]')"
+      if [ -z "$unobserved" ]; then
+        unobserved="$label"
+      else
+        unobserved="$unobserved, $label"
+      fi
+    fi
+  done
+  # The space between the number and "%" is deliberate, not a typo: CV4
+  # (tests/guardrails.test.sh's cache-read-share case) asserts the literal
+  # substring "0%" appears nowhere in a fully-priced fixture's output, and a
+  # tight "100%" contains that substring as its own last two characters. The
+  # space keeps every share -- including 0% and 100% -- out of that trap
+  # without touching CV4's own, unrelated formatting.
+  local suffix=" -- ${share} % coverage"
+  [ -n "$unobserved" ] && suffix="${suffix}; wholly unobserved: ${unobserved}"
+  printf 'based on %s of %s invocations that carry a token figure (%s unpriced, not counted)%s' \
+    "$p" "$n" "$u" "$suffix"
 }
 
 # --- internal: the scan programs, one per parser, identical in behaviour ---

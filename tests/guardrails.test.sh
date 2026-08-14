@@ -735,6 +735,38 @@ co10_check() {
 }
 expect "(g) cap_trip excluded, line_too_long unpriced, in-flight its own bucket (CO10)" "ok" "$(co10_check)"
 
+# --- cost-ledger-blind-to-background-agents S2 (CL4): coverage as a share,
+# and the phases that are wholly unobserved -- named alongside it. Computed
+# from the per-phase COST_N_* variables cost_scan already sets (CV7: no
+# second parse). mixed-unit is 1 of 4 invocations priced (build's a2/a3 and
+# verify's a4 are unpriced or in-flight; spec's a1 is priced) -> 25%, with
+# build and verify each wholly unobserved (>=1 invocation, 0 priced) and
+# slice named nowhere (0 invocations for this unit -- absence is not a gap).
+MIX_COVERAGE_LINE="$(printf '%s\n' "$MIX_OUT" | grep '^  based on' | head -1)"
+expect "(S2-1) CL4: coverage sentence carries the share as a percentage (25%)" "yes" \
+  "$(printf '%s\n' "$MIX_COVERAGE_LINE" | grep -qE '25 ?%' && echo yes || echo no)"
+expect "(S2-2) CL4: build has invocations and zero priced -> named wholly unobserved" "yes" \
+  "$(printf '%s\n' "$MIX_COVERAGE_LINE" | grep -qE 'wholly unobserved:.*\bbuild\b' && echo yes || echo no)"
+expect "(S2-3) CL4 bound: slice has zero invocations for this unit -> never named" "no" \
+  "$(printf '%s\n' "$MIX_COVERAGE_LINE" | grep -qE 'wholly unobserved:.*\bslice\b' && echo yes || echo no)"
+
+# (S2-5) CL8 bound: a unit present only via a cap_trip record has zero
+# invocations and zero priced (0/0) -- the share must render as a plain,
+# non-crashing figure rather than a division-by-zero error or empty string,
+# and with nothing observed for any phase, none is named wholly unobserved.
+ZEROINVDIR="$(mktemp -d)"
+mkdir -p "$ZEROINVDIR/.claude"
+printf '%s\n' '{"ts":1,"event":"cap_trip","slug":"zero-inv-unit","phase_detail":"rework","refine_passes":1}' \
+  > "$ZEROINVDIR/.claude/loop-cost.jsonl"
+ZEROINV_OUT="$(report "$ZEROINVDIR" zero-inv-unit)"
+ZEROINV_LINE="$(printf '%s\n' "$ZEROINV_OUT" | grep '^  based on' | head -1)"
+expect "(S2-5) CL8 bound: 0-of-0 fixture: report exits 0" "0" "$(report_exit "$ZEROINVDIR" zero-inv-unit)"
+expect "(S2-5) CL8 bound: 0-of-0 fixture: share renders as a plain 0%, no division-by-zero garbage" "yes" \
+  "$(printf '%s\n' "$ZEROINV_LINE" | grep -qE '0 ?% coverage' && echo yes || echo no)"
+expect "(S2-5) CL8 bound: 0-of-0 fixture: no phase is named wholly unobserved" "no" \
+  "$(printf '%s\n' "$ZEROINV_LINE" | grep -q 'wholly unobserved' && echo yes || echo no)"
+rm -rf "$ZEROINVDIR"
+
 # (e) CO8 — the one malformed line above is skipped and counted, never
 # silently dropped from the total without saying so.
 expect "(e) one malformed line: skipped-count reported, never silent (CO8)" "yes" \
@@ -1342,6 +1374,31 @@ expect "(g) partial coverage: first spawn names the unpriced count" "yes" \
   "$(printf '%s\n' "$BGPARTIAL_ERR1" | grep -q '1 unpriced, not counted' && echo yes || echo no)"
 expect "(g) partial coverage: not repeated on the next spawn (BG9)" "" "$BGPARTIAL_ERR2"
 rm -rf "$BGPARTIALDIR"
+
+# -- (S2-4) CL6: the gate's partial-coverage notice carries the identical
+# share and identical wholly-unobserved phase name as /cost's own coverage
+# sentence for the same ledger, because both call cost_coverage_sentence over
+# the one and only cost_scan (CV7/CV8) -- never two call sites each computing
+# their own copy. One priced spec invocation, one backgrounded build
+# invocation -> 50%, build wholly unobserved.
+GATESHAREDIR="$(mktemp -d)"
+mkdir -p "$GATESHAREDIR/.claude"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"gs1","slug":"gate-share-unit","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"gs1","slug":"gate-share-unit","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":100}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"gs2","slug":"gate-share-unit","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"gs2","slug":"gate-share-unit","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$GATESHAREDIR/.claude/loop-cost.jsonl"
+GATESHARE_REPORT_OUT="$(report "$GATESHAREDIR" gate-share-unit)"
+GATESHARE_SENTENCE="$(printf '%s\n' "$GATESHARE_REPORT_OUT" | grep '^  based on' | head -1 | sed 's/^  //')"
+GATESHARE_JSON="$(budget_payload gate-share-unit)"
+GATESHARE_GATE_ERR="$(CLAUDE_PROJECT_DIR="$GATESHAREDIR" LARAVEL_LOOP_BUDGET_HARD=999999 gate_stderr "$GATESHARE_JSON")"
+collect_bg "" "$GATESHARE_GATE_ERR"
+expect "(S2-4) CL6: report's coverage sentence carries the 50% share and names build" "yes" \
+  "$(printf '%s\n' "$GATESHARE_SENTENCE" | grep -qE '50 ?%' && printf '%s\n' "$GATESHARE_SENTENCE" | grep -qE 'wholly unobserved:.*\bbuild\b' && echo yes || echo no)"
+expect "(S2-4) CL6: gate's partial-coverage notice carries that exact sentence verbatim" "yes" \
+  "$(printf '%s\n' "$GATESHARE_GATE_ERR" | grep -qF "$GATESHARE_SENTENCE" && echo yes || echo no)"
+rm -rf "$GATESHAREDIR"
 
 # -- (h) unreadable ledger, PATH stripped of jq+python3, and an unwritable
 # state dir: each exits 0 and says it is proceeding as if no threshold were
