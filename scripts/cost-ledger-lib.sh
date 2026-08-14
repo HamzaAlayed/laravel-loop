@@ -75,6 +75,26 @@
 #   the ledger's own `phase` field (an invocation's phase is the one on its finish record,
 #   falling back to its start record's if it has no finish yet).
 #
+# cost-ledger-blind-to-background-agents S1 additions to cost_scan (CL1, CL2, CL9):
+#   COST_N_UNPRICED_BACKGROUNDED  of COST_N_UNPRICED, the ones whose finish record carries
+#                             status "async_launched" -- a launch, not an observed outcome
+#                             (CL2: never folded into COST_N_INFLIGHT, which means "started,
+#                             no finish record at all" -- an async_launched record DOES have
+#                             a finish record, it is just not a resolved one).
+#   COST_N_UNPRICED_NO_USAGE of COST_N_UNPRICED, the ones whose finish record's status is
+#                             anything else non-empty (typically "completed") but carried no
+#                             total_tokens -- the invocation was observed, just with no usage
+#                             figure attached.
+#   COST_N_UNPRICED_TRUNCATED of COST_N_UNPRICED, the ones whose finish record's status is
+#                             "line_too_long" -- record-cost-event.sh's own oversize fallback.
+#   COST_N_UNPRICED_UNSTATED of COST_N_UNPRICED, the ones whose finish record carries no
+#                             `status` field at all (missing key or JSON null) -- read
+#                             without error and reported as its own reason, never guessed
+#                             into any of the three above (CL9).
+#   The four sum to COST_N_UNPRICED exactly; the reason is read only from the finish
+#   record's own `status` field, per invocation, and nothing else -- never inferred from
+#   phase, agent, or duration (CL1's own words).
+#
 # S3 additions to cost_scan (same rules: never a fabricated 0, never a re-parse elsewhere):
 #   COST_MODELS_SPEC / _SLICE / _BUILD / _VERIFY / _UNKNOWN
 #                             comma-separated "model::model_source" pairs, one per distinct
@@ -193,7 +213,8 @@ def phase_key:
           | (.inv[$id] // {start:false, finish:false, priced:false, tokens:null, phase:"unknown",
                            model:null, model_source:null, ts_start:null, ts_finish:null,
                            cache_read:null, cache_read_present:false,
-                           phase_detail:null, refine_passes:null, rework_attribution:null}) as $e
+                           phase_detail:null, refine_passes:null, rework_attribution:null,
+                           status:null}) as $e
           | ( $e
               | if $r.event == "start" then
                   (.start = true)
@@ -211,6 +232,7 @@ def phase_key:
                   | (.phase_detail = ($r.phase_detail // .phase_detail))
                   | (.refine_passes = ($r.refine_passes // .refine_passes))
                   | (.rework_attribution = ($r.rework_attribution // .rework_attribution))
+                  | (.status = ($r.status // .status))
                   | (if (($r|has("total_tokens")) and ($r.total_tokens != null)) then
                        (.priced = true) | (.tokens = $r.total_tokens)
                      else
@@ -231,6 +253,7 @@ def phase_key:
 | ($acc.inv | to_entries) as $entries
 | (reduce $entries[] as $e (
      { inv:0, priced:0, unpriced:0, inflight:0, tokens:0,
+       unpriced_backgrounded:0, unpriced_no_usage:0, unpriced_truncated:0, unpriced_unstated:0,
        ts_min:null, ts_max:null,
        rework_n:0, rework_priced_n:0, rework_tokens:0, rework_ambiguous:0, rework_list:[],
        cache_n:0, cache_sum:0, cache_denom:0,
@@ -266,6 +289,12 @@ def phase_key:
               else . end)
          else
            (.unpriced += 1) | (.byphase[$pk].unpriced += 1)
+           | (($e.value.status // "")) as $st
+           | (if $st == "async_launched" then (.unpriced_backgrounded += 1)
+              elif $st == "line_too_long" then (.unpriced_truncated += 1)
+              elif $st == "" then (.unpriced_unstated += 1)
+              else (.unpriced_no_usage += 1)
+              end)
          end
      elif $e.value.start then
        (.inflight += 1) | (.byphase[$pk].inflight += 1)
@@ -278,6 +307,10 @@ def phase_key:
     "COUNT\tCOST_N_INVOCATIONS\t\($agg.inv)",
     "COUNT\tCOST_N_PRICED\t\($agg.priced)",
     "COUNT\tCOST_N_UNPRICED\t\($agg.unpriced)",
+    "COUNT\tCOST_N_UNPRICED_BACKGROUNDED\t\($agg.unpriced_backgrounded)",
+    "COUNT\tCOST_N_UNPRICED_NO_USAGE\t\($agg.unpriced_no_usage)",
+    "COUNT\tCOST_N_UNPRICED_TRUNCATED\t\($agg.unpriced_truncated)",
+    "COUNT\tCOST_N_UNPRICED_UNSTATED\t\($agg.unpriced_unstated)",
     "COUNT\tCOST_N_INFLIGHT\t\($agg.inflight)",
     "COUNT\tCOST_TOKENS_PRICED\t\($agg.tokens)",
     "COUNT\tCOST_N_REWORK\t\($agg.rework_n)",
@@ -352,7 +385,7 @@ for raw in sys.stdin:
                                 "ts_start": None, "ts_finish": None,
                                 "cache_read": None, "cache_read_present": False,
                                 "phase_detail": None, "refine_passes": None,
-                                "rework_attribution": None}
+                                "rework_attribution": None, "status": None}
         if event == "start":
             e["start"] = True
             e["phase"] = r.get("phase") or e["phase"]
@@ -368,6 +401,7 @@ for raw in sys.stdin:
             e["phase_detail"] = r.get("phase_detail") or e["phase_detail"]
             e["refine_passes"] = r.get("refine_passes") if r.get("refine_passes") is not None else e["refine_passes"]
             e["rework_attribution"] = r.get("rework_attribution") or e["rework_attribution"]
+            e["status"] = r.get("status") or e["status"]
             if "total_tokens" in r and r.get("total_tokens") is not None:
                 e["priced"] = True
                 e["tokens"] = r.get("total_tokens")
@@ -381,6 +415,8 @@ for raw in sys.stdin:
     skipped += 1
 
 agg = {"inv": 0, "priced": 0, "unpriced": 0, "inflight": 0, "tokens": 0,
+       "unpriced_backgrounded": 0, "unpriced_no_usage": 0,
+       "unpriced_truncated": 0, "unpriced_unstated": 0,
        "ts_min": None, "ts_max": None,
        "rework_n": 0, "rework_priced_n": 0, "rework_tokens": 0, "rework_ambiguous": 0}
 rework_list = []
@@ -418,6 +454,15 @@ for invid, e in inv.items():
         else:
             agg["unpriced"] += 1
             byphase[pk]["unpriced"] += 1
+            st = e["status"] or ""
+            if st == "async_launched":
+                agg["unpriced_backgrounded"] += 1
+            elif st == "line_too_long":
+                agg["unpriced_truncated"] += 1
+            elif st == "":
+                agg["unpriced_unstated"] += 1
+            else:
+                agg["unpriced_no_usage"] += 1
     elif e["start"]:
         agg["inflight"] += 1
         byphase[pk]["inflight"] += 1
@@ -432,6 +477,10 @@ out = [
     f"COUNT\tCOST_N_INVOCATIONS\t{agg['inv']}",
     f"COUNT\tCOST_N_PRICED\t{agg['priced']}",
     f"COUNT\tCOST_N_UNPRICED\t{agg['unpriced']}",
+    f"COUNT\tCOST_N_UNPRICED_BACKGROUNDED\t{agg['unpriced_backgrounded']}",
+    f"COUNT\tCOST_N_UNPRICED_NO_USAGE\t{agg['unpriced_no_usage']}",
+    f"COUNT\tCOST_N_UNPRICED_TRUNCATED\t{agg['unpriced_truncated']}",
+    f"COUNT\tCOST_N_UNPRICED_UNSTATED\t{agg['unpriced_unstated']}",
     f"COUNT\tCOST_N_INFLIGHT\t{agg['inflight']}",
     f"COUNT\tCOST_TOKENS_PRICED\t{agg['tokens']}",
     f"COUNT\tCOST_N_REWORK\t{agg['rework_n']}",
@@ -513,6 +562,10 @@ _cost_reset_scan_vars() {
   COST_N_INVOCATIONS=0
   COST_N_PRICED=0
   COST_N_UNPRICED=0
+  COST_N_UNPRICED_BACKGROUNDED=0
+  COST_N_UNPRICED_NO_USAGE=0
+  COST_N_UNPRICED_TRUNCATED=0
+  COST_N_UNPRICED_UNSTATED=0
   COST_N_INFLIGHT=0
   COST_TOKENS_PRICED=0
   COST_N_INVOCATIONS_SPEC=0; COST_N_PRICED_SPEC=0; COST_N_UNPRICED_SPEC=0
@@ -586,6 +639,10 @@ $k"
     COST_N_INVOCATIONS) COST_N_INVOCATIONS="$v" ;;
     COST_N_PRICED) COST_N_PRICED="$v" ;;
     COST_N_UNPRICED) COST_N_UNPRICED="$v" ;;
+    COST_N_UNPRICED_BACKGROUNDED) COST_N_UNPRICED_BACKGROUNDED="$v" ;;
+    COST_N_UNPRICED_NO_USAGE) COST_N_UNPRICED_NO_USAGE="$v" ;;
+    COST_N_UNPRICED_TRUNCATED) COST_N_UNPRICED_TRUNCATED="$v" ;;
+    COST_N_UNPRICED_UNSTATED) COST_N_UNPRICED_UNSTATED="$v" ;;
     COST_N_INFLIGHT) COST_N_INFLIGHT="$v" ;;
     COST_TOKENS_PRICED) COST_TOKENS_PRICED="$v" ;;
     COST_N_INVOCATIONS_SPEC) COST_N_INVOCATIONS_SPEC="$v" ;;
