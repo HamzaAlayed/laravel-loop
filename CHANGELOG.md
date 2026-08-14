@@ -5,6 +5,77 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-14
+
+Four cookbooks, taking the skills count from two to six. Each closes a specific gap
+where an agent had a *destination* but no *procedure* — the phases that were carried
+entirely by prompt text, or not carried at all.
+
+### Added
+
+- **`test-design`** — closes the gap between G1's sliceability bar and actual coverage.
+  G1 required naming "the test that fails now and passes after", singular: the right bar
+  for deciding a slice is testable, the wrong one for deciding it is tested. A slice
+  could name one valid test, ship three untested branches, and pass the commit guard,
+  which only ever proved a test *exists*. The skill covers red-before-green inside a
+  slice, pairwise case selection when the input cross-product is unaffordable (with an
+  honest account of the three-way interactions pairwise misses), the minimum set a slice
+  owes, which level to test at, overlap between sibling slices, and the case-count dial
+  that says a slice should have been two.
+- **`loop-debug`** — closes the gap in the Refine step. `loop-build` said "red → back to
+  step 3 with the actual failure output", which is *where to go*, not *what to do on
+  arrival*; passes 2 and 3 were procedurally "try again harder". The skill requires one
+  falsifiable hypothesis per pass, and puts failure classification *before* pass 1 —
+  code defect, test defect, or slice defect, three different owners, with `blocked`
+  returned immediately for the third rather than spending a pass on it. Plus the
+  isolation ladder, root-cause tracing, the suite-only leak table, and what a `blocked`
+  return has to carry so the next agent does not repeat the passes already spent.
+- **`verify-playbook`** — closes the gap of `loop-verify` being the only agent with no
+  cookbook at all. Its whole method lived in its prompt, loaded in full on every
+  invocation regardless of what was being verified, and Verify is the phase most likely
+  to drift silently: a verifier that gets gradually laxer emits no signal until defects
+  ship. The method now versions independently of the prompt, and adds two things the
+  prompt never had — tracing a failure the diff cannot explain *before* writing the
+  verdict (previously an undifferentiated FAIL that bounced slices back to builders who
+  had not caused the problem), and a scope declaration so a scoped PASS can never read
+  like a full one.
+- **`worktree-merge`** — closes the gap at integration. `loop-build` runs
+  worktree-isolated and `/loop` caps lanes at 2–3, but nothing documented what happens
+  when the lanes come back; the only guidance was "merge along the dependency chain", a
+  correct principle and not a procedure. Integration is where parallelism fails, and it
+  fails at the end, when every lane's budget is already spent. Covers checking the base
+  on entry rather than at merge time, the full suite after **each** merge, conflict
+  ownership (app code routes back to the owning builder; only mechanically-correct
+  resolutions stay with the orchestrator), migration timestamp collisions across
+  branches, and what to preserve from an abandoned lane.
+
+### Changed
+
+- **`loop-verify`'s prompt is shorter than before**, not longer: the test-quality
+  heuristics and Laravel checks moved into `verify-playbook` rather than being
+  duplicated across both. Moving method out of an always-loaded prompt is the point.
+- `loop-protocol` gains a **Cookbooks** table mapping each phase and moment to the skill
+  it should invoke, placed deliberately last in the file so nothing above it shifts in
+  the cached prefix every agent loads.
+- `loop-build` invokes `loop-debug` on the first red and `test-design` when a slice names
+  a set; `loop-slice` invokes `test-design` at the five-test check; `/loop` invokes
+  `worktree-merge` where parallel lanes are merged.
+
+### Fixed
+
+- README's intro claimed "two hooks" while its own Guardrails section said three — stale
+  since v0.3.0. Five hook scripts are actually registered; the intro now says five, and
+  names the six cookbooks.
+
+### Notes
+
+- No new agent, command, or hook. No change to the 2–3 lane cap, worktree isolation, the
+  refine cap, `loop-verify`'s read-only constraint, or the PASS / CONCERNS / FAIL
+  vocabulary.
+- The harness validates every `skills/*/SKILL.md` for `name` and `description`
+  frontmatter by globbing the directory, so the four new skills are covered without new
+  cases — verified by breaking one deliberately and confirming the suite named it.
+
 ## [0.3.1] - 2026-08-14
 
 Test and documentation hardening only — no behavior change, no new command, no new

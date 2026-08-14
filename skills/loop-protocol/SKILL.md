@@ -169,3 +169,18 @@ Assemble every prompt stable-parts-first, in this fixed order: system prompt, th
 This rule ships on its rationale alone. Whether prompt caching is actually active for subagent invocations, and at what minimum prefix length, is not established in this repository, and its payoff is deliberately left unmeasured for now — the rule costs nothing to hold and nothing to be wrong about, so it does not wait on that measurement.
 
 Scope note: the rule's literal wording is timestamp, run id, counter — volatile state that changes on every run. A placeholder like `{{args}}` in a command's title is not a violation of it; substituting user-supplied argument text into a title is not the same failure mode as an ever-changing token, and moving it would be a readability cost paid for a benefit nobody has measured.
+
+## Cookbooks
+
+Each phase has a cookbook carrying its method. They load on demand, so the detail costs nothing until a task needs it — and invoking the right one is cheaper than re-deriving its content per invocation.
+
+| Phase / moment | Invoke | For |
+|---|---|---|
+| Slice (G1) | `test-design` | Which tests the slice needs, not just that it needs one |
+| Build — before writing the test | `test-design` | The case set, and whether the slice is too big |
+| Build — step 4, Validate | `laravel-validate` | Toolchain detection, command order, the pre-return self-check |
+| Build — step 5, first red | `loop-debug` | Classify the failure, one hypothesis per pass, the isolation ladder |
+| Verify (G2) | `verify-playbook` | The criteria walk, test-quality smells, scope declaration |
+| Integration — lanes coming back | `worktree-merge` | Merge order, conflict ownership, migration collisions |
+
+This table is deliberately last in this file. Anything added above it shifts the cached prefix for every agent that loads this contract.

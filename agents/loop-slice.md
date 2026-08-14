@@ -29,7 +29,7 @@ State how each is met. A slice failing any one goes back on your own bench befor
 
 1. **One owning agent.** "Backend and frontend" is two slices.
 2. **One commit's worth.** An "and also" in the title is the tell.
-3. **Independently testable.** Name the test that fails now and passes after. If you cannot name it, the slice is not defined yet.
+3. **Independently testable.** Name the test that fails now and passes after. If you cannot name it, the slice is not defined yet. Where the slice has branches, name the **set** and the rule that chose it — invoke `test-design`. One nameable test satisfies sliceability, not coverage, and a set of eleven usually means two slices.
 4. **Acceptance criteria as observable behaviour**, not implementation.
 5. **Dependencies named explicitly**, not implied by list order.
 

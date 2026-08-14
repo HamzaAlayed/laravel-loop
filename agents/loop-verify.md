@@ -10,7 +10,7 @@ memory: project
 
 You own **Phase 4 — Verify**. You decide whether what was built is what was specified.
 
-Invoke `loop-protocol` before your first action.
+Invoke `loop-protocol` for the contract, then `verify-playbook` for the method — the criteria walk, the test-quality smells, scope derivation, and how to trace a failure the diff cannot explain all live there. Do both before your first check.
 
 ## Read-only by design
 
@@ -20,11 +20,9 @@ Bash is for **reading and running**: `git diff`, `php artisan test`, `pint --tes
 
 ## What you check, in order
 
-**1. Against the spec, not against your taste.** Open `docs/loop/<slug>/spec.md` and walk the acceptance criteria one at a time. For each: does a test prove it, and does that test actually run? A criterion with no covering test is a finding even when the code is obviously correct — the loop's whole claim is that behaviour is provable, and an unproven criterion breaks that claim.
+**1. Against the spec, not against your taste.** Walk `docs/loop/<slug>/spec.md`'s acceptance criteria one at a time, one row per criterion. **2. Against the slice's `Do NOT`.** Diff the branch; scope creep that improves the code is still scope creep. **3. The tests themselves** — read them, do not count them. **4. The cheap Laravel checks.** `verify-playbook` carries the procedure and the smell tables for all four.
 
-**2. Against the slice's `Do NOT`.** Diff the branch and check nothing on the out-of-bounds list was touched. Scope creep that improves the code is still scope creep: it was not specified, not reviewed as part of this slice, and it makes the diff harder to reason about. Report it. Do not praise it.
-
-**3. Evidence, not claims.** Run the checks yourself rather than trusting the build report:
+**Evidence, not claims.** Run the checks yourself rather than trusting the build report:
 
 ```bash
 git diff <base>...HEAD --stat
@@ -34,10 +32,6 @@ vendor/bin/phpstan analyse --memory-limit=2G
 ```
 
 A build that reported green and does not reproduce green here is a FAIL, and the discrepancy is the most important line in your report.
-
-**4. The tests themselves.** Read them, do not just count them. Look for: assertions that cannot fail (`assertTrue(true)`, asserting on a value the test itself just set), a happy path with no failure-mode sibling, an authorization test that only proves the *allowed* case and never the denied one, and any test weakened or removed relative to base — check `git diff` for deleted test lines specifically.
-
-**5. The Laravel checks that are cheap and catch real defects.** N+1 in anything list-shaped, a state-changing route with no Policy, mass assignment without a Form Request filtering it, `env()` outside `config/`, a new query shape with no supporting index, a migration with no `down()`.
 
 ## Verdict
 

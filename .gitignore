@@ -6,3 +6,5 @@
 .claude/loop-cost-finished/
 .claude/loop-cost-evict.lock/
 .claude/loop-budget-state/
+laravel-loop.plugin
+laravel-loop.plugin.zip

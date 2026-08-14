@@ -51,7 +51,7 @@ Do not proceed on silence. An unanswered gate stops the lane.
 
 **3. Build — `loop-build`, once per slice.** Pass the slice envelope **verbatim**; do not paraphrase it, and do not add to it. Every brief carries `Unit:  <slug>` and `Slice: S<n>`, so the invocation is traceable to the work it belongs to. Independent slices run concurrently — cap at 2–3 in flight regardless of how many are independent. More work in progress means longer cycle time for everything, and every open worktree is unmerged integration risk.
 
-Sequence dependent slices along the real dependency chain. Merge in that same order.
+Sequence dependent slices along the real dependency chain. Merge in that same order, and invoke `worktree-merge` for the procedure — merge order, the full suite after **each** merge rather than only the last, who owns which conflict, and migration timestamp collisions across lanes. A conflict in app code between two slices the dependency graph called independent is a G1 slicing defect: resolve it, then record it in `docs/loop/decisions.md` so the same cut is not made again.
 
 **On a blocked return:** the refine cap tripped, or the envelope was ambiguous. Re-brief **once**, naming the exact gap. Blocked again → stop the lane and take it back to G1 as a re-slice. Never a third brief on the same slice, and never patch the work yourself.
 

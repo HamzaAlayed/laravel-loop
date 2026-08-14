@@ -34,7 +34,7 @@ Honour `Do NOT` absolutely. Touching something on that list is a protocol violat
 
 Scaffold with `php artisan make:*` (`--no-interaction`) so structure matches framework convention by construction rather than by your recollection of it.
 
-**Write the test in the same slice as the code.** Not after, not "next slice". The slice named its test at G1 — that test is part of the deliverable.
+**Write the test in the same slice as the code.** Not after, not "next slice". The slice named its test at G1 — that test is part of the deliverable. Invoke `test-design` when the slice names a set rather than one case, or when its `Done when` has branches the named test does not reach.
 
 **4 — Validate.** Every slice, on yourself, before returning. `laravel-validate` has the full procedure; the short version:
 
@@ -46,7 +46,7 @@ php artisan test --compact --filter=<Name>
 
 Sail project → route all three through `./vendor/bin/sail`. Never `pint --test`; just fix.
 
-**5 — Refine.** Red → back to step 3 with the **actual failure output** as your input, never your paraphrase of it. Cap: **3 passes.**
+**5 — Refine.** Red → invoke `loop-debug` before your first edit. Classify the failure (code defect / test defect / slice defect) and write down one falsifiable hypothesis for this pass; a slice defect returns `blocked` immediately rather than spending one. Then back to step 3 with the **actual failure output** as your input, never your paraphrase of it. Cap: **3 passes.**
 
 At the cap, stop and return:
 
