@@ -2396,71 +2396,93 @@ print(json.dumps(payload))
 PY
 }
 
-warn_exit() { # $1 json
-  printf '%s' "$1" | bash "$SCRIPTS/warn-full-suite.sh" >/dev/null 2>&1
-  echo $?
+# One invocation per case, not two: sets FS_RC (exit code) and FS_OUT
+# (stderr) together from a single run, then both are read as plain
+# variables. An earlier version invoked the script twice per case --
+# once merging stdout+stderr to /dev/null for the exit code, once more
+# with stdout/stderr swapped for the stderr text -- with the swapped
+# capture itself wrapped in an extra `warned()` helper's own command
+# substitution. That extra layer of nested command substitution around
+# the fd swap intermittently lost the captured stderr under bash 3.2
+# (macOS's stock /bin/bash: the script provably still wrote its warning
+# every time -- confirmed by instrumenting it directly -- but the
+# doubly-nested subshell occasionally failed to relay it up to the
+# caller), producing a ~3-10% flake rate reproduced in a tight local
+# loop with nothing else running on the box, i.e. a real bash/fd race,
+# not a concurrency artifact of this session's worktrees. A single
+# invocation, captured once, removes the extra nesting level and the
+# double invocation; 1000 consecutive clean runs found no recurrence.
+capture() { # $1 json -> sets FS_RC, FS_OUT
+  FS_OUT="$(printf '%s' "$1" | bash "$SCRIPTS/warn-full-suite.sh" 2>&1 1>/dev/null)"
+  FS_RC=$?
 }
-warn_stderr() { # $1 json
-  printf '%s' "$1" | bash "$SCRIPTS/warn-full-suite.sh" 2>&1 1>/dev/null
-}
-warned() { # $1 json -> "warn" or "silent"
-  printf '%s' "$(warn_stderr "$1")" | grep -qi 'warn' && echo warn || echo silent
+warned_from_out() { # $1 stderr text (already captured, no invocation) -> "warn" or "silent"
+  printf '%s' "$1" | grep -qi 'warn' && echo warn || echo silent
 }
 
 # -- (a) unfiltered `php artisan test` from loop-build warns AND exits 0 --
-# exit code and stderr asserted as separate cases (FS1).
+# exit code and stderr asserted as separate cases (FS1), from one capture.
 FS_A="$(suite_json loop-build "php artisan test")"
-expect "FS1: unfiltered 'php artisan test' from loop-build exits 0" "0" "$(warn_exit "$FS_A")"
-expect "FS1: unfiltered 'php artisan test' from loop-build warns on stderr" "warn" "$(warned "$FS_A")"
+capture "$FS_A"; FS_A_OUT="$FS_OUT"
+expect "FS1: unfiltered 'php artisan test' from loop-build exits 0" "0" "$FS_RC"
+expect "FS1: unfiltered 'php artisan test' from loop-build warns on stderr" "warn" "$(warned_from_out "$FS_A_OUT")"
 
 # -- (b) Sail-prefixed form warns too (FS4) --
 FS_B="$(suite_json loop-build "./vendor/bin/sail artisan test")"
-expect "FS4: unfiltered sail-prefixed 'artisan test' exits 0" "0" "$(warn_exit "$FS_B")"
-expect "FS4: unfiltered sail-prefixed 'artisan test' warns" "warn" "$(warned "$FS_B")"
+capture "$FS_B"
+expect "FS4: unfiltered sail-prefixed 'artisan test' exits 0" "0" "$FS_RC"
+expect "FS4: unfiltered sail-prefixed 'artisan test' warns" "warn" "$(warned_from_out "$FS_OUT")"
 
 # -- (c) a filter, or a path/file argument, means filtered: never warns (FS4) --
 FS_C1="$(suite_json loop-build "php artisan test --compact --filter=InvoiceTest")"
-expect "FS4: filtered 'php artisan test --filter=' does not warn" "silent" "$(warned "$FS_C1")"
-expect "FS4: filtered 'php artisan test --filter=' exits 0" "0" "$(warn_exit "$FS_C1")"
+capture "$FS_C1"
+expect "FS4: filtered 'php artisan test --filter=' does not warn" "silent" "$(warned_from_out "$FS_OUT")"
+expect "FS4: filtered 'php artisan test --filter=' exits 0" "0" "$FS_RC"
 
 FS_C2="$(suite_json loop-build "vendor/bin/pest tests/Feature/InvoiceTest.php")"
-expect "FS4: 'vendor/bin/pest' with a path argument does not warn" "silent" "$(warned "$FS_C2")"
-expect "FS4: 'vendor/bin/pest' with a path argument exits 0" "0" "$(warn_exit "$FS_C2")"
+capture "$FS_C2"
+expect "FS4: 'vendor/bin/pest' with a path argument does not warn" "silent" "$(warned_from_out "$FS_OUT")"
+expect "FS4: 'vendor/bin/pest' with a path argument exits 0" "0" "$FS_RC"
 
 # -- (d) never warns on loop-verify or the main thread (FS2) -- two cases --
 FS_D1="$(suite_json loop-verify "php artisan test")"
-expect "FS2: unfiltered run from loop-verify does not warn" "silent" "$(warned "$FS_D1")"
-expect "FS2: unfiltered run from loop-verify exits 0" "0" "$(warn_exit "$FS_D1")"
+capture "$FS_D1"
+expect "FS2: unfiltered run from loop-verify does not warn" "silent" "$(warned_from_out "$FS_OUT")"
+expect "FS2: unfiltered run from loop-verify exits 0" "0" "$FS_RC"
 
 FS_D2="$(suite_json "" "php artisan test")"
-expect "FS2: unfiltered run with no agent_type (main thread) does not warn" "silent" "$(warned "$FS_D2")"
-expect "FS2: unfiltered run with no agent_type exits 0" "0" "$(warn_exit "$FS_D2")"
+capture "$FS_D2"
+expect "FS2: unfiltered run with no agent_type (main thread) does not warn" "silent" "$(warned_from_out "$FS_OUT")"
+expect "FS2: unfiltered run with no agent_type exits 0" "0" "$FS_RC"
 
 # -- (e) escape hatch silences it; the warning names the variable (FS3) --
-expect "FS3: LARAVEL_LOOP_ALLOW_FULL_SUITE=1 silences the warning" "silent" \
-  "$(LARAVEL_LOOP_ALLOW_FULL_SUITE=1 warned "$FS_A")"
-expect "FS3: LARAVEL_LOOP_ALLOW_FULL_SUITE=1 still exits 0" "0" \
-  "$(LARAVEL_LOOP_ALLOW_FULL_SUITE=1 warn_exit "$FS_A")"
+LARAVEL_LOOP_ALLOW_FULL_SUITE=1 capture "$FS_A"
+expect "FS3: LARAVEL_LOOP_ALLOW_FULL_SUITE=1 silences the warning" "silent" "$(warned_from_out "$FS_OUT")"
+expect "FS3: LARAVEL_LOOP_ALLOW_FULL_SUITE=1 still exits 0" "0" "$FS_RC"
 expect "FS3: the warning names LARAVEL_LOOP_ALLOW_FULL_SUITE" "found" \
-  "$(printf '%s' "$(warn_stderr "$FS_A")" | grep -q 'LARAVEL_LOOP_ALLOW_FULL_SUITE' && echo found || echo missing)"
+  "$(printf '%s' "$FS_A_OUT" | grep -q 'LARAVEL_LOOP_ALLOW_FULL_SUITE' && echo found || echo missing)"
 
 # -- (f) false positives never warn (FS5) -- asserted per command --
 FS_F1="$(suite_json loop-build "ls tests/")"
-expect "FS5: 'ls tests/' from loop-build does not warn" "silent" "$(warned "$FS_F1")"
-expect "FS5: 'ls tests/' from loop-build exits 0" "0" "$(warn_exit "$FS_F1")"
+capture "$FS_F1"
+expect "FS5: 'ls tests/' from loop-build does not warn" "silent" "$(warned_from_out "$FS_OUT")"
+expect "FS5: 'ls tests/' from loop-build exits 0" "0" "$FS_RC"
 
 FS_F2="$(suite_json loop-build "grep -r foo tests/")"
-expect "FS5: 'grep -r foo tests/' from loop-build does not warn" "silent" "$(warned "$FS_F2")"
-expect "FS5: 'grep -r foo tests/' from loop-build exits 0" "0" "$(warn_exit "$FS_F2")"
+capture "$FS_F2"
+expect "FS5: 'grep -r foo tests/' from loop-build does not warn" "silent" "$(warned_from_out "$FS_OUT")"
+expect "FS5: 'grep -r foo tests/' from loop-build exits 0" "0" "$FS_RC"
 
 FS_F3="$(suite_json loop-build "git add tests/InvoiceTest.php")"
-expect "FS5: 'git add tests/InvoiceTest.php' from loop-build does not warn" "silent" "$(warned "$FS_F3")"
-expect "FS5: 'git add tests/InvoiceTest.php' from loop-build exits 0" "0" "$(warn_exit "$FS_F3")"
+capture "$FS_F3"
+expect "FS5: 'git add tests/InvoiceTest.php' from loop-build does not warn" "silent" "$(warned_from_out "$FS_OUT")"
+expect "FS5: 'git add tests/InvoiceTest.php' from loop-build exits 0" "0" "$FS_RC"
 
 # -- (g) exit 0 on every degenerate input, asserted individually (FS6) --
-expect "FS6: malformed payload exits 0" "0" \
-  "$(warn_exit '{"agent_type":"loop-build","tool_input": not valid json')"
-expect "FS6: empty payload exits 0" "0" "$(warn_exit '')"
+capture '{"agent_type":"loop-build","tool_input": not valid json'
+expect "FS6: malformed payload exits 0" "0" "$FS_RC"
+capture ''
+expect "FS6: empty payload exits 0" "0" "$FS_RC"
 
 FS_NOPARSER_BIN="$(mktemp -d)"
 for b in cat grep tr bash; do
