@@ -5,6 +5,38 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-08-14
+
+Test and documentation hardening only — no behavior change, no new command, no new
+acceptance criteria. Closes five gaps filed as follow-up during the v0.2.0 and v0.3.0
+releases.
+
+### Fixed
+
+- **A genuine, reproducible test flake** in the `warn-full-suite.sh` harness cases
+  (`FS1`/`FS4`), first observed at roughly 1-in-15 runs. Root-caused to the test's own
+  double-invocation, nested-command-substitution capture pattern racing under bash 3.2
+  (macOS's stock `/bin/bash`) — the script itself wrote its warning correctly on every
+  run; the test occasionally lost the captured bytes on the way back. Fixed by
+  collapsing each case to a single invocation with one flat capture. Verified against
+  5,500+ consecutive clean iterations and 20 consecutive full-suite runs.
+- Ship's "own release readiness, not a downstream check" disclaimer is now asserted
+  against `scripts/ship-check.sh`'s own stdout, not only `commands/ship.md`'s prose.
+- Observe's O4 (attribution as a followable reference), O5 (no credentials, no
+  telemetry, no network call), and O6 (project-agnostic) now have dedicated harness
+  cases — previously only O1-O3 did. `commands/observe.md`'s procedure already covered
+  all three; only the missing assertions were added.
+- `loop-protocol`'s claim that the outer loop's `↺` resolves to Observe's capture step
+  is now tested directly — previously only README's equivalent claim was.
+- A stale header comment in `scripts/check-budget-gate.sh` overstated when the budget
+  gate reads stdin relative to its unset-check; corrected to match the actual code.
+
+### Notes
+
+- Harness grew from 121 to 334 cases across v0.2.0, v0.3.0, and this release combined.
+- No version file, script behavior, hook registration, or command surface changed
+  beyond the fixes above.
+
 ## [0.3.0] - 2026-08-13
 
 Closes the reporting gap v0.2 deliberately left open: the ledger existed but nothing read
