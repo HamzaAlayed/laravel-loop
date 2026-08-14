@@ -867,6 +867,137 @@ expect "(m) commands/cost.md relays the report script's output verbatim" "0" \
 
 rm -rf "$MIXDIR"
 
+# ---------------------------------------------------------------------------
+# cost-ledger-blind-to-background-agents S1 (spec.md CL1, CL2, CL9) -- every
+# unpriced invocation is reported with the reason it is unpriced, taken only
+# from its finish record's own `status` field, and a launched-in-background
+# invocation is never presented as an observed outcome. Extends the mixed
+# fixture / co10_check pattern above rather than inventing a second one.
+echo "cost report reasons (CL1, CL2, CL9 -- spec.md, cost-ledger-blind-to-background-agents)"
+
+CL1DIR="$(mktemp -d)"
+mkdir -p "$CL1DIR/.claude"
+CL1LEDGER="$CL1DIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"c1","slug":"cl1-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"c1","slug":"cl1-fixture","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":1000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"c2","slug":"cl1-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"c2","slug":"cl1-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":5,"event":"start","invocation_id":"c3","slug":"cl1-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":6,"event":"finish","invocation_id":"c3","slug":"cl1-fixture","phase":"build","agent":"loop-build","status":"completed"}'
+  printf '%s\n' '{"ts":7,"event":"start","invocation_id":"c4","slug":"cl1-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":8,"event":"finish","invocation_id":"c4","slug":"cl1-fixture","phase":"build","agent":"loop-build","status":"line_too_long"}'
+  printf '%s\n' '{"ts":9,"event":"start","invocation_id":"c5","slug":"cl1-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":10,"event":"start","invocation_id":"c6","slug":"cl1-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":11,"event":"finish","invocation_id":"c6","slug":"cl1-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":12,"event":"start","invocation_id":"c7","slug":"cl1-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":13,"event":"finish","invocation_id":"c7","slug":"cl1-fixture","phase":"build","agent":"loop-build"}'
+} > "$CL1LEDGER"
+CL1_OUT="$(report "$CL1DIR" cl1-fixture)"
+
+# Direct-lib check, the (g)/co10_check pattern: proves the counters rather
+# than inferring them from prose, and pins the one CL9 boundary (case 6 --
+# c7's finish has no `status` key at all) against being folded into
+# BACKGROUNDED.
+cl1_check() {
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$CL1LEDGER" "cl1-fixture"
+  [ "$COST_N_INVOCATIONS" = "7" ] || { echo "bad invocations $COST_N_INVOCATIONS"; return 1; }
+  [ "$COST_N_UNPRICED" = "5" ] || { echo "bad unpriced $COST_N_UNPRICED"; return 1; }
+  [ "$COST_N_INFLIGHT" = "1" ] || { echo "bad inflight $COST_N_INFLIGHT"; return 1; }
+  [ "$COST_N_UNPRICED_BACKGROUNDED" = "2" ] || { echo "bad backgrounded $COST_N_UNPRICED_BACKGROUNDED"; return 1; }
+  [ "$COST_N_UNPRICED_NO_USAGE" = "1" ] || { echo "bad no-usage $COST_N_UNPRICED_NO_USAGE"; return 1; }
+  [ "$COST_N_UNPRICED_TRUNCATED" = "1" ] || { echo "bad truncated $COST_N_UNPRICED_TRUNCATED"; return 1; }
+  [ "$COST_N_UNPRICED_UNSTATED" = "1" ] || { echo "bad unstated $COST_N_UNPRICED_UNSTATED"; return 1; }
+  echo ok
+}
+expect "(1)(2)(3)(4)(6) CL1/CL9: reason counters, in-flight excluded, no-status not folded into backgrounded" "ok" "$(cl1_check)"
+
+# (1) CL1 -- async_launched is named as its own category: "backgrounded".
+expect "(1) CL1: 2 async_launched finishes named 'launched in background, outcome never observed'" "yes" \
+  "$(printf '%s\n' "$CL1_OUT" | grep -q '2 launched in background, outcome never observed' && echo yes || echo no)"
+
+# (2) CL1 -- completed with no total_tokens is named "observed, no usage figure".
+expect "(2) CL1: completed-but-tokenless finish named 'observed, no usage figure'" "yes" \
+  "$(printf '%s\n' "$CL1_OUT" | grep -q '1 observed, no usage figure' && echo yes || echo no)"
+
+# (3) CL1 -- status line_too_long is named "truncated", distinct from the other two.
+expect "(3) CL1: line_too_long finish named 'truncated (ledger line too long)'" "yes" \
+  "$(printf '%s\n' "$CL1_OUT" | grep -q '1 truncated (ledger line too long)' && echo yes || echo no)"
+
+# (4) CL1 -- a start with no finish is still in flight, never counted as a
+# reason (c5 contributes to none of the four reason counters -- proven above
+# by cl1_check's sum: 2+1+1+1 = 5 = COST_N_UNPRICED, with c5 excluded entirely).
+expect "(4) CL1: in-flight invocation (no finish) is not one of the reason categories" "yes" \
+  "$(printf '%s\n' "$CL1_OUT" | grep -qE '^  1 invocation\(s\) started with no finish recorded yet -- in flight' && echo yes || echo no)"
+
+# (6) CL9 -- a finish record with no `status` field at all is read without
+# error (report still exits 0) and reported under its own "reason not
+# stated" category, never reclassified as backgrounded (pinned by cl1_check
+# above: COST_N_UNPRICED_BACKGROUNDED stays 2, not 3).
+expect "(6) CL9: finish with no status field -- report exits 0" "0" "$(report_exit "$CL1DIR" cl1-fixture)"
+expect "(6) CL9: finish with no status field named 'reason not stated', not backgrounded" "yes" \
+  "$(printf '%s\n' "$CL1_OUT" | grep -q '1 reason not stated' && echo yes || echo no)"
+
+rm -rf "$CL1DIR"
+
+# (5) CL2/E5 -- the exact defect: two async_launched finishes and zero true
+# in-flight invocations. Today's "0 invocation(s) ... in flight" line reads
+# as if nothing is unresolved; after S1 it must not stand alone.
+E5DIR="$(mktemp -d)"
+mkdir -p "$E5DIR/.claude"
+E5LEDGER="$E5DIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"e1","slug":"e5-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"e1","slug":"e5-fixture","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":500}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"e2","slug":"e5-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"e2","slug":"e5-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":5,"event":"start","invocation_id":"e3","slug":"e5-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":6,"event":"finish","invocation_id":"e3","slug":"e5-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$E5LEDGER"
+E5_OUT="$(report "$E5DIR" e5-fixture)"
+
+expect "(5) CL2/E5: COST_N_INFLIGHT is genuinely 0 for this fixture (the exact E5 shape)" "0" \
+  "$(source "$SCRIPTS/cost-ledger-lib.sh"; cost_scan "$E5LEDGER" "e5-fixture"; printf '%s' "$COST_N_INFLIGHT")"
+expect "(5) CL2/E5: the in-flight line is NOT printed as a bare '... unpriced.'" "no" \
+  "$(printf '%s\n' "$E5_OUT" | grep -qE 'in flight, not counted as unpriced\.[[:space:]]*$' && echo yes || echo no)"
+expect "(5) CL2/E5: the in-flight statement names the 2 backgrounded invocations inline" "yes" \
+  "$(printf '%s\n' "$E5_OUT" | grep -qE 'in flight, not counted as unpriced \(plus 2 launched in background and never subsequently observed' && echo yes || echo no)"
+
+rm -rf "$E5DIR"
+
+# Characterisation case (CL7), honestly labelled as such: this proves a
+# property S1 must hold and later slices (S2/S4) and the RC group must keep
+# holding, not a new behaviour S1 introduces. Green before this slice and
+# green after it.
+CL7DIR="$(mktemp -d)"
+mkdir -p "$CL7DIR/.claude"
+CL7LEDGER="$CL7DIR/.claude/loop-cost.jsonl"
+CL7BASEDIR="$(mktemp -d)"
+mkdir -p "$CL7BASEDIR/.claude"
+CL7BASELEDGER="$CL7BASEDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"cl7-p1","slug":"cl7-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"cl7-p1","slug":"cl7-fixture","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":500}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"cl7-p2","slug":"cl7-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"cl7-p2","slug":"cl7-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":700}'
+} > "$CL7BASELEDGER"
+cp "$CL7BASELEDGER" "$CL7LEDGER"
+for i in $(seq 1 20); do
+  printf '{"ts":%d,"event":"start","invocation_id":"cl7-u%d","slug":"cl7-fixture","phase":"build","agent":"loop-build"}\n' "$((4 + i))" "$i"
+  printf '{"ts":%d,"event":"finish","invocation_id":"cl7-u%d","slug":"cl7-fixture","phase":"build","agent":"loop-build","status":"async_launched"}\n' "$((24 + i))" "$i"
+done >> "$CL7LEDGER"
+
+CL7_OUT="$(report "$CL7DIR" cl7-fixture)"
+CL7BASE_OUT="$(report "$CL7BASEDIR" cl7-fixture)"
+expect "(CL7 characterisation) 2 priced + 20 unpriced: same 'total priced tokens' as 2 priced alone" "yes" \
+  "$( [ "$(printf '%s\n' "$CL7_OUT" | grep 'total priced tokens')" = "$(printf '%s\n' "$CL7BASE_OUT" | grep 'total priced tokens')" ] && echo yes || echo no )"
+expect "(CL7 characterisation) 2 priced + 20 unpriced: COST_N_PRICED and COST_TOKENS_PRICED unaffected by the 20" "2 1200" \
+  "$(source "$SCRIPTS/cost-ledger-lib.sh"; cost_scan "$CL7LEDGER" "cl7-fixture"; printf '%s %s' "$COST_N_PRICED" "$COST_TOKENS_PRICED")"
+
+rm -rf "$CL7DIR" "$CL7BASEDIR"
+
 # --- S3: Phases, Rework, Slices, Flags, Budget sections --------------------
 
 # (a) CO4 — a mixed fixture with model_source "derived" on a PRICED

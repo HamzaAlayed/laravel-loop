@@ -103,11 +103,41 @@ print_elapsed() {
   fi
 }
 
+# CL1: every unpriced invocation is named with the reason it is unpriced,
+# taken only from its own finish record's `status` field -- never guessed
+# from phase, agent, or duration. CL2: "launched in background, outcome
+# never observed" is its own named category, distinct from truncated,
+# no-usage-figure, and in-flight -- a launch is not a finish.
+print_unpriced_reasons() {
+  local bg="${COST_N_UNPRICED_BACKGROUNDED:-0}" nu="${COST_N_UNPRICED_NO_USAGE:-0}"
+  local tr="${COST_N_UNPRICED_TRUNCATED:-0}" un="${COST_N_UNPRICED_UNSTATED:-0}"
+  if [ "$bg" -eq 0 ] && [ "$nu" -eq 0 ] && [ "$tr" -eq 0 ] && [ "$un" -eq 0 ]; then
+    return 0
+  fi
+  printf '  unpriced invocation(s), by reason (taken only from the finish record'"'"'s own status, never guessed):\n'
+  [ "$bg" -gt 0 ] && printf '    %s launched in background, outcome never observed\n' "$bg"
+  [ "$nu" -gt 0 ] && printf '    %s observed, no usage figure\n' "$nu"
+  [ "$tr" -gt 0 ] && printf '    %s truncated (ledger line too long)\n' "$tr"
+  [ "$un" -gt 0 ] && printf '    %s reason not stated\n' "$un"
+}
+
 print_coverage_and_tokens() {
   printf 'Coverage:\n'
   printf '  %s\n' "$(cost_coverage_sentence)"
-  printf '  %s invocation(s) started with no finish recorded yet -- in flight, not counted as unpriced.\n' \
+  print_unpriced_reasons
+  # CL2/E5: an async_launched finish record is a launch, not a resolved
+  # outcome -- it is not in COST_N_INFLIGHT (which counts only a start with
+  # NO finish record at all), so without this addendum the line below could
+  # read as a bare "0" while invocations that were still running when their
+  # launch was recorded sit unmentioned. Appended on the same line so the
+  # statement as a whole is never read in isolation from that fact.
+  printf '  %s invocation(s) started with no finish recorded yet -- in flight, not counted as unpriced' \
     "$COST_N_INFLIGHT"
+  if [ "${COST_N_UNPRICED_BACKGROUNDED:-0}" -gt 0 ]; then
+    printf ' (plus %s launched in background and never subsequently observed -- also unresolved, counted separately above, never folded into this count)' \
+      "$COST_N_UNPRICED_BACKGROUNDED"
+  fi
+  printf '.\n'
   if [ "${COST_N_SKIPPED:-0}" -gt 0 ]; then
     printf '  %s ledger line(s) skipped -- malformed or truncated, not JSON (never silently dropped from this count).\n' \
       "$COST_N_SKIPPED"
