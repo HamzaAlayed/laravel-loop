@@ -1095,6 +1095,137 @@ expect "(CL7 characterisation) 2 priced + 20 unpriced: COST_N_PRICED and COST_TO
 
 rm -rf "$CL7DIR" "$CL7BASEDIR"
 
+# ---------------------------------------------------------------------------
+echo "cost report coverage floor (LARAVEL_LOOP_COST_MIN_COVERAGE, S4, spec.md CL5 -- cost-ledger-blind-to-background-agents)"
+
+report_floor() { # $1 CLAUDE_PROJECT_DIR $2 slug $3 floor value (may be empty -> unset)
+  LARAVEL_LOOP_COST_MIN_COVERAGE="${3:-}" CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/cost-report.sh" "$2"
+}
+
+S4FLOORDIR="$(mktemp -d)"
+mkdir -p "$S4FLOORDIR/.claude"
+S4FLOORLEDGER="$S4FLOORDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s4a","slug":"s4-floor-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s4a","slug":"s4-floor-fixture","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":1000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s4b","slug":"s4-floor-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s4b","slug":"s4-floor-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$S4FLOORLEDGER"
+# 1 of 2 invocations priced -> 50% coverage share, confirmed directly
+# against the lib (the co10_check pattern) rather than trusted from prose.
+s4_share_check() {
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$S4FLOORLEDGER" "s4-floor-fixture"
+  [ "$COST_N_INVOCATIONS" = "2" ] || { echo "bad invocations $COST_N_INVOCATIONS"; return 1; }
+  [ "$COST_N_PRICED" = "1" ] || { echo "bad priced $COST_N_PRICED"; return 1; }
+  echo ok
+}
+expect "(S4-0) fixture: 1 of 2 invocations priced -> 50% coverage share" "ok" "$(s4_share_check)"
+
+# (S4-1) unset -> byte-identical to the pre-slice script on the identical
+# fixture. Diffed against the actual pre-slice scripts/cost-report.sh (git
+# HEAD, before this slice's own commit) run from a copy alongside the
+# untouched cost-ledger-lib.sh so its sourcing still resolves -- not trusted
+# from a paraphrase of "today's behaviour".
+S4OLDDIR="$(mktemp -d)"
+if git -C "$ROOT" show HEAD:scripts/cost-report.sh > "$S4OLDDIR/cost-report.sh" 2>/dev/null; then
+  cp "$SCRIPTS/cost-ledger-lib.sh" "$S4OLDDIR/cost-ledger-lib.sh"
+  chmod +x "$S4OLDDIR/cost-report.sh"
+  S4_OLD_OUT="$(CLAUDE_PROJECT_DIR="$S4FLOORDIR" bash "$S4OLDDIR/cost-report.sh" s4-floor-fixture)"
+  S4_NEW_UNSET_OUT="$(report "$S4FLOORDIR" s4-floor-fixture)"
+  expect "(S4-1) CL5: LARAVEL_LOOP_COST_MIN_COVERAGE unset -> byte-identical to the pre-slice script (same fixture)" "" \
+    "$(diff <(printf '%s' "$S4_OLD_OUT") <(printf '%s' "$S4_NEW_UNSET_OUT"))"
+else
+  expect "(S4-1) CL5: LARAVEL_LOOP_COST_MIN_COVERAGE unset -> byte-identical to the pre-slice script (same fixture)" "skip: no HEAD to diff against" "skip: no HEAD to diff against"
+fi
+rm -rf "$S4OLDDIR"
+
+# (S4-2) above coverage -> no unit-level total; cost read as not
+# established; the observed subset stays visible only in Coverage above,
+# never repeated here as a second, competing figure.
+S4_ABOVE_OUT="$(report_floor "$S4FLOORDIR" s4-floor-fixture 51)"
+expect "(S4-2) CL5: floor above the fixture's share -> no 'total priced tokens' line" "no" \
+  "$(printf '%s\n' "$S4_ABOVE_OUT" | grep -q 'total priced tokens' && echo yes || echo no)"
+expect "(S4-2) CL5: floor above the fixture's share -> cost read as not established" "yes" \
+  "$(printf '%s\n' "$S4_ABOVE_OUT" | grep -qi 'not established' && echo yes || echo no)"
+expect "(S4-2) CL5: floor above the fixture's share -> the observed subset still appears in Coverage above, as a subset" "yes" \
+  "$(printf '%s\n' "$S4_ABOVE_OUT" | grep -qE '^  based on 1 of 2 invocations' && echo yes || echo no)"
+
+# (S4-3) strictly below coverage -> the total prints as it does today.
+S4_BELOW_OUT="$(report_floor "$S4FLOORDIR" s4-floor-fixture 10)"
+expect "(S4-3) CL5: floor strictly below the fixture's share -> total prints as today" "yes" \
+  "$(printf '%s\n' "$S4_BELOW_OUT" | grep -q 'total priced tokens' && echo yes || echo no)"
+
+# (S4-4) exactly at coverage -> boundary pinned: at-or-above prints.
+S4_AT_OUT="$(report_floor "$S4FLOORDIR" s4-floor-fixture 50)"
+expect "(S4-4) CL5: floor exactly at the fixture's share -> total still prints (boundary pinned)" "yes" \
+  "$(printf '%s\n' "$S4_AT_OUT" | grep -q 'total priced tokens' && echo yes || echo no)"
+
+# (S4-5) unparseable -> disabled loudly, naming the field and the value, and
+# today's behaviour holds. Never silently disabled, never silently enabled.
+S4_BAD_OUT="$(report_floor "$S4FLOORDIR" s4-floor-fixture notanumber)"
+expect "(S4-5) CL5: unparseable floor -> total still prints (today's behaviour holds)" "yes" \
+  "$(printf '%s\n' "$S4_BAD_OUT" | grep -q 'total priced tokens' && echo yes || echo no)"
+expect "(S4-5) CL5: unparseable floor -> the warning names the field and the value" "yes" \
+  "$(printf '%s\n' "$S4_BAD_OUT" | grep -qF 'LARAVEL_LOOP_COST_MIN_COVERAGE="notanumber"' && echo yes || echo no)"
+expect "(S4-5) CL5: unparseable floor -> the warning says DISABLED, never defaulted to any number" "yes" \
+  "$(printf '%s\n' "$S4_BAD_OUT" | grep -qF 'DISABLED, not defaulted to any number' && echo yes || echo no)"
+
+# An out-of-range but numeric value (the field is a 0-100 percentage) is
+# disabled the exact same way -- never clamped, never coerced.
+S4_RANGE_OUT="$(report_floor "$S4FLOORDIR" s4-floor-fixture 150)"
+expect "(S4-5b) CL5: out-of-range floor (150) -> disabled loudly like unparseable, total still prints" "yes" \
+  "$(printf '%s\n' "$S4_RANGE_OUT" | grep -qF 'LARAVEL_LOOP_COST_MIN_COVERAGE="150"' \
+     && printf '%s\n' "$S4_RANGE_OUT" | grep -q 'total priced tokens' && echo yes || echo no)"
+
+rm -rf "$S4FLOORDIR"
+
+# (S4-6) CL8/CV6: zero priced invocations -> CV6's existing behaviour is
+# unchanged, and the floor adds no second, contradicting statement, floor
+# set or not.
+S4ZERODIR="$(mktemp -d)"
+mkdir -p "$S4ZERODIR/.claude"
+S4ZEROLEDGER="$S4ZERODIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s4z1","slug":"s4-zero-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s4z1","slug":"s4-zero-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$S4ZEROLEDGER"
+S4_ZERO_OUT="$(report_floor "$S4ZERODIR" s4-zero-fixture 10)"
+expect "(S4-6) CL8/CV6: zero-priced fixture with a floor set -> CV6's message is unchanged" "yes" \
+  "$(printf '%s\n' "$S4_ZERO_OUT" | grep -qi "nothing about this unit's token cost is observable" && echo yes || echo no)"
+expect "(S4-6) CL8/CV6: zero-priced fixture with a floor set -> no second 'not established' statement is added" "no" \
+  "$(printf '%s\n' "$S4_ZERO_OUT" | grep -qi 'not established' && echo yes || echo no)"
+expect "(S4-6) CL8/CV6: zero-priced fixture with a floor set -> no coverage-floor warning is printed either" "no" \
+  "$(printf '%s\n' "$S4_ZERO_OUT" | grep -qF 'LARAVEL_LOOP_COST_MIN_COVERAGE' && echo yes || echo no)"
+rm -rf "$S4ZERODIR"
+
+# (S4-7) Do NOT: the floor changes only what /cost prints. It does not
+# change what scripts/check-budget-gate.sh compares, whether it fires, or
+# its exit codes -- G0-D1 stays unreopened. With both budget thresholds
+# unset, the hook-mode gate still exits before touching the ledger at all
+# (BG1), regardless of this floor.
+S4BUDGET_JSON='{"hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"prompt":"Unit: s4-floor-fixture\n"}}'
+S4BUDGET_OUT="$(printf '%s' "$S4BUDGET_JSON" | LARAVEL_LOOP_COST_MIN_COVERAGE=10 bash "$SCRIPTS/check-budget-gate.sh" 2>&1)"
+S4BUDGET_EXIT="$(printf '%s' "$S4BUDGET_JSON" | LARAVEL_LOOP_COST_MIN_COVERAGE=10 bash "$SCRIPTS/check-budget-gate.sh" >/dev/null 2>&1; echo $?)"
+expect "(S4-7) Do NOT: LARAVEL_LOOP_COST_MIN_COVERAGE has no effect on check-budget-gate.sh's output" "" "$S4BUDGET_OUT"
+expect "(S4-7) Do NOT: LARAVEL_LOOP_COST_MIN_COVERAGE has no effect on check-budget-gate.sh's exit code" "0" "$S4BUDGET_EXIT"
+
+# (guard) no digit shares a line with LARAVEL_LOOP_COST_MIN_COVERAGE
+# anywhere in scripts/, README, or the top-level docs -- extends the
+# existing "no number in README" guard for LARAVEL_LOOP_BUDGET* (S4 of
+# cost-reporting-v0.3, tests/guardrails.test.sh's pattern to copy) to this
+# field and to scripts/ as well, per this slice's own brief.
+# docs/loop/<slug>/{spec,slices,intent}.md are this unit's own G0/G1
+# planning record and are exempt: naming the field's *shape* (a bounded
+# percentage) at G1 is the slicing phase's job, not a shipped default, and
+# it predates this slice's own commit.
+S4_GUARD_FILES="$ROOT/README.md"
+for f in "$ROOT"/docs/loop/*.md; do
+  [ -f "$f" ] && S4_GUARD_FILES="$S4_GUARD_FILES $f"
+done
+expect "(guard) no digit shares a line with LARAVEL_LOOP_COST_MIN_COVERAGE in scripts/, README, or top-level docs (Do NOT: no number ships)" "0" \
+  "$(grep -h 'LARAVEL_LOOP_COST_MIN_COVERAGE' "$SCRIPTS"/*.sh $S4_GUARD_FILES 2>/dev/null | grep -cE '[0-9]')"
+
 # --- S3: Phases, Rework, Slices, Flags, Budget sections --------------------
 
 # (a) CO4 — a mixed fixture with model_source "derived" on a PRICED

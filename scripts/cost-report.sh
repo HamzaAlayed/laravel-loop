@@ -139,6 +139,64 @@ print_backgrounded_reason() {
   printf '  and delivered into the session when it finishes -- it is not captured here.\n'
 }
 
+# --- Coverage floor (S4, CL5): governs what is PRINTED below, never what
+# scripts/check-budget-gate.sh compares or whether it fires -- G0-D1 is not
+# reopened by any of this. A human sets the floor; this file ships no
+# default, suggested starting point, or derived value for it, anywhere (Do
+# NOT). Unset means today's behaviour, byte for byte: this function is only
+# ever called from the branch below that already requires at least one
+# priced invocation, so CV6's all-unpriced branch never reaches it and gets
+# no second, contradicting statement.
+#
+# An out-of-range or otherwise unparseable value DISABLES the floor loudly,
+# naming the field and the value -- the same discipline
+# scripts/check-budget-gate.sh's is_valid_threshold already established for
+# its own threshold, reused here rather than reinvented with different
+# manners. This is its own parser, not a second implementation of that
+# file's: the input shape differs (a bounded share, not a bare count), and
+# check-budget-gate.sh itself is out of bounds for this slice.
+cost_min_coverage_floor_check() {
+  COST_FLOOR_BELOW=0
+  COST_FLOOR_WARNING=""
+  COST_FLOOR_VALUE=""
+  COST_FLOOR_SHARE=0
+  local raw="${LARAVEL_LOOP_COST_MIN_COVERAGE:-}"
+  [ -z "$raw" ] && return 0
+  local bad=0
+  case "$raw" in
+    *[!0-9]*) bad=1 ;;
+  esac
+  [ "$bad" -eq 0 ] && [ "$raw" -gt 100 ] && bad=1
+  if [ "$bad" -eq 1 ]; then
+    COST_FLOOR_WARNING="$(cost_min_coverage_floor_warning "$raw")"
+    return 0
+  fi
+  COST_FLOOR_VALUE="$raw"
+  local n="${COST_N_INVOCATIONS:-0}" p="${COST_N_PRICED:-0}"
+  [ "$n" -gt 0 ] && COST_FLOOR_SHARE=$(( p * 100 / n ))
+  [ "$COST_FLOOR_SHARE" -lt "$raw" ] && COST_FLOOR_BELOW=1
+}
+
+# Kept in its own function so the field's name and the numeric range in its
+# error text never share one physical source line -- the guard case this
+# slice adds to tests/guardrails.test.sh checks exactly that, across
+# scripts/, README, and docs.
+cost_min_coverage_floor_warning() {
+  local raw="$1" name
+  name="LARAVEL_LOOP_COST_MIN_COVERAGE"
+  printf '%s="%s" is not a bare percentage -- the coverage floor is DISABLED, not defaulted to any number. Accepted form: digits only, whole percent, zero through one hundred inclusive.' \
+    "$name" "$raw"
+}
+
+# Below-floor Tokens statement (CL5): no total, the unit's cost is not
+# established, and the observed subset stays exactly where Coverage above
+# already showed it -- never repeated here as if it were a second, competing
+# total.
+print_below_floor_tokens() {
+  printf 'Tokens: not established -- coverage is below the configured floor (LARAVEL_LOOP_COST_MIN_COVERAGE=%s%%). No unit-level token total is printed; the observed subset already appears in the Coverage section above.\n' \
+    "$COST_FLOOR_VALUE"
+}
+
 print_coverage_and_tokens() {
   printf 'Coverage:\n'
   printf '  %s\n' "$(cost_coverage_sentence)"
@@ -176,10 +234,18 @@ print_coverage_and_tokens() {
     printf 'Tokens: nothing about this unit'"'"'s token cost is observable -- %s of %s invocations carry a token figure. No token table is printed.\n' \
       "$COST_N_PRICED" "$COST_N_INVOCATIONS"
   else
-    printf 'Tokens (priced subset only -- never the unit'"'"'s whole cost):\n'
-    printf '  total priced tokens: %s\n' "$(cost_fmt "$COST_TOKENS_PRICED")"
-    printf '  %s\n' "$(cost_coverage_sentence)"
-    print_cache_read_share
+    cost_min_coverage_floor_check
+    if [ -n "$COST_FLOOR_WARNING" ]; then
+      printf '%s\n' "$COST_FLOOR_WARNING"
+    fi
+    if [ "$COST_FLOOR_BELOW" -eq 1 ]; then
+      print_below_floor_tokens
+    else
+      printf 'Tokens (priced subset only -- never the unit'"'"'s whole cost):\n'
+      printf '  total priced tokens: %s\n' "$(cost_fmt "$COST_TOKENS_PRICED")"
+      printf '  %s\n' "$(cost_coverage_sentence)"
+      print_cache_read_share
+    fi
   fi
 }
 
