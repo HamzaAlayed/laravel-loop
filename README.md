@@ -93,6 +93,8 @@ Disable it entirely with `LARAVEL_LOOP_COST_LEDGER=0`. Bound it with `LARAVEL_LO
 
 This is entirely separate from Laravel Guild's `.claude/agents-board.jsonl`, if that plugin is also installed — neither file reads the other, and both coexist without collision.
 
+Background-launched invocations are the majority of a `/loop` run — build lanes run several at a time, by design, and that is the point of running them that way — and this hook cannot price them: a backgrounded invocation's finish event carries no token figure at all. It is recorded as launched in background, outcome never observed, never silently folded into a priced total and never guessed at. The real figure is measured by the host and delivered into the session the moment that invocation finishes; it is not captured here, and no code in this plugin reaches for it.
+
 ## Cost reporting and the budget gate
 
 `/cost [slug]` reads **only** `.claude/loop-cost.jsonl` — no network call, no account, and no reading of Laravel Guild's `.claude/agents-board.jsonl` even when that file happens to sit right next to it and see more. Coverage is printed **before any total, always**: how many invocations the ledger holds for the unit, how many carry a token figure, how many do not, per phase. A total built from only the priced subset is labelled as covering that subset, never presented as the unit's whole cost, and where nothing for a unit is priced no token table is printed at all — the report says plainly that nothing about that unit's cost is observable, and why. No currency figure is ever produced: tokens, counts, and durations, never a dollar figure, never a rate card.
@@ -104,6 +106,8 @@ Per-phase expectations follow the same discipline: `LARAVEL_LOOP_BUDGET_PHASE_SP
 **No number for any of these five variables ships anywhere in this plugin** — not in the code, not in this README, not as a "suggested starting value" in a code fence. There is no baseline to derive one from: this repository has never seen a completed `/loop` run produce a full ledger, and most invocations recorded so far carry no token figure at all — a number offered under either condition would be a guess wearing a default's clothes. Set a threshold from your own ledger's observed totals once you have some, never from a number in a document. A budget is denominated in tokens, never in money.
 
 An unfired gate is never reported as reassurance, anywhere — not in `/cost`'s output, not in a return, not in `log.md`. Silence means either no threshold was set or the observed total has not reached it, and `/cost` always shows which.
+
+`LARAVEL_LOOP_COST_MIN_COVERAGE` sets a coverage floor, as a whole percent, below which `/cost` prints no unit-level token total at all — the unit's cost is stated as not established, with the observed subset left visible only where the coverage figure above already showed it, never repeated as a second, competing number. Unset means today's behaviour: the total prints exactly as it always has, labelled by the observed subset. Like every other threshold in this plugin, no value ships as a default and none is suggested anywhere in this repository.
 
 ## Install
 
@@ -158,7 +162,7 @@ They answer different questions. Reach for the **Guild** when you want a named s
 ## Development
 
 ```bash
-bash tests/guardrails.test.sh   # 375 cases, zero dependencies
+bash tests/guardrails.test.sh   # 379 cases, zero dependencies
 shellcheck scripts/*.sh
 ```
 
