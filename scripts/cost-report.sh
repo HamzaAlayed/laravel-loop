@@ -121,10 +121,29 @@ print_unpriced_reasons() {
   [ "$un" -gt 0 ] && printf '    %s reason not stated\n' "$un"
 }
 
+# CL3: states, once per report and only when this unit actually holds a
+# backgrounded invocation, why the figure is absent -- a measured fact
+# (E2's two controlled probes), never a promise that it will be recovered.
+# A fully foreground unit has nothing to gain from this line, so it is
+# gated on the same COST_N_UNPRICED_BACKGROUNDED count print_unpriced_reasons
+# already reads (CV7: no second parse), and it prints exactly once no
+# matter how many such invocations this unit holds -- it explains the
+# category, not each member of it (S1's per-invocation count already did
+# that above). Worded to stay true if recovery ever lands: it names what a
+# backgrounded invocation's figure IS (measured, delivered) rather than
+# asserting this tool will ever go get it, so it describes the residue
+# recovery would leave behind, not a gap that no longer exists.
+print_backgrounded_reason() {
+  [ "${COST_N_UNPRICED_BACKGROUNDED:-0}" -eq 0 ] && return 0
+  printf '  Why: for a backgrounded invocation, the token figure is measured by the host\n'
+  printf '  and delivered into the session when it finishes -- it is not captured here.\n'
+}
+
 print_coverage_and_tokens() {
   printf 'Coverage:\n'
   printf '  %s\n' "$(cost_coverage_sentence)"
   print_unpriced_reasons
+  print_backgrounded_reason
   # CL2/E5: an async_launched finish record is a launch, not a resolved
   # outcome -- it is not in COST_N_INFLIGHT (which counts only a start with
   # NO finish record at all), so without this addendum the line below could
