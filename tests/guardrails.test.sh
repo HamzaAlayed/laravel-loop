@@ -999,6 +999,71 @@ expect "(5) CL2/E5: the in-flight statement names the 2 backgrounded invocations
 
 rm -rf "$E5DIR"
 
+# --- cost-ledger-blind-to-background-agents S3 (CL3): the report states, in
+# its own output, why a backgrounded invocation's figure is absent -- printed
+# once per report, only when the unit actually holds one, worded as a
+# measured fact (E2's two probes) and never as a promise that OQ2's answer
+# (S6: no hook can reach the channel) is about to change.
+echo "cost report backgrounded-reason (CL3 -- spec.md, cost-ledger-blind-to-background-agents)"
+
+# (S3-1) happy path: one backgrounded invocation -> the why-statement appears
+# and names both halves of E2's finding (measured by the host, delivered into
+# the session) plus that it is not captured here.
+S3DIR="$(mktemp -d)"
+mkdir -p "$S3DIR/.claude"
+S3LEDGER="$S3DIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3a","slug":"s3-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3a","slug":"s3-fixture","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":1000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s3b","slug":"s3-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s3b","slug":"s3-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$S3LEDGER"
+S3_OUT="$(report "$S3DIR" s3-fixture)"
+expect "(S3-1) CL3: fixture with a backgrounded invocation -> the why-statement names measured/delivered/not-captured-here" "yes" \
+  "$(printf '%s\n' "$S3_OUT" | grep -qF 'measured by the host' \
+     && printf '%s\n' "$S3_OUT" | grep -qF 'delivered into the session' \
+     && printf '%s\n' "$S3_OUT" | grep -qF 'not captured here' \
+     && echo yes || echo no)"
+expect "(S3-1) Do NOT: the why-statement never states or implies recovery is coming, planned, or possible" "0" \
+  "$(printf '%s\n' "$S3_OUT" | grep -icE 'will be recovered|recovery is|recovery will|planned|coming soon')"
+rm -rf "$S3DIR"
+
+# (S3-2) negation: an all-foreground fixture has no gap and is not told about
+# one -- the why-statement does not appear.
+S3FGDIR="$(mktemp -d)"
+mkdir -p "$S3FGDIR/.claude"
+S3FGLEDGER="$S3FGDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3c","slug":"s3-fg-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3c","slug":"s3-fg-fixture","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":500}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s3d","slug":"s3-fg-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s3d","slug":"s3-fg-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":250}'
+} > "$S3FGLEDGER"
+S3FG_OUT="$(report "$S3FGDIR" s3-fg-fixture)"
+expect "(S3-2) CL3 negation: all-foreground fixture -> the why-statement does not appear" "no" \
+  "$(printf '%s\n' "$S3FG_OUT" | grep -qF 'not captured here' && echo yes || echo no)"
+rm -rf "$S3FGDIR"
+
+# (S3-3) frequency boundary: three backgrounded invocations -> the
+# why-statement appears exactly once, not three times (it explains the
+# category, not each member of it -- S1's per-invocation count already did
+# that).
+S3THREEDIR="$(mktemp -d)"
+mkdir -p "$S3THREEDIR/.claude"
+S3THREELEDGER="$S3THREEDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3e","slug":"s3-three-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3e","slug":"s3-three-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s3f","slug":"s3-three-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s3f","slug":"s3-three-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":5,"event":"start","invocation_id":"s3g","slug":"s3-three-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":6,"event":"finish","invocation_id":"s3g","slug":"s3-three-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$S3THREELEDGER"
+S3THREE_OUT="$(report "$S3THREEDIR" s3-three-fixture)"
+expect "(S3-3) CL3 bound: three backgrounded invocations -> the why-statement appears exactly once" "1" \
+  "$(printf '%s\n' "$S3THREE_OUT" | grep -cF 'not captured here')"
+rm -rf "$S3THREEDIR"
+
 # Characterisation case (CL7), honestly labelled as such: this proves a
 # property S1 must hold and later slices (S2/S4) and the RC group must keep
 # holding, not a new behaviour S1 introduces. Green before this slice and
