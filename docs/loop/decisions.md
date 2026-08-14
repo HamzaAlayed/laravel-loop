@@ -59,3 +59,49 @@ the artifact (`.claude/loop-cost.jsonl` and friends) after a real run. Treat "te
 "hook active" as independent claims, and note that installing from a marketplace snapshots the
 plugin — a repo-side `hooks.json` change requires reinstalling *and* restarting before it is
 in the loop.
+
+## OQ2 spike: can a hook reach the channel a backgrounded invocation's real token figure
+## arrives on? (2026-08-14)
+
+Tried: registered every hook event this Claude Code build (2.1.232) exposes except
+`SubagentStop` (closed by E3, not retested) — `PreToolUse`/`PostToolUse` on `Agent|Task`,
+`Notification`, `MessageDisplay`, `PostToolBatch`, `SubagentStart`, `TaskCompleted`,
+`TaskCreated`, `Stop` — against a throwaway `CLAUDE_PROJECT_DIR`, then live-launched one
+trivial `general-purpose` subagent in the foreground and a second, identical one with
+`run_in_background: true`, and watched which registered hook fired what payload for each.
+
+**Answer: 2 — no hook can reach it; only the main thread's own context sees it.** Both probes
+reproduced E2 exactly (foreground finish payload carries `totalTokens`; background finish
+payload is `async_launched` with none). The background task then completed for real, but
+**no hook of any of the eight registered types fired a second time for it** — the sleep
+between launch and completion shows nothing in the hook log at all. The figure instead
+arrived as a `<task-notification>` block — `origin.kind:"task-notification"` — injected
+straight into the session transcript as a queued synthetic user turn (`type:"attachment"`,
+`attachment.type:"queued_command"`, `commandMode:"task-notification"`), containing
+`<usage><subagent_tokens>7961</subagent_tokens>...</usage>`. This delivery path is structurally
+separate from the `hook_event_name` dispatch pattern shared by every one of the binary's
+literal hook events (confirmed by grepping the installed `claude` binary's own string table
+for every `hook_event_name:"..."` and `notificationType:"..."` literal — the same evidentiary
+method this script's own header already used for `tool_use_id`) — it is a queue operation on
+the conversation itself, not an event on the hook bus, so there is no channel name a
+`hooks.json` entry could ever name to subscribe to it.
+
+Probe, reproducible by a second person: throwaway project dir, `.claude/settings.json`
+registering the above events against a logging hook `script.sh EVENT_NAME` that appends
+`{"probe_event_label":..., "payload":...}` for whatever it's handed; run
+`claude -p` from inside that directory with `--allowedTools "Task,Bash(sleep*)"` and a prompt
+instructing exactly two `Task` calls (one foreground, one `run_in_background: true`) on the
+same trivial subagent prompt, followed by repeated `sleep 5` calls until new context proves
+the background one finished. Inspect the probe log for anything carrying a token figure
+between the launch and the "seen" reply (there is nothing), then grep the session's own
+`~/.claude/projects/.../*.jsonl` transcript for `task-notification` to find where the figure
+actually lands.
+
+This forecloses building recovery as a hook. It does **not** foreclose recovery outright: the
+figure is real, exact, and visible to the main thread that launched the invocation, so a
+recovery mechanism would have to be the orchestrating agent itself reading the
+`<task-notification>` block from its own context and writing (or asking to write) a ledger
+line — a model-transcribed figure, not a host-observed one, exactly OQ2 answer 2's own
+description. Whether that is acceptable in a ledger whose whole value is observed-not-reported
+numbers is the human decision OQ5/the second G1 was already deferring this to, not a builder's
+call, and no such mechanism is designed, prototyped, or landed here.
