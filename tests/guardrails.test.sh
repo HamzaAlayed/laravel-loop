@@ -1678,6 +1678,16 @@ expect "observe: O6 — project-agnostic, assumes nothing about language or tool
       && echo 0 || echo 1 )"
 
 # ---------------------------------------------------------------------------
+echo "loop-protocol (outer loop's ↺ resolution — skills/loop-protocol/SKILL.md)"
+LOOP_PROTOCOL_SKILL="$ROOT/skills/loop-protocol/SKILL.md"
+
+expect "loop-protocol: outer-loop diagram's ↺ resolves to /observe's capture step" "0" \
+  "$( grep -q '↺' "$LOOP_PROTOCOL_SKILL" \
+      && grep -q '/observe' "$LOOP_PROTOCOL_SKILL" \
+      && grep -qi 'capture step' "$LOOP_PROTOCOL_SKILL" \
+      && echo 0 || echo 1 )"
+
+# ---------------------------------------------------------------------------
 echo "ship-check.sh (G3 release readiness)"
 
 # Every case below runs ship-check.sh inside a throwaway git-repo fixture,
