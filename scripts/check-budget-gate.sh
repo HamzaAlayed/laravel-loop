@@ -13,9 +13,10 @@
 #
 # No default threshold ships anywhere in this file (G0-D1). With both
 # LARAVEL_LOOP_BUDGET_WARN and LARAVEL_LOOP_BUDGET_HARD unset or empty, this
-# exits on the very first check below -- before it reads the hook payload,
-# the ledger, or anything else -- so a /loop run with no threshold set is
-# byte-for-byte indistinguishable from a run with this hook absent entirely
+# reads stdin (INPUT="$(cat)") and then exits on the very next check --
+# before ever parsing or acting on the payload content, the ledger, or
+# anything else -- so a /loop run with no threshold set is byte-for-byte
+# indistinguishable from a run with this hook absent entirely
 # (BG1). There is no baseline in this repo to derive a number from (spec.md
 # E1: the ledger has never held a full run; E2: ~9 of 10 invocations this
 # repo has ever recorded carry no token figure at all), and G0-D1 forbids
