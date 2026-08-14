@@ -1825,6 +1825,16 @@ esac
 expect "ship: summary states it publishes and deploys nothing" "yes" "$DISCLAIMED"
 rm -rf "$SHIP6"
 
+SHIP20="$(new_ship_fixture)"
+ship_run "$SHIP20"
+case "$SHIP_OUT" in
+  *"own release readiness"*"not a check of a"*"downstream Laravel application"*) OWN_READINESS_DISCLAIMED="yes" ;;
+  *) OWN_READINESS_DISCLAIMED="no" ;;
+esac
+expect "ship: summary states it checks its own release readiness, not a downstream Laravel app's check" \
+  "yes" "$OWN_READINESS_DISCLAIMED"
+rm -rf "$SHIP20"
+
 SHIP7="$(new_ship_fixture)"
 ship_run "$SHIP7"
 G3_STATE="$(gate_line "$SHIP_OUT" 3)"
