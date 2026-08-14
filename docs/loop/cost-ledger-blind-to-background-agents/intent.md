@@ -72,9 +72,43 @@ loaded by a running session. The coverage finding spans this session's 79 termin
   match, `completed` only.
 - Confirmed the scripts themselves are not at fault: all 334 harness cases pass against them
   directly, including the ledger, gate, and rework cases. The gap is registration, not code.
-- **Not tried:** updating the installed plugin to v0.4.0 and restarting Claude Code, which is
-  the step that would actually put the hook in the loop. Not tried because a restart is the
-  human's action, not this session's.
+- **Now tried, 2026-08-14T16:04Z:** the plugin was updated and the session restarted, and the
+  hook is confirmed live. See "Measured after the restart" below — finding 1 is closed, and
+  finding 2 is confirmed *and* re-characterised.
+
+## Measured after the restart
+
+The registration gap (finding 1) is **closed**. With the updated plugin loaded,
+`.claude/loop-cost.jsonl` was created on the first agent invocation and carries a correct
+`start`/`finish` pair. `record-cost-event.sh` fires in a live session; the code was never at
+fault, as suspected.
+
+Finding 2 is **confirmed by direct experiment, and its cause is not what was assumed.** Two
+probes, identical agent type, identical model, identical trivial task — the only variable was
+launch mode:
+
+| Launch mode | Terminal record | Tokens in ledger |
+|---|---|---|
+| Foreground | `completed` | 12,102 |
+| Background | `async_launched` | *null* |
+
+The backgrounded probe did finish, and it did cost **11,035 tokens** — that figure was
+delivered to the main thread in the agent's completion notification. No later ledger record
+ever arrived for it: `SubagentStop` is registered, but `record-cost-event.sh:519` exits
+without writing, by design.
+
+**This reframes the problem.** The earlier reading — that background spend is structurally
+unobservable and the 96% gap is an upstream harness limitation — is wrong in an important
+way. The number is not missing. It is measured, and it reaches the main thread; it simply
+never reaches the hook. The `PostToolUse` payload for a backgrounded launch carries
+`async_launched` and no usage block, while the real figure arrives afterwards on the
+task-notification channel, which no hook subscribes to.
+
+So the option space at G0 is wider than the intent originally assumed. "Recover the figure
+from the channel that already carries it" is a live candidate alongside "report coverage
+honestly and refuse to total". Whether the first is reachable from a hook — or needs the main
+thread to write the ledger line itself — is the question the spec has to settle, and it is a
+design question, not a limitation to accept.
 
 ## Suspected unit or commit
 
