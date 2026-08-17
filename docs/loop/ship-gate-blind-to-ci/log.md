@@ -114,8 +114,26 @@ reproducing this unit's own bug inside its own verification.
 
 ## What this unit did not close
 
-- **A1 / H1** — the only proof is a real Actions run concluding success on a pushed commit. Open
-  until that run exists, and its run id belongs in this file when it does.
+- **A1 / H1 — attempted, and not closed.** Run `32026220384` on commit `a528f6a`
+  (2026-08-17T11:42Z). **`scripts are executable` concluded success** — this unit's own step
+  works on a real runner, which is A2 and A4 confirmed against the thing no local check could
+  prove. But the job concluded **failure** at the *next* step, `guardrail tests`: 419 passed,
+  2 failed on `ubuntu-latest` while all 421 pass on the maintainer's macOS host.
+
+  The two failures are `eviction under concurrency: settles at or under cap` and
+  `ship: shellcheck absent from PATH reads not-run, verdict hold`. Neither is this unit's, and
+  `slices.md`'s H1 says so in advance: a failure in `guardrail tests` is a different fault from
+  a failure in `scripts are executable`, and only the third was ever this unit's.
+
+  **What H1 actually uncovered.** On every one of the twelve prior runs, `guardrail tests` was
+  not failing — it was **skipped**, because `scripts are executable` failed before it and the
+  job stopped there. The harness had therefore never executed on the Linux runner even once in
+  the surviving history. Unblocking the mode step ran it for the first time and immediately
+  surfaced two platform-dependent failures that had been latent behind the blockage the whole
+  time. The red history was hiding a second, unrelated red.
+
+  A1 stays open. Closing it needs the two platform failures fixed, which is a new intent, not
+  a re-slice of this one.
 - **The v0.2.0 run's cause** (`31696279581`) stays `unknown`, by decision, not by omission.
 - **No CHANGELOG entry, no version bump.** S4's `Do NOT` kept `CHANGELOG.md` untouched
   deliberately: no release is amended to have been green, and anything touching a published
