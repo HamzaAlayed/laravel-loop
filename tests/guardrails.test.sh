@@ -999,6 +999,135 @@ expect "(5) CL2/E5: the in-flight statement names the 2 backgrounded invocations
 
 rm -rf "$E5DIR"
 
+# ---------------------------------------------------------------------------
+# cost-ledger-blind-to-background-agents S7 (spec.md RC1, RC2, RC5, RC6, CL9
+# -- second G1, RC recovery group) -- the reader recognises an
+# event:"recovered" line: counts that invocation once, counts it priced, and
+# says in the report how much of the total was transcribed rather than
+# host-observed. Extends the S1 mixed-fixture / cl1_check pattern above
+# rather than inventing a second one. No writer exists yet (S9); every
+# `recovered` line below is hand-written directly into the fixture ledger.
+echo "cost report recovered figures (RC1, RC2, RC5, RC6, CL9 -- spec.md, cost-ledger-blind-to-background-agents S7)"
+
+S7DIR="$(mktemp -d)"
+mkdir -p "$S7DIR/.claude"
+S7LEDGER="$S7DIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s7c1","slug":"s7-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s7c1","slug":"s7-fixture","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":1000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s7c2","slug":"s7-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s7c2","slug":"s7-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":5,"event":"start","invocation_id":"s7c3","slug":"s7-fixture","phase":"verify","agent":"loop-verify"}'
+  printf '%s\n' '{"ts":6,"event":"finish","invocation_id":"s7c3","slug":"s7-fixture","phase":"verify","agent":"loop-verify","status":"async_launched"}'
+  printf '%s\n' '{"ts":7,"event":"recovered","invocation_id":"s7c2","slug":"s7-fixture","total_tokens":11035,"token_source":"transcribed"}'
+} > "$S7LEDGER"
+
+# The same fixture with the recovered line removed -- the comparison every
+# RC1/RC5 case below needs, and (S7-5)'s own "nothing changed" fixture.
+S7NORECDIR="$(mktemp -d)"
+mkdir -p "$S7NORECDIR/.claude"
+S7NORECLEDGER="$S7NORECDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s7c1","slug":"s7-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s7c1","slug":"s7-fixture","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":1000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s7c2","slug":"s7-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s7c2","slug":"s7-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":5,"event":"start","invocation_id":"s7c3","slug":"s7-fixture","phase":"verify","agent":"loop-verify"}'
+  printf '%s\n' '{"ts":6,"event":"finish","invocation_id":"s7c3","slug":"s7-fixture","phase":"verify","agent":"loop-verify","status":"async_launched"}'
+} > "$S7NORECLEDGER"
+
+S7_OUT="$(report "$S7DIR" s7-fixture)"
+S7NOREC_OUT="$(report "$S7NORECDIR" s7-fixture)"
+
+# (S7-1) RC5: the recovered figure prices the invocation; its tokens land in
+# COST_TOKENS_PRICED alongside the host-observed one.
+s7_check() {
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$S7LEDGER" "s7-fixture"
+  [ "$COST_N_PRICED" = "2" ] || { echo "bad priced $COST_N_PRICED"; return 1; }
+  [ "$COST_N_UNPRICED" = "1" ] || { echo "bad unpriced $COST_N_UNPRICED"; return 1; }
+  [ "$COST_TOKENS_PRICED" = "12035" ] || { echo "bad tokens $COST_TOKENS_PRICED"; return 1; }
+  [ "$COST_N_PRICED_TRANSCRIBED" = "1" ] || { echo "bad priced_transcribed $COST_N_PRICED_TRANSCRIBED"; return 1; }
+  [ "$COST_TOKENS_TRANSCRIBED" = "11035" ] || { echo "bad tokens_transcribed $COST_TOKENS_TRANSCRIBED"; return 1; }
+  echo ok
+}
+expect "(S7-1) RC5: recovered figure on an unpriced backgrounded invocation -> priced, its tokens in COST_TOKENS_PRICED" "ok" "$(s7_check)"
+
+# (S7-2) RC1: COST_N_INVOCATIONS is identical with and without the recovered
+# line -- the recovered record never creates a second invocation.
+s7_invocations() { # $1 ledger $2 slug
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$1" "$2"
+  printf '%s' "$COST_N_INVOCATIONS"
+}
+expect "(S7-2) RC1: COST_N_INVOCATIONS identical with the recovered line present or removed (no duplicate invocation)" "3 3" \
+  "$(s7_invocations "$S7LEDGER" s7-fixture) $(s7_invocations "$S7NORECLEDGER" s7-fixture)"
+
+# (S7-3) RC2: the report names the recovered figure as transcribed, distinct
+# from a host-observed one, and states how much of the total is transcribed
+# (both the count of priced figures and the token share).
+expect "(S7-3) RC2: report names the figure transcribed / distinguishable from host-observed, states the count and token share" "yes" \
+  "$(printf '%s\n' "$S7_OUT" | grep -qF 'transcribed rather than host-observed' \
+     && printf '%s\n' "$S7_OUT" | grep -qE '1 of 2 priced figure\(s\) transcribed' \
+     && printf '%s\n' "$S7_OUT" | grep -qE '11035 of 12035 priced token\(s\)' \
+     && echo yes || echo no)"
+
+# (S7-4) RC5: coverage share and the wholly-unobserved phase list both differ
+# between the recovered and non-recovered fixtures -- build drops out of the
+# wholly-unobserved list once its only invocation is priced by recovery,
+# while verify (never recovered) stays named in both.
+expect "(S7-4) RC5: coverage share differs between the two fixtures (66% vs 33%)" "yes" \
+  "$(printf '%s\n' "$S7_OUT" | grep -qE '66 ?% coverage' && printf '%s\n' "$S7NOREC_OUT" | grep -qE '33 ?% coverage' && echo yes || echo no)"
+expect "(S7-4) RC5: build is no longer named wholly unobserved once recovered; verify still is in both" "yes" \
+  "$(printf '%s\n' "$S7_OUT" | grep -qE 'wholly unobserved:.*\bverify\b' \
+     && ! printf '%s\n' "$S7_OUT" | grep -qE 'wholly unobserved:.*\bbuild\b' \
+     && printf '%s\n' "$S7NOREC_OUT" | grep -qE 'wholly unobserved:.*\bbuild\b' \
+     && printf '%s\n' "$S7NOREC_OUT" | grep -qE 'wholly unobserved:.*\bverify\b' \
+     && echo yes || echo no)"
+
+# (S7-5) RC6, CL9: a ledger with NO recovered record reads and reports
+# exactly as before this slice -- no word about transcription anywhere, and
+# the new counters both stay at zero.
+expect "(S7-5) RC6/CL9: no recovered record -> no word about transcription anywhere in the report" "no" \
+  "$(printf '%s\n' "$S7NOREC_OUT" | grep -qi 'transcri' && echo yes || echo no)"
+s7_norec_counters() {
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$S7NORECLEDGER" "s7-fixture"
+  printf '%s %s' "$COST_N_PRICED_TRANSCRIBED" "$COST_TOKENS_TRANSCRIBED"
+}
+expect "(S7-5) RC6/CL9: no recovered record -> the new counters both stay at zero" "0 0" "$(s7_norec_counters)"
+
+rm -rf "$S7DIR" "$S7NORECDIR"
+
+# (S7-6) RC1 bound: TWO recovered records for the same invocation_id --
+# still one invocation, one figure, never a double count.
+S7DUPDIR="$(mktemp -d)"
+mkdir -p "$S7DUPDIR/.claude"
+S7DUPLEDGER="$S7DUPDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s7d1","slug":"s7-dup-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s7d1","slug":"s7-dup-fixture","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":1000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s7d2","slug":"s7-dup-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s7d2","slug":"s7-dup-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":5,"event":"recovered","invocation_id":"s7d2","slug":"s7-dup-fixture","total_tokens":11035,"token_source":"transcribed"}'
+  printf '%s\n' '{"ts":6,"event":"recovered","invocation_id":"s7d2","slug":"s7-dup-fixture","total_tokens":11035,"token_source":"transcribed"}'
+} > "$S7DUPLEDGER"
+s7_dup_check() {
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$S7DUPLEDGER" "s7-dup-fixture"
+  [ "$COST_N_INVOCATIONS" = "2" ] || { echo "bad invocations $COST_N_INVOCATIONS"; return 1; }
+  [ "$COST_N_PRICED" = "2" ] || { echo "bad priced $COST_N_PRICED"; return 1; }
+  [ "$COST_N_PRICED_TRANSCRIBED" = "1" ] || { echo "bad priced_transcribed $COST_N_PRICED_TRANSCRIBED"; return 1; }
+  [ "$COST_TOKENS_PRICED" = "12035" ] || { echo "bad tokens $COST_TOKENS_PRICED"; return 1; }
+  echo ok
+}
+expect "(S7-6) RC1 bound: two recovered records for one invocation_id -> one invocation, one figure, no double count" "ok" "$(s7_dup_check)"
+rm -rf "$S7DUPDIR"
+
 # --- cost-ledger-blind-to-background-agents S3 (CL3): the report states, in
 # its own output, why a backgrounded invocation's figure is absent -- printed
 # once per report, only when the unit actually holds one, worded as a

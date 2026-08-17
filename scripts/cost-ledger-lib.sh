@@ -104,6 +104,33 @@
 # gate), so CL6 holds by construction rather than by two call sites agreeing
 # to format the same numbers twice.
 #
+# S7 additions to cost_scan (the second G1's RC group, RC1/RC2/RC5): a
+# `recovered` record (pinned shape: {"ts", "event":"recovered",
+# "invocation_id", "slug", "total_tokens", "token_source":"transcribed"} --
+# no other field) is merged into the SAME per-invocation entry as its
+# start/finish records, keyed by `invocation_id`, never a second entry -- so
+# however many `recovered` records name one invocation, it is still one
+# invocation, priced at most once (RC1). It never carries `phase`, so it
+# never overrides the phase the invocation's own start/finish already set.
+#   COST_N_PRICED_TRANSCRIBED of COST_N_PRICED, the ones with NO host-observed
+#                             total_tokens (an ordinary finish never priced
+#                             them) whose figure came only from a `recovered`
+#                             record instead. An invocation already priced by
+#                             its own finish record is never moved into this
+#                             bucket by a later `recovered` line -- the
+#                             observed figure always wins (S8 pinned
+#                             precedence); this slice does not yet print that
+#                             disagreement, only counts the unambiguous case.
+#   COST_TOKENS_TRANSCRIBED  sum of total_tokens over that same subset -- a
+#                             subset of COST_TOKENS_PRICED, never counted
+#                             twice and never added on top of it.
+# cost_coverage_sentence() appends a further clause -- "N of P priced
+# figure(s) transcribed rather than host-observed (T of TOTAL priced
+# token(s), S %)" -- only when COST_N_PRICED_TRANSCRIBED > 0, so a ledger
+# holding no `recovered` record is byte-identical to before this addition
+# (RC6, CL9). Same sentence, same call sites, so the budget gate inherits
+# this clause the same way it inherited S2's share and phase list.
+#
 # S3 additions to cost_scan (same rules: never a fabricated 0, never a re-parse elsewhere):
 #   COST_MODELS_SPEC / _SLICE / _BUILD / _VERIFY / _UNKNOWN
 #                             comma-separated "model::model_source" pairs, one per distinct
@@ -217,6 +244,16 @@ cost_coverage_sentence() {
   # without touching CV4's own, unrelated formatting.
   local suffix=" -- ${share} % coverage"
   [ -n "$unobserved" ] && suffix="${suffix}; wholly unobserved: ${unobserved}"
+  # S7 (RC1, RC2, RC5): appended, never reworded, and only when at least one
+  # transcribed figure was actually counted -- a ledger with no `recovered`
+  # record produces the identical suffix as before this clause existed
+  # (RC6, CL9). "N %" spacing throughout, per CV4's 0% trap.
+  local pt="${COST_N_PRICED_TRANSCRIBED:-0}" tt="${COST_TOKENS_TRANSCRIBED:-0}" tp="${COST_TOKENS_PRICED:-0}"
+  if [ "$pt" -gt 0 ]; then
+    local tshare=0
+    [ "$tp" -gt 0 ] && tshare=$(( tt * 100 / tp ))
+    suffix="${suffix}; ${pt} of ${p} priced figure(s) transcribed rather than host-observed (${tt} of ${tp} priced token(s), ${tshare} %)"
+  fi
   printf 'based on %s of %s invocations that carry a token figure (%s unpriced, not counted)%s' \
     "$p" "$n" "$u" "$suffix"
 }
@@ -247,7 +284,7 @@ def phase_key:
       (($r.slug // "unknown")) as $slg
       | .slugs[$slg] = 1
       | (if ($slugfilter == "" or $slugfilter == $slg) then .captrip += 1 else . end)
-    elif (($r.event // "") == "start" or ($r.event // "") == "finish") then
+    elif (($r.event // "") == "start" or ($r.event // "") == "finish" or ($r.event // "") == "recovered") then
       (($r.slug // "unknown")) as $slg
       | .slugs[$slg] = 1
       | if ($slugfilter != "" and $slugfilter != $slg) then .
@@ -257,7 +294,7 @@ def phase_key:
                            model:null, model_source:null, ts_start:null, ts_finish:null,
                            cache_read:null, cache_read_present:false,
                            phase_detail:null, refine_passes:null, rework_attribution:null,
-                           status:null}) as $e
+                           status:null, transcribed:false, transcribed_tokens:null}) as $e
           | ( $e
               | if $r.event == "start" then
                   (.start = true)
@@ -285,6 +322,11 @@ def phase_key:
                        (.cache_read_present = true) | (.cache_read = $r.cache_read_tokens)
                      else . end)
                 else . end
+              | if $r.event == "recovered" then
+                  (if (($r|has("total_tokens")) and ($r.total_tokens != null)) then
+                     (.transcribed = true) | (.transcribed_tokens = $r.total_tokens)
+                   else . end)
+                else . end
             ) as $ne
           | .inv[$id] = $ne
         end
@@ -297,6 +339,7 @@ def phase_key:
 | (reduce $entries[] as $e (
      { inv:0, priced:0, unpriced:0, inflight:0, tokens:0,
        unpriced_backgrounded:0, unpriced_no_usage:0, unpriced_truncated:0, unpriced_unstated:0,
+       priced_transcribed:0, tokens_transcribed:0,
        ts_min:null, ts_max:null,
        rework_n:0, rework_priced_n:0, rework_tokens:0, rework_ambiguous:0, rework_list:[],
        cache_n:0, cache_sum:0, cache_denom:0,
@@ -330,6 +373,15 @@ def phase_key:
            | (if $e.value.phase_detail == "rework" then
                 (.rework_priced_n += 1) | (.rework_tokens += $e.value.tokens)
               else . end)
+         elif $e.value.transcribed then
+           # S7 (RC1, RC5): no host-observed figure exists for this
+           # invocation -- its ONLY figure is the recovered one, so it
+           # becomes priced here. An invocation already priced above never
+           # reaches this branch (mutually exclusive `if`/`elif`), so the
+           # observed figure is never displaced by a later `recovered` line.
+           (.priced += 1) | (.tokens += $e.value.transcribed_tokens)
+           | (.byphase[$pk].priced += 1) | (.byphase[$pk].tokens += $e.value.transcribed_tokens)
+           | (.priced_transcribed += 1) | (.tokens_transcribed += $e.value.transcribed_tokens)
          else
            (.unpriced += 1) | (.byphase[$pk].unpriced += 1)
            | (($e.value.status // "")) as $st
@@ -356,6 +408,8 @@ def phase_key:
     "COUNT\tCOST_N_UNPRICED_UNSTATED\t\($agg.unpriced_unstated)",
     "COUNT\tCOST_N_INFLIGHT\t\($agg.inflight)",
     "COUNT\tCOST_TOKENS_PRICED\t\($agg.tokens)",
+    "COUNT\tCOST_N_PRICED_TRANSCRIBED\t\($agg.priced_transcribed)",
+    "COUNT\tCOST_TOKENS_TRANSCRIBED\t\($agg.tokens_transcribed)",
     "COUNT\tCOST_N_REWORK\t\($agg.rework_n)",
     "COUNT\tCOST_N_REWORK_PRICED\t\($agg.rework_priced_n)",
     "COUNT\tCOST_TOKENS_REWORK_PRICED\t\($agg.rework_tokens)",
@@ -417,7 +471,7 @@ for raw in sys.stdin:
         if slugfilter == "" or slugfilter == slg:
             captrip += 1
         continue
-    if event in ("start", "finish"):
+    if event in ("start", "finish", "recovered"):
         slugs[slg] = 1
         if slugfilter != "" and slugfilter != slg:
             continue
@@ -428,7 +482,8 @@ for raw in sys.stdin:
                                 "ts_start": None, "ts_finish": None,
                                 "cache_read": None, "cache_read_present": False,
                                 "phase_detail": None, "refine_passes": None,
-                                "rework_attribution": None, "status": None}
+                                "rework_attribution": None, "status": None,
+                                "transcribed": False, "transcribed_tokens": None}
         if event == "start":
             e["start"] = True
             e["phase"] = r.get("phase") or e["phase"]
@@ -453,6 +508,10 @@ for raw in sys.stdin:
             if "cache_read_tokens" in r and r.get("cache_read_tokens") is not None:
                 e["cache_read_present"] = True
                 e["cache_read"] = r.get("cache_read_tokens")
+        if event == "recovered":
+            if "total_tokens" in r and r.get("total_tokens") is not None:
+                e["transcribed"] = True
+                e["transcribed_tokens"] = r.get("total_tokens")
         inv[invid] = e
         continue
     skipped += 1
@@ -460,6 +519,7 @@ for raw in sys.stdin:
 agg = {"inv": 0, "priced": 0, "unpriced": 0, "inflight": 0, "tokens": 0,
        "unpriced_backgrounded": 0, "unpriced_no_usage": 0,
        "unpriced_truncated": 0, "unpriced_unstated": 0,
+       "priced_transcribed": 0, "tokens_transcribed": 0,
        "ts_min": None, "ts_max": None,
        "rework_n": 0, "rework_priced_n": 0, "rework_tokens": 0, "rework_ambiguous": 0}
 rework_list = []
@@ -494,6 +554,19 @@ for invid, e in inv.items():
             if e["phase_detail"] == "rework":
                 agg["rework_priced_n"] += 1
                 agg["rework_tokens"] += e["tokens"]
+        elif e["transcribed"]:
+            # S7 (RC1, RC5): no host-observed figure exists for this
+            # invocation -- its ONLY figure is the recovered one, so it
+            # becomes priced here. An invocation already priced above never
+            # reaches this branch (the `if e["priced"]` above already took
+            # it), so the observed figure is never displaced by a later
+            # `recovered` line.
+            agg["priced"] += 1
+            agg["tokens"] += e["transcribed_tokens"]
+            byphase[pk]["priced"] += 1
+            byphase[pk]["tokens"] += e["transcribed_tokens"]
+            agg["priced_transcribed"] += 1
+            agg["tokens_transcribed"] += e["transcribed_tokens"]
         else:
             agg["unpriced"] += 1
             byphase[pk]["unpriced"] += 1
@@ -526,6 +599,8 @@ out = [
     f"COUNT\tCOST_N_UNPRICED_UNSTATED\t{agg['unpriced_unstated']}",
     f"COUNT\tCOST_N_INFLIGHT\t{agg['inflight']}",
     f"COUNT\tCOST_TOKENS_PRICED\t{agg['tokens']}",
+    f"COUNT\tCOST_N_PRICED_TRANSCRIBED\t{agg['priced_transcribed']}",
+    f"COUNT\tCOST_TOKENS_TRANSCRIBED\t{agg['tokens_transcribed']}",
     f"COUNT\tCOST_N_REWORK\t{agg['rework_n']}",
     f"COUNT\tCOST_N_REWORK_PRICED\t{agg['rework_priced_n']}",
     f"COUNT\tCOST_TOKENS_REWORK_PRICED\t{agg['rework_tokens']}",
@@ -611,6 +686,8 @@ _cost_reset_scan_vars() {
   COST_N_UNPRICED_UNSTATED=0
   COST_N_INFLIGHT=0
   COST_TOKENS_PRICED=0
+  COST_N_PRICED_TRANSCRIBED=0
+  COST_TOKENS_TRANSCRIBED=0
   COST_N_INVOCATIONS_SPEC=0; COST_N_PRICED_SPEC=0; COST_N_UNPRICED_SPEC=0
   COST_N_INFLIGHT_SPEC=0; COST_TOKENS_PRICED_SPEC=0
   COST_N_INVOCATIONS_SLICE=0; COST_N_PRICED_SLICE=0; COST_N_UNPRICED_SLICE=0
@@ -688,6 +765,8 @@ $k"
     COST_N_UNPRICED_UNSTATED) COST_N_UNPRICED_UNSTATED="$v" ;;
     COST_N_INFLIGHT) COST_N_INFLIGHT="$v" ;;
     COST_TOKENS_PRICED) COST_TOKENS_PRICED="$v" ;;
+    COST_N_PRICED_TRANSCRIBED) COST_N_PRICED_TRANSCRIBED="$v" ;;
+    COST_TOKENS_TRANSCRIBED) COST_TOKENS_TRANSCRIBED="$v" ;;
     COST_N_INVOCATIONS_SPEC) COST_N_INVOCATIONS_SPEC="$v" ;;
     COST_N_PRICED_SPEC) COST_N_PRICED_SPEC="$v" ;;
     COST_N_UNPRICED_SPEC) COST_N_UNPRICED_SPEC="$v" ;;
