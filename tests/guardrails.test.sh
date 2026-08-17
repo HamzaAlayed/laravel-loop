@@ -1225,6 +1225,123 @@ s8_none_conflicts() {
 expect "(S8-4) RC6: no recovered records at all -> COST_N_CONFLICTS stays 0" "0" "$(s8_none_conflicts)"
 rm -rf "$S8NONEDIR"
 
+# ---------------------------------------------------------------------------
+# cost-ledger-blind-to-background-agents S9 (spec.md RC1, RC4, RC7 -- second
+# G1, RC recovery group) -- scripts/record-recovered-cost.sh, the only
+# WRITER of an event:"recovered" line. S7/S8 above taught the reader; this
+# is the entry point that actually puts one into a real ledger. Standalone
+# CLI, never wired into hooks/hooks.json, never reachable from a tool
+# payload -- exercised here by invoking the script directly, exactly the way
+# a human or an agent would type it.
+echo "record-recovered-cost.sh (RC1, RC4, RC7 -- spec.md, cost-ledger-blind-to-background-agents S9)"
+
+recover() { # $1 CLAUDE_PROJECT_DIR, then the script's own args
+  local dir="$1"; shift
+  CLAUDE_PROJECT_DIR="$dir" bash "$SCRIPTS/record-recovered-cost.sh" "$@"
+}
+recover_exit() { # $1 CLAUDE_PROJECT_DIR, then the script's own args
+  local dir="$1"; shift
+  CLAUDE_PROJECT_DIR="$dir" bash "$SCRIPTS/record-recovered-cost.sh" "$@" >/dev/null 2>&1
+  echo $?
+}
+
+# Reads the recorded event:"recovered" line(s) for one invocation_id and
+# checks: exactly one such line exists, its slug/total_tokens/token_source
+# match, and it carries the pinned field set and NO other field.
+recovered_fields_ok() { # $1 ledger $2 invocation_id $3 slug $4 tokens
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
+import json, sys
+
+path, invid, slug, tokens = sys.argv[1:5]
+tokens = int(tokens)
+found = None
+count = 0
+for line in open(path):
+    line = line.strip()
+    if not line:
+        continue
+    r = json.loads(line)
+    if r.get("event") == "recovered" and r.get("invocation_id") == invid:
+        count += 1
+        found = r
+if count != 1:
+    print(f"bad count {count}")
+    sys.exit(0)
+if found.get("slug") != slug:
+    print("bad slug " + str(found.get("slug")))
+    sys.exit(0)
+if found.get("total_tokens") != tokens:
+    print("bad tokens " + str(found.get("total_tokens")))
+    sys.exit(0)
+if found.get("token_source") != "transcribed":
+    print("bad token_source " + str(found.get("token_source")))
+    sys.exit(0)
+if set(found.keys()) != {"ts", "event", "invocation_id", "slug", "total_tokens", "token_source"}:
+    print("bad keys " + ",".join(sorted(found.keys())))
+    sys.exit(0)
+print("ok")
+PY
+}
+
+# Fixture: two backgrounded (async_launched) invocations under the same
+# unit. s9c1 is used for the happy path / exactly-once boundary; s9c2 is
+# reserved, present in the ledger throughout, for the failure-mode cases
+# below -- so a refusal in those cases is provably about the argument under
+# test, never a side effect of "unknown invocation_id" leaking in.
+S9DIR="$(mktemp -d)"
+mkdir -p "$S9DIR/.claude"
+S9LEDGER="$S9DIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s9c1","slug":"s9-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s9c1","slug":"s9-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s9c2","slug":"s9-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s9c2","slug":"s9-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$S9LEDGER"
+
+# (S9-1) RC1: valid id + valid figure -> exactly one recovered line, pinned
+# fields present, token_source "transcribed".
+expect "(S9-1) RC1: valid id + valid figure -> exactly one recovered line, pinned fields, token_source transcribed" "0 ok" \
+  "$(recover_exit "$S9DIR" --invocation-id s9c1 --total-tokens 11035) $(recovered_fields_ok "$S9LEDGER" s9c1 s9-fixture 11035)"
+
+# (S9-2) RC1 exactly-once boundary: the same command run twice -> still
+# exactly one line, mkdir "$FINISHED_DIR/_recovered/<id>" refuses the repeat.
+expect "(S9-2) RC1 bound: the same command run twice -> still exactly one recovered line" "0 ok" \
+  "$(recover_exit "$S9DIR" --invocation-id s9c1 --total-tokens 11035) $(recovered_fields_ok "$S9LEDGER" s9c1 s9-fixture 11035)"
+
+# (S9-3) RC4: invocation_id absent from the ledger -> nothing written, exit 0.
+S9_SNAP3="$(cat "$S9LEDGER")"
+expect "(S9-3) RC4: invocation_id absent from the ledger -> nothing written, exit 0" "0 yes" \
+  "$(recover_exit "$S9DIR" --invocation-id nope-not-there --total-tokens 42) $([ "$S9_SNAP3" = "$(cat "$S9LEDGER")" ] && echo yes || echo no)"
+
+# (S9-4) RC4: non-numeric token figure -> nothing written, exit 0.
+S9_SNAP4="$(cat "$S9LEDGER")"
+expect "(S9-4) RC4: non-numeric token figure -> nothing written, exit 0" "0 yes" \
+  "$(recover_exit "$S9DIR" --invocation-id s9c2 --total-tokens notanumber) $([ "$S9_SNAP4" = "$(cat "$S9LEDGER")" ] && echo yes || echo no)"
+
+# (S9-5) RC4: missing required argument (--total-tokens omitted) -> nothing
+# written, exit 0.
+S9_SNAP5="$(cat "$S9LEDGER")"
+expect "(S9-5) RC4: missing required argument -> nothing written, exit 0" "0 yes" \
+  "$(recover_exit "$S9DIR" --invocation-id s9c2) $([ "$S9_SNAP5" = "$(cat "$S9LEDGER")" ] && echo yes || echo no)"
+
+# (S9-6) RC4, v0.2: LARAVEL_LOOP_COST_LEDGER=0 -> nothing written, exit 0.
+S9_SNAP6="$(cat "$S9LEDGER")"
+S9_CASE6_EXIT="$(CLAUDE_PROJECT_DIR="$S9DIR" LARAVEL_LOOP_COST_LEDGER=0 bash "$SCRIPTS/record-recovered-cost.sh" --invocation-id s9c2 --total-tokens 999 >/dev/null 2>&1; echo $?)"
+expect "(S9-6) RC4/v0.2: LARAVEL_LOOP_COST_LEDGER=0 -> nothing written, exit 0" "0 yes" \
+  "$S9_CASE6_EXIT $([ "$S9_SNAP6" = "$(cat "$S9LEDGER")" ] && echo yes || echo no)"
+
+rm -rf "$S9DIR"
+
+# (S9-7) RC7: hooks/hooks.json names no recovery script, and
+# record-cost-event.sh is unchanged by this slice -- the proof is a byte
+# comparison against the committed tree, not a paraphrase.
+expect "(S9-7) RC7: hooks.json names no recovery script; record-cost-event.sh untouched by this slice" "yes" \
+  "$(cd "$ROOT" \
+     && [ -z "$(git diff -- scripts/record-cost-event.sh)" ] \
+     && [ -z "$(git diff -- hooks/hooks.json)" ] \
+     && ! grep -q 'record-recovered-cost' hooks/hooks.json \
+     && echo yes || echo no)"
+
 # --- cost-ledger-blind-to-background-agents S3 (CL3): the report states, in
 # its own output, why a backgrounded invocation's figure is absent -- printed
 # once per report, only when the unit actually holds one, worded as a
