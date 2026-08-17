@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # shellcheck disable=SC2034
+# laravel-loop:sourced-library
 # SC2034 ("appears unused") is disabled file-wide deliberately: every
 # COST_* variable this file sets is this file's own public output --
 # consumed by scripts/cost-report.sh and, per slices.md's pinned interface,
