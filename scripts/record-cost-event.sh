@@ -103,10 +103,13 @@
 # swapped into place with `mv`, an atomic rename on a local filesystem. A
 # reader that opens the ledger mid-swap gets the pre-eviction file or the
 # post-eviction file, in full, never a truncated or empty one. The eviction
-# loop re-checks the line count a bounded number of times before releasing
-# the lock, so a burst of appends that lands during the trim gets caught up
-# rather than silently re-growing the file past cap the moment the lock
-# clears.
+# loop re-checks the line count until it genuinely observes the file at or
+# under cap (S5, spec.md H2-H5 convergence gap) rather than giving up after a
+# fixed number of attempts -- a bounded retry converges only if concurrent
+# appends land slower than the loop can absorb them, which a high enough
+# arrival rate defeats (spike-case-a.md H2). Looping here costs nothing to
+# any other appender: this invocation already holds the lock and is the only
+# one doing work; every other appender still never waits on it (L7 above).
 #
 # The ledger being absent is normal, not an error (H5): every append below
 # already does `mkdir -p` + `>>`, which recreates a deleted file from
@@ -260,9 +263,15 @@ append_and_evict() {
   printf '%s\n' "$line" >> "$OUT" 2>/dev/null
 
   if mkdir "$EVICT_LOCK" 2>/dev/null; then
-    local attempt=0 count tmp
-    while [ "$attempt" -lt 5 ]; do
-      attempt=$((attempt + 1))
+    local count tmp
+    # Loop until genuinely converged (count <= MAX_LINES observed fresh), not
+    # a fixed attempt count. A bounded retry gives up while still over cap
+    # whenever concurrent appends land faster than a few checks can absorb
+    # (spike-case-a.md H2); every other break below is a real I/O condition,
+    # never an arbitrary attempt cap, and never a new configurable (A9) --
+    # this evictor is the sole lock holder, so looping here costs nothing to
+    # any other appender (L7: they never wait on this, see the poll above).
+    while :; do
       count="$(wc -l < "$OUT" 2>/dev/null | tr -d ' ')"
       case "$count" in ''|*[!0-9]*) break ;; esac
       [ "$count" -le "$MAX_LINES" ] && break

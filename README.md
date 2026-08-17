@@ -164,7 +164,7 @@ They answer different questions. Reach for the **Guild** when you want a named s
 ## Development
 
 ```bash
-bash tests/guardrails.test.sh   # 421 cases, zero dependencies
+bash tests/guardrails.test.sh   # 423 cases, zero dependencies
 shellcheck scripts/*.sh
 ```
 

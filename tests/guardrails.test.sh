@@ -434,6 +434,56 @@ expect "eviction under concurrency: ledger never observed at 0 lines while polli
   "$(grep -qx '0' "$POLL_LOG" && echo no || echo yes)"
 rm -f "$POLL_LOG"
 
+# -- (f) convergence gap (S5, spec.md H2-H5): a lock-loser never retries, and
+# the pre-fix winner gave up after a fixed number of attempts regardless of
+# whether the file was still over cap -- a real defect in
+# append_and_evict()'s convergence guarantee (spike-case-a.md H2), not a
+# platform-dialect one (H1, refuted 20/20). Ordinary concurrent pressure does
+# not reproduce it (spike-case-a.md #2, 20/20 trials settled at cap), so this
+# constructs the one dimension that does: a sustained, fast stream of new
+# lines landing throughout the winner's own eviction work -- far more than a
+# handful of checks could ever absorb. The stream writes directly (bypassing
+# the hook) but represents exactly what every concurrent appender's own
+# unconditional `>>` does (L7); the single real hook invocation below is what
+# exercises append_and_evict()'s own convergence loop under test.
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
+CONV_CAP=15
+CONV_WRITER_LINES=20000
+(
+  n=0
+  while [ "$n" -lt "$CONV_WRITER_LINES" ]; do
+    printf '{"raw":%d}\n' "$n" >> "$LEDGER"
+    n=$((n + 1))
+  done
+) &
+CONV_WRITER_PID=$!
+LARAVEL_LOOP_COST_MAX_LINES=$CONV_CAP \
+  cost "$(finish_json loop-build "toolu-conv-1" "d" "" "sess-conv" completed 1 1 "")" >/dev/null
+wait "$CONV_WRITER_PID" 2>/dev/null
+expect "eviction convergence: a sustained concurrent stream still settles at or under cap once it finishes" "yes" \
+  "$([ "$(wc -l < "$LEDGER" | tr -d ' ')" -le "$CONV_CAP" ] && echo yes || echo no)"
+
+# -- (g) L7 regression guard (S5): with the evict lock held by another
+# process for far longer than any appender should ever wait, an append still
+# completes -- its own line lands, and its wall clock does not scale with how
+# long the lock stays held. GREEN before and after this slice's fix: it
+# proves the fix did not cost L7, not that the fix works (that is case (f)).
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
+L7_LOCK="$COSTDIR/.claude/loop-cost-evict.lock"
+mkdir -p "$COSTDIR/.claude"
+mkdir "$L7_LOCK"
+L7_HOLD_SECONDS=5
+( sleep "$L7_HOLD_SECONDS"; rmdir "$L7_LOCK" ) &
+L7_HOLDER_PID=$!
+SECONDS=0
+cost "$(finish_json loop-build "toolu-l7-1" "d" "" "sess-l7" completed 1 1 "")" >/dev/null
+L7_ELAPSED="$SECONDS"
+wait "$L7_HOLDER_PID" 2>/dev/null
+expect "L7: an append lands its line while the evict lock is held, and its own wall clock stays well under the hold time" "yes yes" \
+  "$(grep -q toolu-l7-1 "$LEDGER" && echo yes || echo no) $([ "$L7_ELAPSED" -lt "$L7_HOLD_SECONDS" ] && echo yes || echo no)"
+
 # -- (c) `.claude/loop-cost.jsonl` is git-ignored, and a fixture repo shows no
 # ledger (or its S3/S4 sidecar state) in `git status` after events (H4).
 GITFIX="$(mktemp -d)"
