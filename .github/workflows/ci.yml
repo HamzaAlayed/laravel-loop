@@ -16,10 +16,7 @@ jobs:
           shellcheck -S warning scripts/*.sh
 
       - name: scripts are executable
-        run: |
-          for f in scripts/*.sh tests/*.sh; do
-            [ -x "$f" ] || { echo "not executable: $f"; exit 1; }
-          done
+        run: scripts/check-script-modes.sh
 
       - name: guardrail tests
         run: bash tests/guardrails.test.sh
