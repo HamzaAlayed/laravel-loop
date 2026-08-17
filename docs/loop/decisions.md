@@ -169,3 +169,40 @@ Instead: one rule, written once, read by both sides, with a twelfth file under `
 accepted as its price. Note that `ship-observe-automation` had *declined* an executable-bit gate
 on the grounds that CI already covered it — the premise this unit's twelve red runs falsified,
 which is the only reason the question was reopened.
+
+## Second G1: close the eviction convergence gap, fix case B's fixture, add a macOS job (2026-08-17)
+
+Decided after four read-only spikes, one recorded decision per case as A3 requires:
+
+- **Case A** — close the convergence gap in `scripts/record-cost-event.sh`'s `append_and_evict()`.
+  The spike **refuted** a platform cause (20/20 trials settled at cap across Ubuntu 22.04/24.04,
+  bash 5.1/5.2, and 10 vs 2 vCPUs, matching macOS), and established by *reading* that a lock-loser
+  never retries while the winner gives up after five attempts — so the ledger's declared cap has no
+  convergence guarantee under enough concurrent append pressure. The test caught a real defect;
+  CI's contention merely exposed it once.
+- **Case B** — the case is wrong, not the code. Fix the fixture to force shellcheck's absence
+  portably (discover where it actually resolves and exclude that directory) instead of allow-listing
+  `/usr/bin:/bin:/usr/sbin:/sbin`, which is precisely where apt installs it. `ship-check.sh` unchanged.
+- **The contract** — two-directional, enforced by adding `macos-latest` (arm64) as a second job.
+  `Bash 3.2.57(1)-release` and arm64 both exact-match the maintainer's host, per an
+  `actions/runner-images` manifest read at a pinned commit.
+
+This forecloses:
+- **Loosening or removing case A's assertion.** It guards a real, non-platform-specific property —
+  the ledger stays at or under its declared cap — so weakening it discards the only warning that the
+  property can be violated at all.
+- **Changing `ship-check.sh` for case B.** No observation shows a defect in `gate2_shellcheck`: with
+  shellcheck genuinely removed it reads `not-run` and the verdict holds, corroborated on the *real*
+  runner by the sibling gate-1 case passing on the same run that failed case B.
+- **Treating case B's red as evidence against the not-run/hold safety property.** The property was
+  checked separately from the case precisely to prevent that conflation, and it holds on Linux.
+- **Reading S4's citation as coverage.** A manifest documents what an image ships, not that the suite
+  passes there. Only a real run is evidence, and the images roll, so the OS point-version is a moving
+  target.
+- **Establishing case A's failure rate before fixing it** — considered, not taken. The defect is
+  established by reading; a rate would say how often it bites, not whether the code is wrong.
+- **Deferring the platform job until after the two fixes** — considered, not taken. The contract was
+  approved at G0 contingent on feasibility, and feasibility cleared.
+
+Instead: two fixes in two different artifacts, one per case, plus a second job whose citation's own
+limit is recorded alongside it.
