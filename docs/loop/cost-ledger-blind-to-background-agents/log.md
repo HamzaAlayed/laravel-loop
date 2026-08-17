@@ -131,3 +131,49 @@ definition. No pass/fail verdict against that target is printed here.
   count: 0 of 15 invocation(s) marked rework
   token share: unavailable (no priced invocations are marked rework)
 
+
+---
+
+## Update — 2026-08-17: DC5 exercised, DC4 partially, S11's condition met
+
+Recorded after the `ship-gate-blind-to-ci` unit, which ran entirely through backgrounded lanes and
+so exercised this unit's subject on itself.
+
+**All seven of that unit's agent invocations landed unpriced.** `record-cost-event.sh` wrote a
+`finish` carrying `status: "async_launched"` seconds after each launch while the agent ran for
+minutes — the spec invocation's records are 4 seconds apart for a run that took 209. Exactly the
+blind spot this unit shipped v0.6.0 to describe, reproduced on the unit that followed it.
+
+**DC5 — exercised, pending the maintainer's confirmation.** All seven figures were transcribed by
+hand with `scripts/record-recovered-cost.sh`, each `--total-tokens` read from that invocation's own
+completion notification and each `--invocation-id` from the same block's tool-use id. Coverage moved
+0 % → 100 % and the report labels all seven `transcribed rather than host-observed`. One caveat kept
+explicit rather than glossed: DC5's wording is "the figure **the human** saw in that agent's
+completion notification", and those notifications were read by the orchestrating agent, not by the
+maintainer directly. Whether that satisfies DC5 as written is the maintainer's call, not this
+update's to assert.
+
+**DC4 — the run now exists; the recognition has not been given.** A real `/loop` run using
+background lanes has happened. DC4 additionally requires that the coverage `/cost` prints "matches
+what a human who watched that run believes", and no such judgement has been recorded. Unchanged
+from open.
+
+**What the by-eye check actually found.** It did not merely pass. A transcribed figure restores the
+total and the coverage share, and the report still resolves the **phase** for each recovered
+invocation — but model-per-phase then reads `unavailable` for all four phases, and the Slices table
+reads `no slice attributed to any priced invocation`, even though `slice: S1`–`S4` sit in the very
+records the report joined against to get the phase. Captured as its own intent at
+`docs/loop/recovered-figure-drops-slice-and-model/`.
+
+**A second gap, found the same way.** When a backgrounded agent is resumed with `SendMessage`, the
+resumed run carries a tool-use id the ledger has no record of, because `hooks.json` matches
+`Agent|Task` and a `SendMessage` is neither. `record-recovered-cost.sh` correctly refuses it under
+RC4, so the resumed run's figure has to be transcribed against the original launch id — and the
+tokens spent on the killed first attempt are reported nowhere, by anything. Written up in
+`docs/loop/conventions.md`.
+
+**S11's revisit condition is met, and the evidence argues against building it as it stands.** The
+condition was "after one transcription has been done by hand and checked by eye." Seven have been.
+The check found the record shape above, so automating transcription now would multiply a figure
+that drops two dimensions rather than settle it. S11 stays held — on firmer grounds than when it
+was held for being premature.
