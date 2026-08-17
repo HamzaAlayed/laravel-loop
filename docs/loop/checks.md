@@ -47,6 +47,38 @@ passes there — only a real run on that platform is.
 compares `VERSION`, `plugin.json`'s version, and `marketplace.json`'s version. A release can
 push with all three disagreeing and every pushed-commit check still concludes success.
 
+## Claimed platforms
+
+The repository's own statement of which platforms the suite is claimed to hold on, and what
+produces the evidence for each claim, so a future `runs-on:` added without a matching row here
+is caught rather than passing unnoticed.
+
+- **`ubuntu-latest` is claimed.** The thing that produces evidence for this claim is the
+  `guardrails` job's own `guardrail tests` step, above — a real run of the suite on that
+  platform, on the pushed commit.
+- **`macos-latest` is claimed.** The thing that produces evidence for this claim is the
+  `guardrails-macos` job's own `guardrail tests (macos)` step, above — a real run of the suite
+  on that platform, on the pushed commit.
+
+Nothing else is claimed. In particular, the maintainer's own local host (macOS 26.6.1, arm64,
+`GNU bash, version 3.2.57(1)-release`) is **not** a third claimed platform — it is what the
+`macos-latest` job APPROXIMATES: bash version exact, architecture exact, OS point-version close
+and moving (see below). A claim resting on that host alone would have only a person's memory
+behind it, which is exactly the platform-claimed-with-nothing-behind-it failure this section
+exists to avoid.
+
+**The limit travels with the claim, not as a footnote:** a citable image manifest is not proof
+that the suite passes there — see `spike-platforms.md` for the pinned manifest commits this was
+checked against. A manifest documents what software an image's build installed, nothing about
+how this suite actually behaves under that bash, that coreutils, and that `PATH` ordering. Only
+a real run of the suite on that platform — the job step named above, reporting its own pass/fail
+totals — is what produces evidence for a claim. And `macos-latest` is a rolling image: its OS
+point-version moves on GitHub's own update cadence and is not a fixed contract, so even the
+manifest citation is a moving target, not a stable one.
+
+Neither platform above is described as covered, verified, guaranteed, or proven. Each is
+claimed, with its job step named as the thing that produces the evidence for that claim.
+
 ## What runs locally at G3
 
 `scripts/ship-check.sh`, run by hand (or via `/ship`) before tagging a release. Three declared

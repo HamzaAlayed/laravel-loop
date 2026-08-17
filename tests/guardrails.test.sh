@@ -3922,6 +3922,35 @@ expect "4: doc names all six affected versions and records the earliest run's ca
   "missing-versions 0, names-run-id yes, says-unknown yes" \
   "missing-versions $CHECKS_VERSION_MISSING, names-run-id $(grep -qF '31696279581' "$CHECKSMD" && echo yes || echo no), says-unknown $(grep -qi 'unknown' "$CHECKSMD" && echo yes || echo no)"
 
+# -- 5: every `runs-on:` value in ci.yml appears in docs/loop/checks.md's own
+# claimed-platforms statement, tied to the exact "<platform> is claimed"
+# phrasing rather than to bare substring presence (both platform labels
+# already appear elsewhere in the doc as job headers, so a naked substring
+# check would pass without the statement existing at all). Iterated over the
+# YAML, not hardcoded, so a third `runs-on:` added later without a matching
+# row fails this the moment it lands.
+CLAIMED_PLATFORM_MISSING=0
+CLAIMED_PLATFORM_CHECKED=0
+while IFS= read -r runs_on_value; do
+  [ -z "$runs_on_value" ] && continue
+  CLAIMED_PLATFORM_CHECKED=$((CLAIMED_PLATFORM_CHECKED + 1))
+  printf '%s' "$CHECKSMD_FLAT" | grep -qF "${runs_on_value} is claimed" || CLAIMED_PLATFORM_MISSING=$((CLAIMED_PLATFORM_MISSING + 1))
+done <<EOF
+$(grep -E '^[[:space:]]*runs-on: ' "$CIYML" | sed -E 's/^[[:space:]]*runs-on: //')
+EOF
+expect "5: every ci.yml runs-on value appears in docs/loop/checks.md's claimed-platforms statement, iterated" \
+  "checked-some 1, missing 0" \
+  "checked-some $([ "$CLAIMED_PLATFORM_CHECKED" -gt 0 ] && echo 1 || echo 0), missing $CLAIMED_PLATFORM_MISSING"
+
+# -- 6: the statement carries, per claimed platform, a named evidence
+# producer, AND the citation-is-not-proof limit, AND the rolling-image
+# caveat -- one conjoined case over the flattened doc, the same shape as
+# case 3 above, because a single case covering both directions of the
+# mapping would keep passing while half of it drifted.
+expect "6: claimed-platforms statement names each platform's evidence producer, the citation-is-not-proof limit, and the rolling-image caveat" \
+  "ubuntu-producer yes, macos-producer yes, citation-not-proof yes, rolling-image yes" \
+  "ubuntu-producer $(printf '%s' "$CHECKSMD_FLAT" | grep -qi 'ubuntu-latest is claimed' && printf '%s' "$CHECKSMD_FLAT" | grep -qi 'guardrails job.s own guardrail tests step' && echo yes || echo no), macos-producer $(printf '%s' "$CHECKSMD_FLAT" | grep -qi 'macos-latest is claimed' && printf '%s' "$CHECKSMD_FLAT" | grep -qi 'guardrails-macos job.s own guardrail tests (macos) step' && echo yes || echo no), citation-not-proof $(printf '%s' "$CHECKSMD_FLAT" | grep -qi 'citable image manifest is not proof' && echo yes || echo no), rolling-image $(printf '%s' "$CHECKSMD_FLAT" | grep -qi 'rolling image' && echo yes || echo no)"
+
 # ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
 # file. The harness's actual total is only known once every case above has
