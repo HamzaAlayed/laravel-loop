@@ -59,3 +59,23 @@ Taught after: the cost ledger's 334-case suite was green for three days while
 stdin and never exercise the registration path. Installing from a marketplace snapshots the
 plugin, so a repo-side `hooks.json` change needs a reinstall *and* a restart before it is in
 the loop.
+
+## A resumed invocation is a different invocation to the ledger
+
+When a background agent is resumed with `SendMessage`, the resumed run carries a new tool-use id
+the cost ledger has no record of — `hooks.json` matches `Agent|Task`, and a `SendMessage` is
+neither. Attribute the resumed run's figure to the *original* launch's id, and know that the
+killed attempt's own tokens are reported nowhere, by anything.
+
+Taught after: the slicing agent in `ship-gate-blind-to-ci` was killed by a machine sleep event
+and resumed. `record-recovered-cost.sh` refuses an id the ledger never saw (RC4), so the resumed
+run's figure had to be transcribed against the original launch id.
+
+## An agent killed mid-response may have written nothing
+
+Before resuming or relaunching a background agent that died, look at the disk. Its last words are
+not evidence that its output exists.
+
+Taught after: the same sleep event killed the slicing agent immediately after it reported "Now
+writing the slice list." `slices.md` did not exist. Resuming into an assumed half-file and
+relaunching without checking are both wrong for the same reason.

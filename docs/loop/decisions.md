@@ -136,3 +136,36 @@ Instead: a human or an orchestrating agent transcribes a figure by hand, one inv
 time, or does not — RC6 makes both outcomes equally correct, and a run with zero transcriptions
 looks exactly as it always has. S11's automatic wiring stays a live, separate question for a
 future gate.
+
+## G0: narrow the mode check, keep ship-check's gate set at three (2026-08-17)
+
+Decided: fix the twelve-run CI failure by **narrowing** the executable-bit check rather than by
+satisfying it. A file matched by `scripts/*.sh` or `tests/*.sh` is a library if one of its first
+20 lines is exactly `# laravel-loop:sourced-library`; libraries are committed `100644`, programs
+`100755`. Parity between the two check sets is guaranteed by both calling one shared program,
+`scripts/check-script-modes.sh`, and asserted by harness cases that execute `ci.yml`'s own
+extracted `run:` body. `scripts/ship-check.sh` is untouched.
+
+This forecloses:
+- **`chmod +x` on a sourced library** — the one-line fix. Rejected because it makes the
+  repository assert that a file which must never be run directly is runnable, and leaves the rule
+  unstated, so the next library added is classified by imitation. A fast close bought with
+  folklore.
+- **A fourth `ship-check` gate for the mode rule** — rejected: the declared count would grow
+  every time a CI step is added, and the header's "exactly three, hard-coded" claim, README, and
+  `ship-observe-automation`'s S1/S6 would all need restating. The mode rule reaches the G3 verdict
+  anyway, indirectly, through gate 1's harness — the same file CI runs.
+- **Making `ship-check` merely state its blind spot** — rejected as a documentation fix to
+  something six releases had already read past.
+- **Keeping the rule inline in `ci.yml`** with the harness extracting and executing it, adding no
+  twelfth script — rejected because two copies of a rule can only *promise* agreement, while one
+  shared program makes it structural. This repository's own precedent, stated in
+  `cost-ledger-lib.sh`'s header for the same reason.
+- **Establishing the earliest (v0.2.0) run's cause** — scoped out, not attempted. Its surviving
+  log yields no filename and it predates the file that failed every later run. Recorded as
+  `unknown`, never inferred from a later run's cause.
+
+Instead: one rule, written once, read by both sides, with a twelfth file under `scripts/`
+accepted as its price. Note that `ship-observe-automation` had *declined* an executable-bit gate
+on the grounds that CI already covered it — the premise this unit's twelve red runs falsified,
+which is the only reason the question was reopened.
