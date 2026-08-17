@@ -20,3 +20,19 @@ jobs:
 
       - name: guardrail tests
         run: bash tests/guardrails.test.sh
+
+  guardrails-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck (macos)
+        run: |
+          brew install shellcheck
+          shellcheck -S warning scripts/*.sh
+
+      - name: scripts are executable (macos)
+        run: scripts/check-script-modes.sh
+
+      - name: guardrail tests (macos)
+        run: bash tests/guardrails.test.sh
