@@ -3770,6 +3770,72 @@ expect "4: structural -- the step invokes scripts/check-script-modes.sh and reta
   "$(printf '%s' "$CI_STEP_BODY" | grep -qF 'scripts/check-script-modes.sh' && echo yes || echo no) $(printf '%s' "$CI_STEP_BODY" | grep -qF '[ -x' && echo yes || echo no)"
 
 # ---------------------------------------------------------------------------
+echo
+echo "docs/loop/checks.md (S4 -- spec.md A3, A6, ship-gate-blind-to-ci)"
+
+CHECKSMD="$ROOT/docs/loop/checks.md"
+
+# Flattened, markdown-stripped copy of the doc for multi-word phrase matching:
+# newlines collapsed to spaces (so a phrase wrapped across two source lines by
+# the editor's line width still reads as one phrase, exactly as markdown
+# renders it), backticks and bold markers (`` ` `` and `**`) removed. A single
+# literal `*` (as in `scripts/*.sh`) is left alone -- only the doubled bold
+# marker is stripped.
+CHECKSMD_FLAT="$(tr '\n' ' ' < "$CHECKSMD" | sed -e 's/`//g' -e 's/\*\*//g')"
+
+# -- 1: every '- name:' in ci.yml's guardrails job, extracted from the YAML,
+# appears in docs/loop/checks.md. Iterated, not hardcoded, so a future fourth
+# step fails this the moment it lands without a matching row here. --
+CHECKS_STEP_MISSING=0
+CHECKS_STEP_CHECKED=0
+while IFS= read -r checks_step_name; do
+  [ -z "$checks_step_name" ] && continue
+  CHECKS_STEP_CHECKED=$((CHECKS_STEP_CHECKED + 1))
+  printf '%s' "$CHECKSMD_FLAT" | grep -qF "$checks_step_name" || CHECKS_STEP_MISSING=$((CHECKS_STEP_MISSING + 1))
+done <<EOF
+$(grep -E '^      - name: ' "$CIYML" | sed -E 's/^      - name: //')
+EOF
+expect "1: every ci.yml guardrails step name appears in docs/loop/checks.md, iterated" \
+  "checked-some 1, missing 0" \
+  "checked-some $([ "$CHECKS_STEP_CHECKED" -gt 0 ] && echo 1 || echo 0), missing $CHECKS_STEP_MISSING"
+
+# -- 2: all three gate names, extracted from ship-check.sh's own header list
+# (the numbered "1./2./3." lines, not the wrapped continuation lines under
+# gate 3), appear in docs/loop/checks.md. --
+SHIPCHECK="$ROOT/scripts/ship-check.sh"
+CHECKS_GATE_MISSING=0
+CHECKS_GATE_CHECKED=0
+while IFS= read -r checks_gate_name; do
+  [ -z "$checks_gate_name" ] && continue
+  CHECKS_GATE_CHECKED=$((CHECKS_GATE_CHECKED + 1))
+  printf '%s' "$CHECKSMD_FLAT" | grep -qF "$checks_gate_name" || CHECKS_GATE_MISSING=$((CHECKS_GATE_MISSING + 1))
+done <<EOF
+$(grep -E '^#   [0-9]+\. ' "$SHIPCHECK" | sed -E 's/^#   [0-9]+\. //; s/ --$//')
+EOF
+expect "2: all three ship-check.sh header gate names appear in docs/loop/checks.md" \
+  "checked 3, missing 0" \
+  "checked $CHECKS_GATE_CHECKED, missing $CHECKS_GATE_MISSING"
+
+# -- 3: the document names version-agreement as absent from the pushed-commit
+# side, names gate 1's harness as the only (indirect) path by which the mode
+# rule reaches the G3 verdict, and states that indirection as OQ2's chosen
+# cost rather than an oversight. One case, three conjoined facts about the
+# same paragraph -- splitting them would let one drift without the others. --
+expect "3: doc names version-agreement as absent from pushed-commit, names the mode rule's only path to the verdict as indirect via gate 1's harness, and calls that OQ2's chosen cost" \
+  "absent-version yes, indirect-via-gate1 yes, oq2-chosen-cost yes" \
+  "absent-version $(printf '%s' "$CHECKSMD_FLAT" | grep -qF 'Absent from this side:' && printf '%s' "$CHECKSMD_FLAT" | grep -qi 'version consistency' && echo yes || echo no), indirect-via-gate1 $(printf '%s' "$CHECKSMD_FLAT" | grep -qi 'not a declared gate' && printf '%s' "$CHECKSMD_FLAT" | grep -qi 'indirectly' && printf '%s' "$CHECKSMD_FLAT" | grep -qi 'gate 1' && echo yes || echo no), oq2-chosen-cost $(printf '%s' "$CHECKSMD_FLAT" | grep -qi 'OQ2' && printf '%s' "$CHECKSMD_FLAT" | grep -qi 'chosen cost' && echo yes || echo no)"
+
+# -- 4: the document names all six affected versions and records the earliest
+# run's cause as unknown (A6). --
+CHECKS_VERSION_MISSING=0
+for checks_version in v0.2.0 v0.3.0 v0.3.1 v0.4.0 v0.5.0 v0.6.0; do
+  grep -qF "$checks_version" "$CHECKSMD" || CHECKS_VERSION_MISSING=$((CHECKS_VERSION_MISSING + 1))
+done
+expect "4: doc names all six affected versions and records the earliest run's cause as unknown" \
+  "missing-versions 0, names-run-id yes, says-unknown yes" \
+  "missing-versions $CHECKS_VERSION_MISSING, names-run-id $(grep -qF '31696279581' "$CHECKSMD" && echo yes || echo no), says-unknown $(grep -qi 'unknown' "$CHECKSMD" && echo yes || echo no)"
+
+# ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
 # file. The harness's actual total is only known once every case above has
 # run, including any inside a loop that fires more than once per source

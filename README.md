@@ -164,11 +164,11 @@ They answer different questions. Reach for the **Guild** when you want a named s
 ## Development
 
 ```bash
-bash tests/guardrails.test.sh   # 417 cases, zero dependencies
+bash tests/guardrails.test.sh   # 421 cases, zero dependencies
 shellcheck scripts/*.sh
 ```
 
-CI runs both on every push.
+CI runs three steps on every push; `docs/loop/checks.md` maps which checks run there against which run locally at G3.
 
 ## Not included in v0.1
 
