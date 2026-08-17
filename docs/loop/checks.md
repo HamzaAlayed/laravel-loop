@@ -11,14 +11,37 @@ An enumeration that drifts from the files it enumerates is worse than no enumera
 
 ## What runs on the pushed commit
 
-`.github/workflows/ci.yml`, job `guardrails`, on every `push` and `pull_request`. One job,
-three steps, in order:
+`.github/workflows/ci.yml`, on every `push` and `pull_request`. **Two jobs**, both running the
+same suite file with the identical invocation and no platform conditional anywhere — the same
+three checks, run twice, once per platform:
+
+### `guardrails` — `ubuntu-latest`
 
 1. **`shellcheck`** — `shellcheck -S warning scripts/*.sh`
 2. **`scripts are executable`** — runs `scripts/check-script-modes.sh`, the script-mode rule
    (every `scripts/*.sh` / `tests/*.sh` file is a program at `100755` or a declared library at
    `100644` — see that script's own header for the rule verbatim)
 3. **`guardrail tests`** — `bash tests/guardrails.test.sh`
+
+### `guardrails-macos` — `macos-latest`
+
+1. **`shellcheck (macos)`** — installs `shellcheck` via Homebrew first (the image's own
+   manifest lists none — see `spike-platforms.md`), then runs the identical
+   `shellcheck -S warning scripts/*.sh`
+2. **`scripts are executable (macos)`** — runs `scripts/check-script-modes.sh`, the same script
+   as the ubuntu step
+3. **`guardrail tests (macos)`** — `bash tests/guardrails.test.sh`, the same invocation as the
+   ubuntu step
+
+**A4 — no case silently absent on either platform.** Because both jobs run the identical file
+with the identical invocation and neither job carries a platform conditional, their reported
+`total: N passed, M failed` lines must match exactly. Any case deliberately not run on one
+platform would have to be named here, explicitly — none currently is.
+
+**The `macos-latest` label is a rolling image.** Its OS point-version moves on GitHub's own
+update cadence and is not a fixed contract; see `spike-platforms.md` for the pinned manifest
+commit this was checked against and its own statement that a manifest is not proof the suite
+passes there — only a real run on that platform is.
 
 **Absent from this side:** version consistency. Nothing that runs on the pushed commit
 compares `VERSION`, `plugin.json`'s version, and `marketplace.json`'s version. A release can
@@ -46,12 +69,12 @@ implementation of it and not a gap nobody noticed.
 
 ## Both deltas, side by side
 
-| Check | Pushed commit | Local G3 |
-|---|---|---|
-| shellcheck (`scripts/*.sh`) | step `shellcheck` | gate 2 |
-| guardrail test harness | step `guardrail tests` | gate 1 |
-| script-mode rule | step `scripts are executable` | not a declared gate — reached only indirectly, through gate 1's harness |
-| version consistency | absent | gate 3 |
+| Check | Pushed commit (`ubuntu-latest`) | Pushed commit (`macos-latest`) | Local G3 |
+|---|---|---|---|
+| shellcheck (`scripts/*.sh`) | step `shellcheck` | step `shellcheck (macos)` | gate 2 |
+| guardrail test harness | step `guardrail tests` | step `guardrail tests (macos)` | gate 1 |
+| script-mode rule | step `scripts are executable` | step `scripts are executable (macos)` | not a declared gate — reached only indirectly, through gate 1's harness |
+| version consistency | absent | absent | gate 3 |
 
 ## The red release history (A6)
 
