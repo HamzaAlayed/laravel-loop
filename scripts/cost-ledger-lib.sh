@@ -56,6 +56,28 @@
 #   cost_scan <ledger-path> <slug-or-empty>
 #   cost_list_slugs <ledger-path>
 #   cost_slice_rows <ledger-path> <slug-or-empty>   (added in cost-reporting-v0.3 S3)
+#   cost_invocation_lookup <ledger-path> <invocation-id>   (added in
+#     cost-ledger-blind-to-background-agents S9, RC group) -- the one question
+#     scripts/record-recovered-cost.sh needs answered before it may write
+#     anything: "does this invocation_id already have a start/finish record in
+#     this ledger, and if so, under which slug". A dedicated single-pass scan,
+#     alongside cost_scan/cost_list_slugs/cost_slice_rows above rather than a
+#     bespoke parser inside the CLI itself -- CV7/CV8's "one ledger, one
+#     implementation" holds exactly the same way here as it does for every
+#     other consumer of this file. Sets:
+#       COST_INVOCATION_FOUND   "1" if a start or finish record for that
+#                                invocation_id exists anywhere in the ledger,
+#                                else "0" -- including when the ledger is
+#                                absent, empty, or no parser is available
+#                                (never fabricated, never a guess).
+#       COST_INVOCATION_SLUG    the slug carried by that invocation's own
+#                                records (a finish record's slug wins over a
+#                                start's, matching cost_scan's own last-wins
+#                                convention for this field), or "" if not found.
+#     Only "start"/"finish" events are considered a match -- an existing
+#     `recovered` record naming the same invocation_id is not itself proof of
+#     a ledger entry, since RC4 requires the underlying invocation to already
+#     be there.
 #
 # cost_scan sets (never anything outside this COST_* namespace):
 #   COST_SCAN_STATE           "absent" | "empty" | "no-slug" | "ok" | "no-parser" | "scan-error"
@@ -1113,6 +1135,94 @@ cost_slice_rows() {
 $row"
       fi
     fi
+  done <<EOF
+$out
+EOF
+  return 0
+}
+
+# --- cost_invocation_lookup: added in cost-ledger-blind-to-background-agents
+# S9 (see the doc block near the top of this file for what it sets). A
+# dedicated single-pass scan, same shape as cost_scan/cost_list_slugs/
+# cost_slice_rows above: read every line once, degrade jq -> python3 -> a
+# safe no-op, never a third bespoke parser living inside a caller. -----------
+
+_cost_lookup_jq_program() {
+  cat <<'JQ_EOF'
+def to_rec: (try fromjson catch null);
+(reduce (inputs | select(length > 0)) as $line
+  ( {found:false, slug:""}
+  ; ($line | to_rec) as $r
+  | if $r == null or ($r|type) != "object" then .
+    elif ($target == "") then .
+    elif (($r.event // "") == "start" or ($r.event // "") == "finish")
+         and (($r.invocation_id // "") == $target) then
+      (.found = true) | (.slug = ($r.slug // .slug))
+    else . end
+  )
+) as $acc
+| "FOUND\t\(if $acc.found then "1" else "0" end)",
+  "SLUG\t\($acc.slug)"
+JQ_EOF
+}
+
+_cost_lookup_py_program() {
+  cat <<'PY_EOF'
+import sys, json
+
+target = sys.argv[1] if len(sys.argv) > 1 else ""
+found = False
+slug = ""
+
+for raw in sys.stdin:
+    line = raw.rstrip("\n")
+    if line == "" or target == "":
+        continue
+    try:
+        r = json.loads(line)
+        if not isinstance(r, dict):
+            raise ValueError()
+    except Exception:
+        continue
+    event = r.get("event") or ""
+    if event in ("start", "finish") and (r.get("invocation_id") or "") == target:
+        found = True
+        slug = r.get("slug") or slug
+
+print(f"FOUND\t{'1' if found else '0'}")
+print(f"SLUG\t{slug}")
+PY_EOF
+}
+
+cost_invocation_lookup() {
+  local ledger="${1:-}" target="${2:-}"
+  COST_INVOCATION_FOUND=0
+  COST_INVOCATION_SLUG=""
+
+  [ -n "$ledger" ] && [ -f "$ledger" ] && [ -s "$ledger" ] && [ -n "$target" ] || return 0
+
+  local have_jq=0 have_py=0
+  command -v jq >/dev/null 2>&1 && have_jq=1
+  [ "$have_jq" -eq 0 ] && command -v python3 >/dev/null 2>&1 && have_py=1
+  if [ "$have_jq" -eq 0 ] && [ "$have_py" -eq 0 ]; then
+    return 0
+  fi
+
+  local out=""
+  if [ "$have_jq" -eq 1 ]; then
+    out="$(jq -Rn -r --arg target "$target" "$(_cost_lookup_jq_program)" < "$ledger" 2>/dev/null)"
+  else
+    out="$(python3 -c "$(_cost_lookup_py_program)" "$target" < "$ledger" 2>/dev/null)"
+  fi
+
+  local tag v
+  while IFS=$'\t' read -r tag v; do
+    [ -z "$tag" ] && continue
+    case "$tag" in
+      FOUND) [ "$v" = "1" ] && COST_INVOCATION_FOUND=1 ;;
+      SLUG) COST_INVOCATION_SLUG="$v" ;;
+      *) : ;;
+    esac
   done <<EOF
 $out
 EOF
