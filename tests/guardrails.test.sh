@@ -3517,6 +3517,111 @@ expect "write-cost-log-section.sh is executable" "yes" \
   "$([ -x "$SCRIPTS/write-cost-log-section.sh" ] && echo yes || echo no)"
 
 # ---------------------------------------------------------------------------
+echo
+echo "check-script-modes.sh (script-mode rule, S1 -- spec.md A2/A5/A7, ship-gate-blind-to-ci)"
+
+CSM="$SCRIPTS/check-script-modes.sh"
+
+# Fixture content, built with printf rather than a heredoc so the marker
+# literal never appears as its own column-0 comment line inside this file --
+# a column-0 occurrence here would make the harness classify itself as a
+# library under the very rule it is testing (the slice's own anchor note).
+csm_program_content()          { printf '#!/usr/bin/env bash\necho program\n'; }
+csm_library_content()          { printf '#!/usr/bin/env bash\n# laravel-loop:sourced-library\necho library\n'; }
+csm_indented_marker_content()  { printf '#!/usr/bin/env bash\n  # laravel-loop:sourced-library\necho indented\n'; }
+
+# Builds a throwaway git repo containing exactly one scripts/*.sh or
+# tests/*.sh file, committed at the requested mode. The mode is forced via
+# `git update-index --chmod` after `add`, not left to core.fileMode picking
+# up the filesystem bit, so the committed mode is exact regardless of host
+# fileMode settings. $1 repo dir (already mktemp -d'd) $2 relative path
+# $3 mode (100644|100755) $4 file content
+csm_repo_with_file() {
+  local dir="$1" relpath="$2" mode="$3" content="$4" chmodflag
+  mkdir -p "$dir/$(dirname "$relpath")"
+  printf '%s' "$content" > "$dir/$relpath"
+  git -C "$dir" init --quiet
+  git -C "$dir" config user.email t@example.test
+  git -C "$dir" config user.name test
+  git -C "$dir" add "$relpath"
+  [ "$mode" = "100755" ] && chmodflag="+x" || chmodflag="-x"
+  git -C "$dir" update-index --chmod="$chmodflag" "$relpath"
+  git -C "$dir" commit --quiet -m init
+}
+
+csm_run() { # $1 repo dir -> sets CSM_RC, CSM_OUT
+  CSM_OUT="$(cd "$1" && bash "$CSM" 2>&1)"
+  CSM_RC=$?
+}
+
+# names() -> "yes"/"no": did the checker's output name the given path?
+csm_names() { printf '%s' "$CSM_OUT" | grep -qF "$1" && echo yes || echo no; }
+# nz() -> "nonzero"/"zero": is CSM_RC non-zero?
+csm_nz() { [ "$CSM_RC" -ne 0 ] && echo nonzero || echo zero; }
+
+# -- 1: unmarked program at 100644 -> non-zero, names the path --
+CSM1="$(mktemp -d)"
+csm_repo_with_file "$CSM1" "scripts/csm-fixture-a.sh" "100644" "$(csm_program_content)"
+csm_run "$CSM1"
+expect "1: unmarked program at 100644 -> non-zero, names the path" "nonzero yes" \
+  "$(csm_nz) $(csm_names scripts/csm-fixture-a.sh)"
+rm -rf "$CSM1"
+
+# -- 2: unmarked program at 100755 -> exit 0 --
+CSM2="$(mktemp -d)"
+csm_repo_with_file "$CSM2" "scripts/csm-fixture-b.sh" "100755" "$(csm_program_content)"
+csm_run "$CSM2"
+expect "2: unmarked program at 100755 exits 0" "0" "$CSM_RC"
+rm -rf "$CSM2"
+
+# -- 3: marked library at 100644 -> exit 0 (the exemption OQ1 chose) --
+CSM3="$(mktemp -d)"
+csm_repo_with_file "$CSM3" "scripts/csm-fixture-c.sh" "100644" "$(csm_library_content)"
+csm_run "$CSM3"
+expect "3: marked library at 100644 exits 0" "0" "$CSM_RC"
+rm -rf "$CSM3"
+
+# -- 4: marked library at 100755 -> non-zero, names the path (bidirectional) --
+CSM4="$(mktemp -d)"
+csm_repo_with_file "$CSM4" "scripts/csm-fixture-d.sh" "100755" "$(csm_library_content)"
+csm_run "$CSM4"
+expect "4: marked library at 100755 -> non-zero, names the path" "nonzero yes" \
+  "$(csm_nz) $(csm_names scripts/csm-fixture-d.sh)"
+rm -rf "$CSM4"
+
+# -- 5: marker present but unanchored (indented) -> classified as a program,
+# so 100644 fails (closes the self-exemption trap) --
+CSM5="$(mktemp -d)"
+csm_repo_with_file "$CSM5" "scripts/csm-fixture-e.sh" "100644" "$(csm_indented_marker_content)"
+csm_run "$CSM5"
+expect "5: indented marker does not exempt -- 100644 is non-zero, names the path" "nonzero yes" \
+  "$(csm_nz) $(csm_names scripts/csm-fixture-e.sh)"
+rm -rf "$CSM5"
+
+# -- 6: run outside a git work tree -> says so, exits non-zero, names no file --
+CSM6="$(mktemp -d)"
+csm_run "$CSM6"
+expect "6: outside a git work tree -> non-zero, says so, names no scripts/tests file" \
+  "nonzero yes no" \
+  "$(csm_nz) $(printf '%s' "$CSM_OUT" | grep -qi 'git work tree' && echo yes || echo no) \
+$(printf '%s' "$CSM_OUT" | grep -qE '(^|[[:space:]])(scripts|tests)/[^[:space:]]+\.sh' && echo yes || echo no)"
+rm -rf "$CSM6"
+
+# -- 7: LARAVEL_LOOP_* exported with arbitrary values changes nothing (A7) --
+CSM7="$(mktemp -d)"
+csm_repo_with_file "$CSM7" "scripts/csm-fixture-f.sh" "100644" "$(csm_program_content)"
+csm_run "$CSM7"
+CSM7_RC_PLAIN="$CSM_RC"; CSM7_OUT_PLAIN="$CSM_OUT"
+CSM_OUT="$(cd "$CSM7" && LARAVEL_LOOP_FOO=arbitrary LARAVEL_LOOP_SHIP_GATE_TIMEOUT=nonsense bash "$CSM" 2>&1)"
+CSM_RC=$?
+expect "7: LARAVEL_LOOP_* exported -> identical exit+output, no such literal in the script (A7)" \
+  "same same 0" \
+  "$([ "$CSM_RC" = "$CSM7_RC_PLAIN" ] && echo same || echo different) \
+$(diff <(printf '%s' "$CSM7_OUT_PLAIN") <(printf '%s' "$CSM_OUT") >/dev/null 2>&1 && echo same || echo different) \
+$(grep -c 'LARAVEL_LOOP' "$CSM")"
+rm -rf "$CSM7"
+
+# ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
 # file. The harness's actual total is only known once every case above has
 # run, including any inside a loop that fires more than once per source
