@@ -3622,6 +3622,41 @@ $(grep -c 'LARAVEL_LOOP' "$CSM")"
 rm -rf "$CSM7"
 
 # ---------------------------------------------------------------------------
+echo
+echo "cost-ledger-lib.sh conforms to the script-mode rule (S2 -- spec.md A5, ship-gate-blind-to-ci)"
+
+# -- 1: the checker exits 0 over this repository's own real tree --
+CSM_REAL_OUT="$(cd "$ROOT" && bash "$CSM" 2>&1)"
+CSM_REAL_RC=$?
+expect "1: check-script-modes.sh exits 0 over this repository's own tree" "0" "$CSM_REAL_RC"
+
+# -- 2: A5, iterated -- for every scripts/*.sh and tests/*.sh file, the rule's
+# classification (marker present, unindented, within the first 20 lines ->
+# library, else program) agrees with the mode git ls-files -s reports for it.
+# Deliberately not a hardcoded file count (today 12, having been 11 before S1
+# landed) -- only "at least one file was actually checked" and "zero
+# mismatches" are asserted.
+A5_MISMATCHES=0
+A5_CHECKED=0
+while read -r a5_mode _a5_sha _a5_stage a5_path; do
+  [ -z "${a5_path:-}" ] && continue
+  A5_CHECKED=$((A5_CHECKED + 1))
+  if head -n 20 "$ROOT/$a5_path" 2>/dev/null | grep -qxF '# laravel-loop:sourced-library'; then
+    a5_want="100644"
+  else
+    a5_want="100755"
+  fi
+  [ "$a5_mode" = "$a5_want" ] || A5_MISMATCHES=$((A5_MISMATCHES + 1))
+done <<EOF
+$(cd "$ROOT" && git ls-files -s scripts/*.sh tests/*.sh 2>/dev/null)
+EOF
+A5_HAS_FILES=0
+[ "$A5_CHECKED" -gt 0 ] && A5_HAS_FILES=1
+expect "2: A5 -- every scripts/*.sh & tests/*.sh file's committed mode agrees with the rule's classification, iterated" \
+  "0 mismatches, checked-some 1" \
+  "$A5_MISMATCHES mismatches, checked-some $A5_HAS_FILES"
+
+# ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
 # file. The harness's actual total is only known once every case above has
 # run, including any inside a loop that fires more than once per source
