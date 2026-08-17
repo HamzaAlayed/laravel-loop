@@ -177,3 +177,17 @@ condition was "after one transcription has been done by hand and checked by eye.
 The check found the record shape above, so automating transcription now would multiply a figure
 that drops two dimensions rather than settle it. S11 stays held — on firmer grounds than when it
 was held for being premature.
+
+### DC4 and DC5 confirmed closed — 2026-08-17
+
+The maintainer confirmed both against the `ship-gate-blind-to-ci` run, and `spec.md`'s two
+checkboxes are ticked with the evidence and the date recorded beside them.
+
+DC5's caveat was put to the maintainer explicitly rather than resolved quietly: its wording is "the
+figure **the human** saw", and the completion notifications were read by the orchestrating agent.
+The maintainer accepted that reading as satisfying the criterion. Recorded here because a future
+reader should be able to see that the substitution was noticed and waved through, not missed.
+
+**`cost-measurement-v0.2`'s DC1 and `cost-reporting-v0.3`'s DC2/DC3 all remain open** and are not
+closed, superseded, or reported as any of these two. This unit's own deferred conditions are now
+settled; those three are not.

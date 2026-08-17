@@ -227,12 +227,21 @@ recovered figure, whatever wrote it.
 
 ### The conditions for calling this done
 
-- [ ] **DC4** On one real `/loop` run that used background lanes, the coverage `/cost` prints —
+- [x] **DC4** On one real `/loop` run that used background lanes, the coverage `/cost` prints —
       the share, the reasons, and the wholly-unobserved phases — matches what a human who watched
       that run believes. Recognised, not merely executed.
-- [ ] **DC5** If recovery ships: on one real run, a backgrounded invocation's recorded figure
+      **Confirmed by the maintainer 2026-08-17** against the `ship-gate-blind-to-ci` run: seven
+      backgrounded invocations, all recorded `async_launched` and unpriced, the coverage output
+      accounting for them honestly at every point. See that unit's log and this one's
+      2026-08-17 update.
+- [x] **DC5** If recovery ships: on one real run, a backgrounded invocation's recorded figure
       matches the figure the human saw in that agent's completion notification, for at least one
       invocation, checked by eye.
+      **Confirmed by the maintainer 2026-08-17.** Seven of seven transcribed by hand from their own
+      completion notifications, coverage 0 % → 100 %, every figure permanently labelled
+      `transcribed rather than host-observed`. The maintainer accepted the orchestrating agent's
+      reading of the notifications as satisfying "the human saw" here. The check was not merely
+      passed — it surfaced `docs/loop/recovered-figure-drops-slice-and-model/`.
 
 **Neither is a G2 criterion**, for the reason `decisions.md` already records: the harness cannot
 exercise the live hook path. Verify proves the code does what this spec says against fixtures.
