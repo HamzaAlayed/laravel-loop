@@ -3657,6 +3657,119 @@ expect "2: A5 -- every scripts/*.sh & tests/*.sh file's committed mode agrees wi
   "$A5_MISMATCHES mismatches, checked-some $A5_HAS_FILES"
 
 # ---------------------------------------------------------------------------
+echo
+echo "ci.yml 'scripts are executable' step defers to check-script-modes.sh (S3, ship-gate-blind-to-ci)"
+
+CIYML="$ROOT/.github/workflows/ci.yml"
+
+# extract_ci_step_run: prints the run: body of the named step in ci.yml's
+# guardrails job -- handles both the block-scalar form (`run: |` followed by
+# indented lines) and the single-line form (`run: <command>`). Extraction
+# yielding nothing is a failure (rc 1, empty stdout), never a silent skip --
+# A4's proof depends on this reading ci.yml itself, not a retyped copy of it.
+# bash + sed only, no YAML parser.
+extract_ci_step_run() {
+  local file="$1" name="$2" block line in_block=0 body=""
+  block="$(sed -n "/^      - name: ${name}\$/,\$p" "$file" | tail -n +2 | sed '/^      - name:/,$d')"
+  [ -z "$block" ] && return 1
+
+  while IFS= read -r line; do
+    if [ "$in_block" -eq 0 ]; then
+      case "$line" in
+        '        run: |'*)
+          in_block=1
+          ;;
+        '        run: '*)
+          body="${line#        run: }"
+          in_block=1
+          break
+          ;;
+      esac
+    else
+      case "$line" in
+        '          '*)
+          body="${body}${line#          }
+"
+          ;;
+        '')
+          body="${body}
+"
+          ;;
+        *)
+          break
+          ;;
+      esac
+    fi
+  done <<CIBLOCK
+$block
+CIBLOCK
+
+  printf '%s' "$body" | grep -q '[^[:space:]]' || return 1
+  printf '%s\n' "$body"
+}
+
+CI_STEP_BODY="$(extract_ci_step_run "$CIYML" "scripts are executable")"
+CI_STEP_RC=$?
+
+# -- 1: extraction of the step's run: body yields a non-empty command
+# (fail-closed guard on the extractor itself) --
+expect "1: extraction of the step's run: body from ci.yml yields a non-empty command" \
+  "0 nonempty" \
+  "$CI_STEP_RC $([ -n "$(printf '%s' "$CI_STEP_BODY" | tr -d '[:space:]')" ] && echo nonempty || echo empty)"
+
+# Builds a throwaway git repo carrying a real copy of check-script-modes.sh
+# (so both the extracted-CI answer and the direct answer see the very same
+# checker) plus exactly one committed scripts/*.sh fixture file at the
+# requested mode. $1 dir $2 relpath $3 mode $4 content
+s3_repo_with_file() {
+  local dir="$1" relpath="$2" mode="$3" content="$4" chmodflag
+  mkdir -p "$dir/scripts" "$dir/$(dirname "$relpath")"
+  cp "$CSM" "$dir/scripts/check-script-modes.sh"
+  printf '%s' "$content" > "$dir/$relpath"
+  git -C "$dir" init --quiet
+  git -C "$dir" config user.email t@example.test
+  git -C "$dir" config user.name test
+  git -C "$dir" add -A
+  git -C "$dir" update-index --chmod=+x scripts/check-script-modes.sh
+  [ "$mode" = "100755" ] && chmodflag="+x" || chmodflag="-x"
+  git -C "$dir" update-index --chmod="$chmodflag" "$relpath"
+  git -C "$dir" commit --quiet -m init
+}
+
+s3_nz() { [ "$1" -ne 0 ] && echo nonzero || echo zero; }
+s3_names() { printf '%s' "$1" | grep -qF "$2" && echo yes || echo no; }
+
+# -- 2: parity, fixture holding a marked library at 100644 -- extracted-CI
+# answer == direct answer (both exit 0, both silent). Fails today: today's
+# inline [ -x ] loop rejects the file the checker accepts --
+S3LIBDIR="$(mktemp -d)"
+s3_repo_with_file "$S3LIBDIR" "scripts/s3-fixture-lib.sh" "100644" "$(csm_library_content)"
+S3_CI_OUT="$(cd "$S3LIBDIR" && bash -c "$CI_STEP_BODY" 2>&1)"; S3_CI_RC=$?
+S3_DIRECT_OUT="$(cd "$S3LIBDIR" && bash scripts/check-script-modes.sh 2>&1)"; S3_DIRECT_RC=$?
+expect "2: parity, fixture holding a marked library at 100644: extracted-CI answer == direct answer (both exit 0, both silent)" \
+  "0 0 empty empty" \
+  "$S3_CI_RC $S3_DIRECT_RC $([ -z "$S3_CI_OUT" ] && echo empty || echo nonempty) $([ -z "$S3_DIRECT_OUT" ] && echo empty || echo nonempty)"
+rm -rf "$S3LIBDIR"
+
+# -- 3: parity, fixture holding an unmarked program at 100644 -- extracted-CI
+# answer == direct answer (both non-zero, both naming the same path) --
+S3PROGDIR="$(mktemp -d)"
+s3_repo_with_file "$S3PROGDIR" "scripts/s3-fixture-prog.sh" "100644" "$(csm_program_content)"
+S3_CI_OUT2="$(cd "$S3PROGDIR" && bash -c "$CI_STEP_BODY" 2>&1)"; S3_CI_RC2=$?
+S3_DIRECT_OUT2="$(cd "$S3PROGDIR" && bash scripts/check-script-modes.sh 2>&1)"; S3_DIRECT_RC2=$?
+expect "3: parity, fixture holding an unmarked program at 100644: extracted-CI answer == direct answer (both non-zero, both naming the same path)" \
+  "nonzero nonzero yes yes" \
+  "$(s3_nz "$S3_CI_RC2") $(s3_nz "$S3_DIRECT_RC2") $(s3_names "$S3_CI_OUT2" "scripts/s3-fixture-prog.sh") $(s3_names "$S3_DIRECT_OUT2" "scripts/s3-fixture-prog.sh")"
+rm -rf "$S3PROGDIR"
+
+# -- 4: structural -- the step invokes scripts/check-script-modes.sh and
+# retains no [ -x loop of its own (catches an inline copy that happens to
+# agree on the two fixtures above) --
+expect "4: structural -- the step invokes scripts/check-script-modes.sh and retains no [ -x loop of its own" \
+  "yes no" \
+  "$(printf '%s' "$CI_STEP_BODY" | grep -qF 'scripts/check-script-modes.sh' && echo yes || echo no) $(printf '%s' "$CI_STEP_BODY" | grep -qF '[ -x' && echo yes || echo no)"
+
+# ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
 # file. The harness's actual total is only known once every case above has
 # run, including any inside a loop that fires more than once per source
