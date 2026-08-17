@@ -5,6 +5,93 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-17
+
+Teaches the cost ledger to be honest about what it cannot see, and gives it a deliberate,
+marked way to be told. `/cost` previously printed `unpriced` against most invocations, which
+reads as *unknowable* rather than *measured elsewhere and not captured here* — and the missing
+figure demonstrably exists. It simply arrives somewhere no hook can reach, which this release
+establishes by experiment rather than assumption.
+
+### Added
+
+- **A reason per unpriced invocation.** Each one now says why it carries no token figure,
+  derived from the finish record's own `status` — no new field, no new writer, nothing added to
+  the hook-wired path to get it.
+- **Coverage as a share, and unobserved phases by name.** The report states what fraction of
+  invocations carry a figure before it states any total, and names the phases where *nothing*
+  was observed rather than letting a partial total imply partial coverage everywhere. One
+  shared formatter, so the budget gate inherited the same sentence for free.
+- **`LARAVEL_LOOP_COST_MIN_COVERAGE`** — a coverage floor as a whole percent, below which no
+  unit-level token total prints at all: the unit's cost is stated as not established, with the
+  observed subset left visible only where the coverage figure already showed it, never repeated
+  as a second competing number. Unset means the previous behaviour byte for byte. As with every
+  other threshold in this plugin, no value ships as a default and none is suggested anywhere.
+- **Recognition of `event:"recovered"`** — a *transcribed* figure, counted once, counted priced,
+  and labelled transcribed everywhere it surfaces. Following `model_source`'s precedent the
+  marker is permanent: a recovered figure can never later be read as an observed one.
+- **Both figures printed on disagreement.** Where an observed and a transcribed figure exist for
+  the same invocation, the report prints both and states the precedence rule in its own output
+  rather than resolving it silently and leaving the reader to infer which won.
+- **`scripts/record-recovered-cost.sh`** — the transcription entry point, and the only writer of
+  `event:"recovered"` in the plugin. Takes exactly one `--invocation-id` and one
+  `--total-tokens`, both transcribable from a single `<task-notification>` block. Deliberately
+  *not* registered in `hooks/hooks.json` and unreachable from any tool payload: it never runs
+  unless a human types the command. Five refusal paths — ledger disabled, a missing or empty
+  argument, a token count that is not a plain non-negative integer, no JSON parser available,
+  and an `--invocation-id` the ledger holds no record for — each writing nothing, fabricating
+  nothing, and exiting 0, because cost accounting must never be why a command looks failed.
+
+### Changed
+
+- **`scripts/cost-report.sh` and `scripts/cost-ledger-lib.sh`** — the report now says *why* the
+  gap exists, in its own output: the figure is measured by the host and delivered into the
+  session, not captured here. Previously the reader was left to guess whether an absent number
+  meant zero, an error, or an unobservable.
+- **README's cost section**, plus an in-place correction to `docs/loop/decisions.md`, where a
+  claim about what the ledger could see had been superseded and was still being stated as
+  current.
+- **`docs/loop/conventions.md`** gains four conventions drawn from this unit's own execution:
+  confirming a lane's base before it writes code, treating "Already up to date" after a lane
+  reported work as an error rather than a no-op, a build agent finishing green while leaving the
+  work uncommitted, and a green harness never proving a hook is live.
+
+### Fixed
+
+- **A backgrounded launch was being presented as a finish.** A finish record carrying
+  `status: "async_launched"` marks a subagent handed off to the background, not one observed to
+  completion, but the reader counted it as a completed observation — inflating apparent coverage
+  with exactly the invocations whose figures were missing. Launches and finishes are now
+  distinguished, which is what makes the coverage percentage above meaningful.
+
+### Notes
+
+- **No hook can reach the background token figure** — established by spike, not assumed. Every
+  hook event this build exposes except `SubagentStop` was registered against a throwaway project
+  directory, and identical foreground and backgrounded subagents were launched. No hook of any
+  registered type fired for the background completion: the figure arrives as a queued synthetic
+  user turn injected into the transcript — a queue operation on the conversation, not an event on
+  the hook bus — so there is no channel name a `hooks.json` entry could subscribe to.
+  Corroborated by grepping the installed binary's own string table for every `hook_event_name`
+  literal. Recovery is therefore reachable only as the orchestrating agent transcribing a figure
+  out of its own context: a model-reported number, which is precisely why its marker is permanent.
+- **Zero change to `scripts/record-cost-event.sh` and `hooks/hooks.json`**, proven at G2 by
+  zero-line diffs on both. That is also the direct evidence that the transcription-automation
+  slice was not built.
+- Harness grew from 334 to 404 cases; shellcheck stays clean throughout.
+- **Automating transcription was held, not rejected**, at the second slicing gate: automating it
+  before a human has done one by hand and checked it by eye was judged premature.
+- Two acceptance conditions remain open and human-judged — a real `/loop` run with background
+  lanes, read by a human's own eye — which the harness structurally cannot exercise, and which
+  were deliberately not folded into the PASS. `cost-measurement-v0.2`'s DC1 and
+  `cost-reporting-v0.3`'s DC2/DC3 are untouched by this unit.
+- **Transcript scraping** was surfaced during slicing and put out of bounds: the same figure
+  appears in the session transcript *host-observed* rather than model-reported, which would
+  sidestep the transcription objection entirely, but it reads conversation logs outside the
+  project directory. That is a different consent conversation and deserves its own intent.
+- At close the ledger reported **46 % coverage, "wholly unobserved: verify"** — reporting its own
+  blind spot, in its own output, about the verification that had just passed it.
+
 ## [0.5.0] - 2026-08-14
 
 ### Added
