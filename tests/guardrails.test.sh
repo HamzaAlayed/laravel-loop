@@ -3001,6 +3001,57 @@ decisions_superseded_check() {
 expect "docs: decisions.md no longer claims the figure is upstream of this plugin, and the 4%-coverage rejection stands verbatim (X6)" \
   "0" "$(decisions_superseded_check)"
 
+# S10 (spec.md X5, RC2, RC6, CL3) -- README documents the transcription entry
+# point: a recovered figure is model-transcribed rather than host-observed,
+# the CLI that writes one and its two arguments, and that recovery narrows
+# the gap rather than closing it. Four cases, one per documentation claim.
+readme_recovered_transcribed_check() {
+  local bad=0 readme="$README_MD"
+  grep -qi 'model-transcribed' "$readme" || bad=1
+  grep -qi 'not host-observed' "$readme" || bad=1
+  echo $bad
+}
+expect "docs: README states a recovered figure is model-transcribed, not host-observed (X5/RC2)" \
+  "0" "$(readme_recovered_transcribed_check)"
+
+readme_recovery_cli_check() {
+  local bad=0 readme="$README_MD"
+  grep -q 'scripts/record-recovered-cost\.sh' "$readme" || bad=1
+  grep -q -- '--invocation-id' "$readme" || bad=1
+  grep -q -- '--total-tokens' "$readme" || bad=1
+  echo $bad
+}
+expect "docs: README names scripts/record-recovered-cost.sh and its two arguments (X5)" \
+  "0" "$(readme_recovery_cli_check)"
+
+# (negative) -- CL3's residue wording: recovery narrows the gap for
+# invocations somebody transcribed, and for no others. README must never
+# claim the gap is closed.
+readme_recovery_not_closed_check() {
+  local bad=0 readme="$README_MD"
+  grep -qi 'narrows the gap' "$readme" || bad=1
+  grep -qi 'for no others' "$readme" || bad=1
+  grep -qiE 'closes the gap|gap is closed|gap no longer exists' "$readme" && bad=1
+  echo $bad
+}
+expect "docs: README does not claim the background gap is closed -- S3's residue wording survives (CL3)" \
+  "0" "$(readme_recovery_not_closed_check)"
+
+# decisions.md carries the second-G1 entry while S6's spike entry and the
+# 4%-coverage rejection stand verbatim -- fingerprints unique to each.
+decisions_second_g1_check() {
+  local bad=0 dec="$ROOT/docs/loop/decisions.md"
+  grep -qi 'Second G1: land model-transcribed recovery' "$dec" || bad=1
+  grep -qi 'Hold S11' "$dec" || bad=1
+  grep -qi 'transcript scraping' "$dec" || bad=1
+  grep -qi 'fuzzy selector' "$dec" || bad=1
+  grep -qF 'no hook of any of the eight registered types fired a second time' "$dec" || bad=1
+  grep -qF '**4%**' "$dec" || bad=1
+  echo $bad
+}
+expect "docs: decisions.md carries the second-G1 entry, and S6's spike entry plus the 4%-coverage rejection stand untouched (X6)" \
+  "0" "$(decisions_second_g1_check)"
+
 # ---------------------------------------------------------------------------
 echo "manifest + component structure"
 structure_check() {

@@ -109,3 +109,30 @@ line — a model-transcribed figure, not a host-observed one, exactly OQ2 answer
 description. Whether that is acceptable in a ledger whose whole value is observed-not-reported
 numbers is the human decision OQ5/the second G1 was already deferring this to, not a builder's
 call, and no such mechanism is designed, prototyped, or landed here.
+
+## Second G1: land model-transcribed recovery, hold automatic wiring (2026-08-17)
+
+Decided: approve S7-S10 of the RC recovery group — teaching the reader a recovered figure
+exists (S7), printing both figures when an observed and a transcribed one disagree (S8), the
+transcription entry point `scripts/record-recovered-cost.sh` (S9), and documenting all of it in
+README and here (S10). **Hold S11** — instructing the orchestrator to run that CLI
+automatically after every backgrounded lane completes — as its own decision, not approved in
+this pass.
+
+This forecloses, for this pass:
+- **Hook-based recovery** — already closed by S6's OQ2 spike above: no registered hook event can
+  reach the channel a backgrounded invocation's real token figure arrives on; only the main
+  thread's own context ever sees it.
+- **Transcript scraping** — reading `~/.claude/projects/.../*.jsonl` after the fact to recover a
+  figure nobody deliberately transcribed. Rejected because it would give the ledger a second,
+  undeclared input path outside RC7's observe-only contract, turning a deliberate, typed act into
+  a silent background scan.
+- **Any fuzzy selector** for `--invocation-id` — nearest-by-time, most-recently-launched, or any
+  other guess at which invocation a figure belongs to. RC1's exactly-once guarantee and RC4's
+  refusal to fabricate both depend on the id being named exactly, by whoever read it off the
+  `<task-notification>` block, never inferred.
+
+Instead: a human or an orchestrating agent transcribes a figure by hand, one invocation at a
+time, or does not — RC6 makes both outcomes equally correct, and a run with zero transcriptions
+looks exactly as it always has. S11's automatic wiring stays a live, separate question for a
+future gate.
