@@ -131,6 +131,30 @@
 # (RC6, CL9). Same sentence, same call sites, so the budget gate inherits
 # this clause the same way it inherited S2's share and phase list.
 #
+# S8 additions to cost_scan (RC3): when an invocation carries BOTH a
+# host-observed figure (its own finish record's total_tokens) AND a
+# transcribed one (a `recovered` record) and the two DISAGREE, that is
+# never resolved silently -- S7's precedence (observed wins the total) does
+# not change here; this slice only makes the disagreement visible. Equal
+# figures are not a disagreement and produce no output at all (RC3's own
+# boundary). Computed inside cost_scan's single existing reduce -- no
+# second parse of the ledger (CV7):
+#   COST_N_CONFLICTS         count of invocations whose observed and
+#                             transcribed figures both exist and differ.
+#                             Zero on a ledger with no `recovered` record,
+#                             or where every recovered figure matches its
+#                             observed one exactly.
+#   COST_CONFLICT_ROWS       newline-joined TSV, one line per conflicting
+#                             invocation: invocation_id<TAB>observed_tokens
+#                             <TAB>transcribed_tokens, sorted by
+#                             invocation_id ascending in byte order (never
+#                             hash-iteration order -- CV7), following
+#                             COST_SLICE_ROWS's shape.
+# cost-report.sh's Tokens section prints these rows only when
+# COST_N_CONFLICTS > 0, states which figure the total above actually used
+# (the observed one, unchanged from S7), and never averages, maxes, mins,
+# or overwrites either figure.
+#
 # S3 additions to cost_scan (same rules: never a fabricated 0, never a re-parse elsewhere):
 #   COST_MODELS_SPEC / _SLICE / _BUILD / _VERIFY / _UNKNOWN
 #                             comma-separated "model::model_source" pairs, one per distinct
@@ -340,6 +364,7 @@ def phase_key:
      { inv:0, priced:0, unpriced:0, inflight:0, tokens:0,
        unpriced_backgrounded:0, unpriced_no_usage:0, unpriced_truncated:0, unpriced_unstated:0,
        priced_transcribed:0, tokens_transcribed:0,
+       conflict_n:0, conflict_list:[],
        ts_min:null, ts_max:null,
        rework_n:0, rework_priced_n:0, rework_tokens:0, rework_ambiguous:0, rework_list:[],
        cache_n:0, cache_sum:0, cache_denom:0,
@@ -372,6 +397,16 @@ def phase_key:
               else . end)
            | (if $e.value.phase_detail == "rework" then
                 (.rework_priced_n += 1) | (.rework_tokens += $e.value.tokens)
+              else . end)
+           | (if ($e.value.transcribed and ($e.value.transcribed_tokens != $e.value.tokens)) then
+                # S8 (RC3): both a host-observed and a transcribed figure
+                # exist for this invocation and they disagree. The observed
+                # figure already won the total above (S7's precedence,
+                # unchanged); this only records the pair so the report can
+                # show both and say so -- never resolved by averaging,
+                # maxing, minning, or a silent overwrite.
+                (.conflict_n += 1)
+                | (.conflict_list += [{id: $e.key, observed: $e.value.tokens, transcribed: $e.value.transcribed_tokens}])
               else . end)
          elif $e.value.transcribed then
            # S7 (RC1, RC5): no host-observed figure exists for this
@@ -419,6 +454,7 @@ def phase_key:
     "COUNT\tCOST_TOKENS_CACHE_DENOM\t\($agg.cache_denom)",
     "COUNT\tCOST_TS_MIN\t\($agg.ts_min // -1)",
     "COUNT\tCOST_TS_MAX\t\($agg.ts_max // -1)",
+    "COUNT\tCOST_N_CONFLICTS\t\($agg.conflict_n)",
     "REFINEPASSES\t\($passeslist)"
   ), (
     $agg.byphase | to_entries[] | (
@@ -431,6 +467,13 @@ def phase_key:
     )
   ), (
     $acc.slugs | keys_unsorted[] | "SLUG\t\(.)"
+  ), (
+    # S8 (RC3): conflict rows, sorted by invocation_id ascending in byte
+    # order -- jq's default string comparison is codepoint order, never a
+    # hash-iteration artifact (CV7). Same read loop as every other line
+    # cost_scan already emits; a fourth tab-separated column carries the
+    # transcribed figure.
+    $agg.conflict_list | sort_by(.id)[] | "CONFLICTROW\t\(.id)\t\(.observed)\t\(.transcribed)"
   )
 JQ_EOF
 }
@@ -520,9 +563,11 @@ agg = {"inv": 0, "priced": 0, "unpriced": 0, "inflight": 0, "tokens": 0,
        "unpriced_backgrounded": 0, "unpriced_no_usage": 0,
        "unpriced_truncated": 0, "unpriced_unstated": 0,
        "priced_transcribed": 0, "tokens_transcribed": 0,
+       "conflict_n": 0,
        "ts_min": None, "ts_max": None,
        "rework_n": 0, "rework_priced_n": 0, "rework_tokens": 0, "rework_ambiguous": 0}
 rework_list = []
+conflict_rows = []
 byphase = {k: {"inv": 0, "priced": 0, "unpriced": 0, "inflight": 0, "tokens": 0, "models": {}}
            for k in ("SPEC", "SLICE", "BUILD", "VERIFY", "UNKNOWN")}
 
@@ -554,6 +599,15 @@ for invid, e in inv.items():
             if e["phase_detail"] == "rework":
                 agg["rework_priced_n"] += 1
                 agg["rework_tokens"] += e["tokens"]
+            if e["transcribed"] and e["transcribed_tokens"] != e["tokens"]:
+                # S8 (RC3): both a host-observed and a transcribed figure
+                # exist for this invocation and they disagree. The observed
+                # figure already won the total above (S7's precedence,
+                # unchanged); this only records the pair so the report can
+                # show both and say so -- never resolved by averaging,
+                # maxing, minning, or a silent overwrite.
+                agg["conflict_n"] += 1
+                conflict_rows.append((invid, e["tokens"], e["transcribed_tokens"]))
         elif e["transcribed"]:
             # S7 (RC1, RC5): no host-observed figure exists for this
             # invocation -- its ONLY figure is the recovered one, so it
@@ -610,6 +664,7 @@ out = [
     f"COUNT\tCOST_TOKENS_CACHE_DENOM\t{agg.get('cache_denom', 0)}",
     f"COUNT\tCOST_TS_MIN\t{agg['ts_min'] if agg['ts_min'] is not None else -1}",
     f"COUNT\tCOST_TS_MAX\t{agg['ts_max'] if agg['ts_max'] is not None else -1}",
+    f"COUNT\tCOST_N_CONFLICTS\t{agg['conflict_n']}",
     f"REFINEPASSES\t{passeslist}",
 ]
 for k in ("SPEC", "SLICE", "BUILD", "VERIFY", "UNKNOWN"):
@@ -622,6 +677,12 @@ for k in ("SPEC", "SLICE", "BUILD", "VERIFY", "UNKNOWN"):
     out.append(f"MODEL\t{k}\t{','.join(v['models'].keys())}")
 for s in slugs.keys():
     out.append(f"SLUG\t{s}")
+
+# S8 (RC3): conflict rows, sorted by invocation_id ascending -- Python's
+# default string comparison is codepoint order, matching jq's and never a
+# dict-iteration artifact (CV7).
+for invid, observed, transcribed in sorted(conflict_rows, key=lambda t: t[0]):
+    out.append(f"CONFLICTROW\t{invid}\t{observed}\t{transcribed}")
 
 print("\n".join(out))
 PY_EOF
@@ -688,6 +749,8 @@ _cost_reset_scan_vars() {
   COST_TOKENS_PRICED=0
   COST_N_PRICED_TRANSCRIBED=0
   COST_TOKENS_TRANSCRIBED=0
+  COST_N_CONFLICTS=0
+  COST_CONFLICT_ROWS=""
   COST_N_INVOCATIONS_SPEC=0; COST_N_PRICED_SPEC=0; COST_N_UNPRICED_SPEC=0
   COST_N_INFLIGHT_SPEC=0; COST_TOKENS_PRICED_SPEC=0
   COST_N_INVOCATIONS_SLICE=0; COST_N_PRICED_SLICE=0; COST_N_UNPRICED_SLICE=0
@@ -716,8 +779,9 @@ _cost_reset_scan_vars() {
 }
 
 _cost_apply_scan_line() {
-  # $1 tag  $2 key-or-slug  $3 value (COUNT lines only)
-  local tag="$1" k="$2" v="${3:-}"
+  # $1 tag  $2 key-or-slug  $3 value (COUNT lines only)  $4 second value
+  # (CONFLICTROW only -- the transcribed figure, alongside $3's observed one)
+  local tag="$1" k="$2" v="${3:-}" v2="${4:-}"
   if [ "$tag" = "SLUG" ]; then
     if [ -z "$COST_SLUGS_PRESENT" ]; then
       COST_SLUGS_PRESENT="$k"
@@ -742,9 +806,25 @@ $k"
     COST_REWORK_REFINE_PASSES="$k"
     return 0
   fi
+  if [ "$tag" = "CONFLICTROW" ]; then
+    # S8 (RC3): $k invocation_id, $v observed tokens, $v2 transcribed
+    # tokens -- appended to COST_CONFLICT_ROWS in the order the scan program
+    # already emitted them (sorted by invocation_id ascending, byte order),
+    # following COST_SLICE_ROWS's own accumulation shape.
+    local row
+    row="$(printf '%s\t%s\t%s' "$k" "$v" "$v2")"
+    if [ -z "$COST_CONFLICT_ROWS" ]; then
+      COST_CONFLICT_ROWS="$row"
+    else
+      COST_CONFLICT_ROWS="$COST_CONFLICT_ROWS
+$row"
+    fi
+    return 0
+  fi
   [ "$tag" = "COUNT" ] || return 0
   case "$k" in
     COST_N_LINES) COST_N_LINES="$v" ;;
+    COST_N_CONFLICTS) COST_N_CONFLICTS="$v" ;;
     COST_N_REWORK) COST_N_REWORK="$v" ;;
     COST_N_REWORK_PRICED) COST_N_REWORK_PRICED="$v" ;;
     COST_TOKENS_REWORK_PRICED) COST_TOKENS_REWORK_PRICED="$v" ;;
@@ -823,10 +903,10 @@ cost_scan() {
     return 0
   fi
 
-  local tag k v
-  while IFS=$'\t' read -r tag k v; do
+  local tag k v v2
+  while IFS=$'\t' read -r tag k v v2; do
     [ -z "$tag" ] && continue
-    _cost_apply_scan_line "$tag" "$k" "$v"
+    _cost_apply_scan_line "$tag" "$k" "$v" "$v2"
   done <<EOF
 $out
 EOF

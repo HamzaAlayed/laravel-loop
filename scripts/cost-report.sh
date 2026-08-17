@@ -244,9 +244,33 @@ print_coverage_and_tokens() {
       printf 'Tokens (priced subset only -- never the unit'"'"'s whole cost):\n'
       printf '  total priced tokens: %s\n' "$(cost_fmt "$COST_TOKENS_PRICED")"
       printf '  %s\n' "$(cost_coverage_sentence)"
+      print_transcription_conflicts
       print_cache_read_share
     fi
   fi
+}
+
+# S8 (RC3): where an invocation carries both a host-observed figure and a
+# transcribed one and they disagree, that is never resolved silently. Both
+# numbers are shown, each attributed to its source, and the rule this
+# report already follows (the observed figure is the one summed into the
+# total above -- unchanged since S7) is stated in the same place. Printed
+# only when at least one such disagreement exists (COST_N_CONFLICTS > 0);
+# equal figures are not a disagreement (RC3's own boundary) and print
+# nothing.
+print_transcription_conflicts() {
+  [ "${COST_N_CONFLICTS:-0}" -gt 0 ] || return 0
+  printf '  %s invocation(s) have an observed figure and a transcribed figure that disagree -- the observed (host-measured) figure is the one counted in the total above; the transcribed (model-reported) figure is shown for comparison only, and is never averaged, maximised, minimised, or allowed to overwrite it:\n' \
+    "$COST_N_CONFLICTS"
+  local id observed transcribed diff
+  while IFS=$'\t' read -r id observed transcribed; do
+    [ -z "$id" ] && continue
+    diff=$((observed > transcribed ? observed - transcribed : transcribed - observed))
+    printf '    %s: observed %s, transcribed %s (difference %s)\n' \
+      "$id" "$observed" "$transcribed" "$diff"
+  done <<EOF
+$COST_CONFLICT_ROWS
+EOF
 }
 
 print_cache_read_share() {
