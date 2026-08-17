@@ -7,6 +7,7 @@
 .claude/loop-cost-evict.lock/
 .claude/loop-budget-state/
 .claude/worktrees/
+.claude/settings.local.json
 laravel-loop.plugin
 laravel-loop.plugin.zip
 .DS_Store
