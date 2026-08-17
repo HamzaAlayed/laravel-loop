@@ -1128,6 +1128,103 @@ s7_dup_check() {
 expect "(S7-6) RC1 bound: two recovered records for one invocation_id -> one invocation, one figure, no double count" "ok" "$(s7_dup_check)"
 rm -rf "$S7DUPDIR"
 
+# ---------------------------------------------------------------------------
+# cost-ledger-blind-to-background-agents S8 (spec.md RC3 -- second G1, RC
+# recovery group) -- where an observed and a transcribed figure exist for the
+# SAME invocation and disagree, both are shown, each attributed to its
+# source, and the report states which one the total above actually used.
+# Extends the S7 fixture pattern directly above rather than inventing a
+# second one. No writer exists yet (S9); every `recovered` line below is
+# hand-written directly into the fixture ledger.
+echo "cost report observed/transcribed conflicts (RC3 -- spec.md, cost-ledger-blind-to-background-agents S8)"
+
+S8DIR="$(mktemp -d)"
+mkdir -p "$S8DIR/.claude"
+S8LEDGER="$S8DIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s8c1","slug":"s8-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s8c1","slug":"s8-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":12102}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s8c1","slug":"s8-fixture","total_tokens":11035,"token_source":"transcribed"}'
+} > "$S8LEDGER"
+
+# The same fixture with the recovered line removed -- the comparison (S8-2)'s
+# arithmetic invariant needs.
+S8NORECDIR="$(mktemp -d)"
+mkdir -p "$S8NORECDIR/.claude"
+S8NORECLEDGER="$S8NORECDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s8c1","slug":"s8-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s8c1","slug":"s8-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":12102}'
+} > "$S8NORECLEDGER"
+
+S8_OUT="$(report "$S8DIR" s8-fixture)"
+
+# (S8-1) RC3: both figures appear, each attributed to its source, and the
+# rule (the observed figure is the one counted in the total) is stated.
+expect "(S8-1) RC3: both figures appear, each attributed to its source, the rule stated" "yes" \
+  "$(printf '%s\n' "$S8_OUT" | grep -qF 'observed 12102, transcribed 11035' \
+     && printf '%s\n' "$S8_OUT" | grep -qF 'observed (host-measured) figure is the one counted in the total above' \
+     && printf '%s\n' "$S8_OUT" | grep -qF 'transcribed (model-reported) figure is shown for comparison only' \
+     && echo yes || echo no)"
+
+# (S8-2) RC3 (arithmetic invariant): COST_TOKENS_PRICED is identical to the
+# same ledger with the recovered line removed -- no average, no max, no
+# overwrite. The observed figure alone is what the total uses.
+s8_tokens_priced() { # $1 ledger $2 slug
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$1" "$2"
+  printf '%s' "$COST_TOKENS_PRICED"
+}
+expect "(S8-2) RC3: COST_TOKENS_PRICED identical with the recovered line present or removed (no average, no max, no overwrite)" "12102 12102" \
+  "$(s8_tokens_priced "$S8LEDGER" s8-fixture) $(s8_tokens_priced "$S8NORECLEDGER" s8-fixture)"
+
+rm -rf "$S8DIR" "$S8NORECDIR"
+
+# (S8-3) RC3 boundary: equal observed and transcribed figures are not a
+# disagreement -- nothing about a conflict is printed.
+S8EQDIR="$(mktemp -d)"
+mkdir -p "$S8EQDIR/.claude"
+S8EQLEDGER="$S8EQDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s8e1","slug":"s8-eq-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s8e1","slug":"s8-eq-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":12102}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s8e1","slug":"s8-eq-fixture","total_tokens":12102,"token_source":"transcribed"}'
+} > "$S8EQLEDGER"
+S8EQ_OUT="$(report "$S8EQDIR" s8-eq-fixture)"
+expect "(S8-3) RC3 bound: equal observed and transcribed figures -> no disagreement reported" "no" \
+  "$(printf '%s\n' "$S8EQ_OUT" | grep -qi 'disagree' && echo yes || echo no)"
+s8_eq_conflicts() {
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$S8EQLEDGER" "s8-eq-fixture"
+  printf '%s' "$COST_N_CONFLICTS"
+}
+expect "(S8-3) RC3 bound: equal figures -> COST_N_CONFLICTS stays 0" "0" "$(s8_eq_conflicts)"
+rm -rf "$S8EQDIR"
+
+# (S8-4) RC6: a ledger with no recovered records at all -> output
+# byte-identical to post-S7 -- no word about a conflict anywhere, since a
+# disagreement needs two figures and this ledger never had a second one.
+S8NONEDIR="$(mktemp -d)"
+mkdir -p "$S8NONEDIR/.claude"
+S8NONELEDGER="$S8NONEDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s8n1","slug":"s8-none-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s8n1","slug":"s8-none-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":12102}'
+} > "$S8NONELEDGER"
+S8NONE_OUT="$(report "$S8NONEDIR" s8-none-fixture)"
+expect "(S8-4) RC6: no recovered records at all -> no word about a conflict anywhere in the report" "no" \
+  "$(printf '%s\n' "$S8NONE_OUT" | grep -qi 'disagree' && echo yes || echo no)"
+s8_none_conflicts() {
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$S8NONELEDGER" "s8-none-fixture"
+  printf '%s' "$COST_N_CONFLICTS"
+}
+expect "(S8-4) RC6: no recovered records at all -> COST_N_CONFLICTS stays 0" "0" "$(s8_none_conflicts)"
+rm -rf "$S8NONEDIR"
+
 # --- cost-ledger-blind-to-background-agents S3 (CL3): the report states, in
 # its own output, why a backgrounded invocation's figure is absent -- printed
 # once per report, only when the unit actually holds one, worded as a
