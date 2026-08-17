@@ -2533,6 +2533,29 @@ gate_line() { # $1=output $2=gate number
   printf '%s\n' "$1" | grep -E "^gate $2: "
 }
 
+# Builds a directory holding exactly the external tools scripts/ship-check.sh
+# itself needs -- resolved against the CALLER's own PATH before any pruning,
+# symlinked under their bare names -- and deliberately omits shellcheck.
+# Setting PATH to this directory alone forces GENUINE, PORTABLE absence: it
+# never guesses which directories a platform's package manager avoids (the
+# old fixture's `/usr/bin:/bin:/usr/sbin:/sbin` allow-list broke exactly
+# because apt's shellcheck lands inside it -- spike-case-b.md §1), and it
+# never strips bash/coreutils just because a platform happens to co-locate
+# them with shellcheck. That co-location is real, not hypothetical: on
+# Ubuntu's merged /usr/bin, `bash` and `shellcheck` resolve to the SAME
+# real directory, so excluding wherever shellcheck resolves wholesale would
+# take bash down with it and the case would fail for the wrong reason
+# (confirmed against a throwaway container, investigation-grade).
+new_shellcheck_absent_path() {
+  local dir tool resolved
+  dir="$(mktemp -d)"
+  for tool in bash git mktemp cat rm head tr grep sed sleep; do
+    resolved="$(command -v "$tool" 2>/dev/null || true)"
+    [ -n "$resolved" ] && ln -s "$resolved" "$dir/$tool"
+  done
+  printf '%s' "$dir"
+}
+
 SHIP1="$(new_ship_fixture)"
 ship_run "$SHIP1"
 GATE_LINES="$(printf '%s\n' "$SHIP_OUT" | grep -cE '^gate [0-9]: ')"
@@ -2556,7 +2579,21 @@ expect "ship: a failing gate's own output appears verbatim" "yes" "$VERBATIM_FOU
 rm -rf "$SHIP2"
 
 SHIP3="$(new_ship_fixture)"
-SHIP_OUT="$(cd "$SHIP3" && PATH="/usr/bin:/bin:/usr/sbin:/sbin" bash scripts/ship-check.sh 2>&1)"
+SHELLCHECK_ABSENT_PATH="$(new_shellcheck_absent_path)"
+
+# The defect this case exists to fix: the old fixture ASSUMED its hard-coded
+# PATH allow-list achieved shellcheck's absence and never checked -- on
+# Linux, apt's shellcheck lives inside that very allow-list, so the
+# assumption was simply false there. Assert the precondition directly,
+# under the exact PATH the invocation right below uses, so a future PATH
+# layout that also fails to exclude shellcheck is caught here rather than
+# silently producing the same false green the old fixture did.
+PATH="$SHELLCHECK_ABSENT_PATH" command -v shellcheck >/dev/null 2>&1
+SHELLCHECK_LOOKUP_EXIT=$?
+expect "ship: case B's fixture trigger genuinely excludes shellcheck from PATH" \
+  "1" "$SHELLCHECK_LOOKUP_EXIT"
+
+SHIP_OUT="$(cd "$SHIP3" && PATH="$SHELLCHECK_ABSENT_PATH" bash scripts/ship-check.sh 2>&1)"
 SHIP_EXIT=$?
 G2_STATE="$(gate_line "$SHIP_OUT" 2)"
 case "$G2_STATE" in
@@ -2569,7 +2606,7 @@ case "$SHIP_OUT" in
 esac
 expect "ship: shellcheck absent from PATH reads not-run, verdict hold" "yes yes 1" \
   "$G2_NOTRUN $VERDICT_HOLD $([ "$SHIP_EXIT" -ne 0 ] && echo 1 || echo 0)"
-rm -rf "$SHIP3"
+rm -rf "$SHIP3" "$SHELLCHECK_ABSENT_PATH"
 
 SHIP4="$(new_ship_fixture)"
 rm -f "$SHIP4/tests/guardrails.test.sh"
