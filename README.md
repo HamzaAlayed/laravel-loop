@@ -95,6 +95,8 @@ This is entirely separate from Laravel Guild's `.claude/agents-board.jsonl`, if 
 
 Background-launched invocations are the majority of a `/loop` run — build lanes run several at a time, by design, and that is the point of running them that way — and this hook cannot price them: a backgrounded invocation's finish event carries no token figure at all. It is recorded as launched in background, outcome never observed, never silently folded into a priced total and never guessed at. The real figure is measured by the host and delivered into the session the moment that invocation finishes; it is not captured here, and no code in this plugin reaches for it.
 
+That real figure can still reach the ledger, but only by hand. `scripts/record-recovered-cost.sh --invocation-id <id> --total-tokens <n>` writes one recovered record for an invocation the host never priced — tagged `token_source: "transcribed"`, never `"observed"`. A recovered figure is **model-transcribed, not host-observed**: it is whatever a human or an orchestrating agent read off that invocation's own completion notification and typed in, not something this plugin measured itself. Nothing in this plugin runs that command automatically — it is a standalone CLI, not wired into any hook or spawn path — so skipping it changes nothing (RC6): a run in which nobody transcribes anything looks exactly as it always has, coverage included. Recovery narrows the gap only for the invocations somebody actually transcribed, and for no others — it does not close it.
+
 ## Cost reporting and the budget gate
 
 `/cost [slug]` reads **only** `.claude/loop-cost.jsonl` — no network call, no account, and no reading of Laravel Guild's `.claude/agents-board.jsonl` even when that file happens to sit right next to it and see more. Coverage is printed **before any total, always**: how many invocations the ledger holds for the unit, how many carry a token figure, how many do not, per phase. A total built from only the priced subset is labelled as covering that subset, never presented as the unit's whole cost, and where nothing for a unit is priced no token table is printed at all — the report says plainly that nothing about that unit's cost is observable, and why. No currency figure is ever produced: tokens, counts, and durations, never a dollar figure, never a rate card.
@@ -162,7 +164,7 @@ They answer different questions. Reach for the **Guild** when you want a named s
 ## Development
 
 ```bash
-bash tests/guardrails.test.sh   # 400 cases, zero dependencies
+bash tests/guardrails.test.sh   # 404 cases, zero dependencies
 shellcheck scripts/*.sh
 ```
 
