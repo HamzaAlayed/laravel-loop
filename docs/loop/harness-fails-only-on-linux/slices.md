@@ -476,3 +476,575 @@ together for exactly that reason.
 Not nominated, and worth saying why: **S1** and **S2** are the two lowest-risk slices in the pass.
 S1's output is checkable arithmetic against a run's own totals, and S2's blast radius is one markdown
 file about a case whose worst outcome is an honest `unknown`.
+
+---
+---
+
+# Second pass — the fix group
+
+**All four spike slices returned and merged.** This section is the second G1 the pass above deferred,
+cut against the evidence that was missing then and against the four decisions recorded in
+`docs/loop/decisions.md` → *"Second G1: close the eviction convergence gap, fix case B's fixture, add
+a macOS job (2026-08-17)"*. It **extends** the first pass; every contract that pass pinned still
+holds, and S-numbering continues at **S5**.
+
+**4 slices · genuinely concurrent lanes: 1 (S7, buildable alongside S5/S6 — merged after them) ·
+critical path S5 → S6 → S7 → S8 · then A1, which is the human's**
+
+The four decisions this pass cuts against, restated so no slice re-derives them:
+
+| Case / question | Decision (not reopened here) |
+|---|---|
+| **Case A** (`:429`) | The code is wrong. Close the convergence gap in `scripts/record-cost-event.sh`'s `append_and_evict()`. `L7` (appenders never block on the evict lock) must not regress; the change stays the minimum the decision authorises. Loosening or removing the assertion is REJECTED. |
+| **Case B** (`:2520`) | The **case** is wrong. Fix the fixture to force shellcheck's absence portably — discover where it actually resolves and exclude that, never an allow-list. `ship-check.sh` untouched, no gate added or removed, shellcheck policy unchanged. Reading case B's red as evidence against the not-run/hold property is REJECTED; that property was checked separately and holds. |
+| **The contract** (OQ2+OQ3) | Two-directional, enforced by adding **`macos-latest`** as a second job. The `ubuntu-latest` job keeps its one-job/three-step shape. S4's citation-is-not-proof limit must survive into the A5 statement. |
+| **A5 / A6** | A5 is now cuttable and is its own slice. A6 is now in scope: a second job changes what runs where, so `docs/loop/checks.md` changes — in the same commit as the workflow. |
+
+## The seam
+
+The seam is **S5**, and it is the one slice in this whole unit that changes behaviour a user has.
+Case A's decision is the only one of the four where the *product* is wrong rather than its test or its
+coverage: today the cost ledger's declared cap has no convergence guarantee under enough concurrent
+append pressure, on any platform, and the only thing that ever said so was one red case on one CI run.
+Fixing it delivers observable value even if nothing else in this unit ever lands — the ledger starts
+honouring the bound it documents. Everything after S5 is evidence machinery: S6 makes an existing
+guard portable, S7 buys a second platform's evidence, S8 writes down what is claimed and what produces
+the evidence for it.
+
+That ordering is deliberate and is *not* layer habit. S6 does not depend on S5's code; S7 does not
+depend on either. What orders them is stated per slice, and exactly one of the three orderings is a
+textual collision rather than a logical dependency — said so, in the slice, rather than left to look
+like a real edge.
+
+## Pinned contracts — second pass
+
+Extends the first pass's table; nothing there is revised. A builder that believes one of these is
+wrong returns `needs-decision` rather than changing it.
+
+| Contract | Value | Why it is pinned |
+|---|---|---|
+| Case-count deltas, per slice | **S5 +2 · S6 +1 · S7 0 · S8 +2** → `421` today, **`426`** once the group has landed | Two lanes both bumping `README.md:167`'s literal conflict *by construction*, and the loser's merge leaves the suite red on a case its diff never touched. Pinning the deltas at G1 is what lets each lane compute its own literal without asking. A lane whose honest delta differs states it in its return; the harness's own final `docs (case count)` case is the arbiter, never this table. |
+| Where new cases go | Appended **before** the final `docs (case count)` case, which stays last in the file | That case's `PASS + FAIL + 1` arithmetic is only the grand total if it runs last. Its own comment says so. |
+| The two assertions under repair | Case A's expected string stays `yes`; case B's stays `yes yes 1` | Both decisions fix the thing *around* the assertion. A changed expectation is the "made green by removing evidence" failure (A7), whichever side it is on. |
+| `scripts/ship-check.sh` | **Not edited by any slice in this pass.** Not a line, not a gate, not a message | Case B's decision. No observation anywhere shows a defect in `gate2_shellcheck`, and the three-gate set is settled by a prior decision. |
+| New configurables | **None, in any slice.** A slice that believes it needs one returns `needs-decision` | A9, and the standing rule that no threshold, default, or suggested value ships anywhere in this repository. This is what makes A9 vacuous for this unit rather than unmet — see the traceability table. |
+| Making red acceptable | `continue-on-error`, an `if:` guard that skips a step or a platform, a known-failures list, de-blocking a step, and skipping a case on a platform are all out of bounds in every slice. Reaching for one returns `needs-decision` | Non-goal *"not making red acceptable"*, plus A7 outright. It stays out of bounds even when it is the fastest route to green. |
+| A third failing case, if one appears | **Not this pass's to fix.** The floor is a lower bound (S1); a case that fails only once the two known ones are resolved needs its own recorded human decision (A3), so it returns `needs-decision` and does not get fixed inside whichever slice found it | A3 fails "one decision applied to more than one case as a group", and this pass's decisions authorise exactly two case-level changes. |
+| Local green ≠ the claim | Every slice's local evidence is `bash tests/guardrails.test.sh` on the maintainer's bash 3.2 host plus `shellcheck -S warning scripts/*.sh`. **Neither is evidence for A1, A2's resolved-tree count, or A5.** A container may be used to observe a Linux-only red and must be labelled investigation-grade | Unchanged from the first pass, and it now binds harder: two of these slices have reds that are *not observable at all* on the maintainer's host, and that asymmetry is stated in the slice rather than papered over. |
+| Nobody pushes | No slice pushes, dispatches, re-runs, tags, or re-tags anything. The push that produces A1's evidence is the human's, after the group merges | A1 and A2's resolved-tree half are the human's; see the traceability table. |
+
+## Order and concurrency — and the honest answer about parallelism
+
+```
+merge order                                        files each lane owns
+-----------------------------------------------------------------------------------
+S5  eviction convergence gap in append_and_evict()   scripts/record-cost-event.sh
+ |                                                   tests/ (section b)  README:167
+ v
+S6  case B's fixture forces absence portably         tests/ (case B)     README:167
+ |
+ v
+S7  macos-latest job + checks.md, one commit         .github/ci.yml      checks.md
+ |      ^-- may be BUILT concurrently with S5/S6: its two files are disjoint
+ v          from theirs. Merged here for evidence hygiene, not conflict.
+S8  claimed platforms + their evidence producers     checks.md  tests/   README:167
+ |
+ v
+A1 / A2 (resolved tree) -- THE HUMAN's: push, then read both jobs' own run records
+```
+
+- **Genuinely concurrent: one lane, S7.** Not two, not three. S5, S6 and S8 all touch
+  `tests/guardrails.test.sh` and `README.md:167`'s literal, and the harness's own last case asserts
+  that literal equals the live tally — so any two of them in flight together conflict at the same
+  number, every time, and the loser's merge leaves the suite red on a case its diff never touched.
+  This is the same finding the first pass recorded; it is restated here because a fix group is exactly
+  where the temptation to promise parallelism lands.
+- **S6 `Depends on: S5` is a textual dependency and says so.** There is no logical ordering between
+  the ledger's eviction and a ship-check fixture. What orders them is `README.md:167`. Either order
+  works; pick one at G1 and keep it, because the second lane's literal is computed from the first's.
+- **S7's merge order is an evidence-hygiene choice, not a file conflict.** Merged after S6, the first
+  pushed run carrying the second job also carries both fixes — so a red on either job is attributable
+  to a platform rather than to a fix that had not landed yet. Merged first, every red run needs a
+  paragraph to explain.
+- **S8 depends on S7 for a real reason:** A5 fails a platform claimed with nothing producing evidence
+  for it. If the statement lands before the job exists, the slice ships precisely the failure A5 was
+  written to catch, and its own new case would be asserting a claim about a job that is not there.
+
+**If the human would rather run fewer lanes**, the merge to make is **S7 + S8** (one workflow change
+and the statement about it, both about what runs where). The pairing to refuse is **S5 + S6**: two
+unrelated causes, two separate recorded decisions, and A3 fails a single change covering both.
+
+---
+
+## Slices
+
+### S5 — Close the convergence gap in `append_and_evict()` so the ledger honours its declared cap
+```
+Owner:       loop-build
+Context:     scripts/record-cost-event.sh -- `append_and_evict()` (~L250-279) and the
+             header notes that document L7 (never block a spawn) and its precedence over
+             L9 (~L60-70, L96); spike-case-a.md, ALL of it, but especially §1's literal
+             reading (a lock-loser never retries; the winner gives up after 5 attempts and
+             releases regardless) and §3 (H1 -- a platform/dialect cause -- is REFUTED by
+             20/20 trials; H2, the arrival-rate reading, is open);
+             tests/guardrails.test.sh section (b) at :407-435, its three existing cases
+             (:429 convergence, :431 valid JSON, :433 never-empty) and section (a)'s
+             newest-N ordering case at :405; decisions.md's second-G1 entry, Case A bullet;
+             spec.md A3, A7, A8, A9 and the "not a redesign of the cost ledger" non-goal;
+             README.md:167's `421 cases` literal.
+Constraints: - THE BEHAVIOUR TO ACHIEVE, stated as behaviour and not as an algorithm: once
+               every concurrent appender has finished, the ledger is at or under the
+               declared cap -- including when appenders lose the evict race at the moment
+               the final lines land. HOW is the builder's, inside the two limits below.
+               This envelope deliberately names no mechanism; picking one here would be
+               designing the fix at G1.
+             - HARD LIMIT 1, L7 must not regress: an appender's own line is written before
+               anything is decided about the evict lock, and no appender's wall clock grows
+               with how long another process holds that lock. Guarded by its own case
+               below.
+             - HARD LIMIT 2, the minimum the decision authorises: `append_and_evict()` and
+               the harness. NOT the ledger's line format, NOT the retention order (newest-N
+               -- :405 must still pass unmodified), NOT the cap's env var name or its
+               non-numeric fallback (:475), NOT /cost, cost-report.sh, cost-ledger-lib.sh,
+               record-recovered-cost.sh, or the budget gate. The spec's ledger non-goal
+               binds everywhere beyond what this decision names.
+             - NO NEW CONFIGURABLE of any kind (A9). If the fix appears to need one, return
+               `needs-decision` -- do not ship one unset "harmlessly".
+             - RED IS OBSERVED, NOT REASONED, and this is the slice's central discipline.
+               spike-case-a.md §2 found 20/20 pre-fix trials PASSING under ordinary
+               pressure, so a case built at ordinary pressure would be green before AND
+               after and would prove nothing. Construct the scenario, then run the new
+               case's own body against a COPY of the pre-fix script
+               (`git show <base>:scripts/record-cost-event.sh` into a temp dir) and record
+               5/5 consecutive FAILS there, then 5/5 consecutive passes against the fixed
+               script. If no 5/5-red scenario can be constructed, return `needs-decision`
+               with what was tried -- never a weaker case, and never a green slice carrying
+               a test that could not have failed.
+             - Existing cases :405, :429, :431, :433, :475 are not edited, and pass.
+             - bash 3.2 (this host) and the runner's bash both; `shellcheck -S warning
+               scripts/*.sh` clean; no jq/python3/GNU-only requirement introduced. Note
+               fractional `sleep` is already established as portable here (spike-case-a §1).
+             - README.md:167's literal is bumped to the harness's own new total IN THIS
+               COMMIT (+2 expected, per the pinned deltas); new cases go before the final
+               `docs (case count)` case, which stays last.
+Output:      scripts/record-cost-event.sh; tests/guardrails.test.sh (new cases inside
+             section (b) only); README.md (the one literal).
+Done when:   With the cap set to C and N concurrent appenders run to completion, the ledger
+             holds at most C lines -- in a scenario that is red 5/5 against the pre-fix
+             script and green 5/5 after -- while an append still completes and lands its
+             line while another process holds the evict lock, and the full suite is green
+             on bash 3.2 with shellcheck clean.
+Test set:    5 cases -- 2 new, 3 existing regressions. Selection rule: ONE input dimension
+             actually matters here (who holds the evict lock at the moment the final appends
+             land), so this is not a pairwise problem; it is the criterion, its named
+             constraint, and the existing invariants that must not move.
+               1. NEW, RED->GREEN, and the one that carries the slice: after all appenders
+                  finish, `wc -l` <= cap, in a scenario chosen to defeat a fixed retry
+                  bound. Falsification is mandatory and is the pre-fix-copy run above.
+                                                                          [A3 case A, A7]
+               2. NEW, REGRESSION GUARD, and labelled as one rather than disguised as
+                  proof: with the evict lock held by another process, an append completes,
+                  its line is present, and its wall clock does not scale with how long the
+                  lock stays held. GREEN BEFORE AND AFTER -- it proves the fix did not cost
+                  L7, not that the fix works.                                        [L7]
+               3. :429 unmodified, same expected `yes`, still green on this host.  [A7, A8]
+               4. :431 and :433 unmodified -- retained lines remain complete JSON and the
+                  ledger is never observed empty. A convergence fix that trims harder must
+                  not start being observed mid-rename.                            [A8, H3]
+               5. :405 and :475 unmodified -- newest-N retention order and the non-numeric
+                  cap fallback are both outside this decision.                       [A8]
+             Fails now: case 1 fails against the pre-fix script by construction, and that
+             is demonstrated rather than asserted. Nothing in this repository currently
+             fails on the convergence gap on this host -- which is exactly why case 1 has
+             to be built and falsified rather than borrowed from the runner.
+Do NOT:      - Do not touch scripts/ship-check.sh, cost-ledger-lib.sh, cost-report.sh,
+               record-recovered-cost.sh, check-budget-gate.sh, or any other script.
+             - Do not touch tests/guardrails.test.sh:2508-2522 (case B and its fixture) --
+               that region is S6's, and two lanes in one file at one literal is the
+               conflict this plan is ordered to avoid.
+             - Do not edit .github/workflows/ci.yml, docs/loop/checks.md, spec.md, any
+               spike-*.md, or this file.
+             - Do not modify, delete, skip, renumber, or weaken ANY existing case, and do
+               not change case A's expected string. Loosening it is a rejected option.
+             - Do not add an env var, threshold, default, or "suggested" value.
+             - Do not change the ledger's schema, its retention order, or any other write
+               path's semantics; do not touch /cost's output or the budget gate.
+             - Do not reach for continue-on-error, a known-failures list, a platform skip,
+               or de-blocking a step. Return `needs-decision` instead.
+             - Do not push, dispatch, re-run, or tag anything.
+             - Do not report a container run as evidence for A1 or A2's resolved-tree count.
+Depends on:  nothing
+```
+
+### S6 — Make case B force shellcheck's absence portably, without touching the gate or its assertion
+```
+Owner:       loop-build
+Context:     tests/guardrails.test.sh:2508-2522 -- case B, its `new_ship_fixture` call and
+             its hard-coded `PATH="/usr/bin:/bin:/usr/sbin:/sbin"` trigger; the fixture
+             builder at :2463-2480 and `gate_line` at :2482; the SIBLING case at :2536
+             (`ship: a missing gate file reads not-run by name, verdict hold`) which
+             exercises the same not-run -> hold pathway through a platform-independent
+             trigger and PASSED on the runner; scripts/ship-check.sh's `gate2_shellcheck`
+             (~:143) READ ONLY -- it is a `command -v` lookup and it is correct;
+             spike-case-b.md §1 (the mechanism: apt's shellcheck installs to /usr/bin,
+             inside the fixture's own allow-list) and §2 (the safety property HOLDS on
+             Linux -- do not treat this red as evidence against it); decisions.md's
+             second-G1 entry, Case B bullet; spec.md A3, A7, A8 and the "not a change to
+             the shellcheck policy" non-goal; README.md:167.
+Constraints: - The trigger must achieve GENUINE ABSENCE PORTABLY: discover where
+               `shellcheck` actually resolves on whatever host is running the suite and
+               exclude that, rather than allow-listing a fixed set of directories that
+               happened to be right on one machine.
+             - It must also be correct when shellcheck is absent ALTOGETHER (`command -v
+               shellcheck` empty): the case still reads not-run / hold / non-zero and does
+               not error, mis-expand, or silently pass for the wrong reason. This is not
+               hypothetical -- the `macos-26-arm64` image manifest S4 cited lists NO
+               shellcheck, so S7's platform may be one where absence is already the
+               default.
+             - The expected string stays `yes yes 1`. Only the way absence is produced
+               changes. Loosening the assertion is a rejected option.
+             - scripts/ship-check.sh is NOT edited; no gate is added or removed; no gate's
+               output changes; the shellcheck policy (severity `-S warning`, `scripts/*.sh`
+               scope, whether `tests/*.sh` is covered) is unchanged.
+             - +1 case exactly, appended before the final `docs (case count)` case, with
+               README.md:167 bumped to the harness's own new total in the same commit.
+             - THE RED IS NOT OBSERVABLE ON THIS HOST, and the slice says so rather than
+               implying otherwise: case B is green here today. Demonstrate the pre-fix red
+               INVESTIGATION-GRADE, in a throwaway Linux container with apt's shellcheck at
+               /usr/bin (spike-case-b §1 reproduces this in three commands), label it
+               investigation-grade in the return, and name A1's real run as the only proof.
+               The container is not committed and is not a requirement for running the suite.
+Output:      tests/guardrails.test.sh (case B's own region plus one new case); README.md
+             (the one literal).
+Done when:   Under the environment case B runs ship-check in, `command -v shellcheck`
+             resolves nothing on a host where shellcheck is installed anywhere at all, gate
+             2 reads not-run, the verdict reads hold, the exit is non-zero, the sibling case
+             at :2536 is untouched and green, and the full suite is green on bash 3.2 with
+             shellcheck clean.
+Test set:    3 cases -- 1 new, 2 existing. Selection rule: the defect is that the case's
+             SETUP never asserted it had achieved its own precondition, so the new case is
+             that missing assertion; the other two are the pair that must not move.
+               1. NEW, RED->GREEN (on Linux): the case's own trigger achieves absence --
+                  under the exact environment the case invokes ship-check in, a shellcheck
+                  lookup resolves nothing. Red today wherever shellcheck lives inside the
+                  old allow-list (`/usr/bin`, per spike-case-b §1's `dpkg -L` and its
+                  PATH-scoped `command -v`); green after. On this host it is green both
+                  sides -- STATE that asymmetry, do not hide it.       [A3 case B, A4-adjacent]
+               2. :2520 unmodified in expectation (`yes yes 1`), green on both platforms
+                  after the trigger changes.                                     [A3, A7]
+               3. :2536 UNTOUCHED and green -- the platform-independent guard on the same
+                  not-run -> hold property. It is the reason the property keeps a guard
+                  that does not depend on PATH at all, which is what makes editing case B
+                  safe rather than a quiet weakening.                        [A7, safety]
+             Fails now: nothing in this repository asserts that case B's fixture actually
+             produced the absence it assumes; that unasserted precondition IS the defect.
+Do NOT:      - Do not edit scripts/ship-check.sh, add or remove a gate, or change what any
+               gate prints. No observation supports a change there.
+             - Do not change shellcheck's severity, file scope, or coverage of tests/*.sh.
+             - Do not touch section (b) (:407-435) or scripts/record-cost-event.sh -- S5's.
+             - Do not edit .github/workflows/ci.yml, docs/loop/checks.md, spec.md, any
+               spike-*.md, or this file.
+             - Do not make the case conditional on the platform, skip it anywhere, or gate
+               it behind `uname`. A case absent on one platform is A4's own failure.
+             - Do not "fix" this by arranging for shellcheck to be installed, moved, or
+               shimmed anywhere, and do not touch other ship cases (:2604, :2685, :2717,
+               :2719) that assume shellcheck IS present -- they are S7's concern.
+             - Do not weaken, delete, or renumber any case; do not change case B's expected
+               string.
+             - Do not push, dispatch, re-run, or tag anything.
+             - Do not cite the container as evidence for A1.
+Depends on:  S5 -- README.md:167's literal ONLY, a textual collision by construction, not a
+             logical dependency. If the human reorders the two, this line and S5's delta
+             swap; nothing else changes.
+```
+
+### S7 — Add `macos-latest` as a second job, and update `docs/loop/checks.md` in the same commit
+```
+Owner:       loop-build
+Context:     .github/workflows/ci.yml -- one job `guardrails` on ubuntu-latest, three
+             steps (`shellcheck`, `scripts are executable`, `guardrail tests`);
+             docs/loop/checks.md -- the enumeration, its own rule ("add a row here, on both
+             sides, whenever a check is added, removed, or renamed"), and its deltas table;
+             tests/guardrails.test.sh:3786-3800 -- the parity case that ITERATES every
+             `^      - name: ` line in ci.yml and requires each to appear in checks.md, plus
+             :3661-3720 (the cases that extract and execute ci.yml's own step body) and
+             :3803-3820 (the doc's content cases); spike-platforms.md -- the four candidate
+             labels with pinned manifest commits, the exact match/mismatch table
+             (`macos-latest`/`macos-26` arm64: bash 3.2.57(1)-release exact, arm64 exact, OS
+             point-version close and ROLLING), and its own statement that a manifest is not
+             proof; decisions.md's second-G1 entry, the contract bullet; spec.md A4, A6, A7,
+             A8 and the "not a general CI improvement" non-goal.
+Constraints: - The `ubuntu-latest` job is UNCHANGED: same single job, same three step names,
+               same run bodies, same order. Not restructured into a matrix, not renamed.
+             - Add exactly ONE second job, `runs-on: macos-latest`, running the same suite
+               file with the same invocation and NO platform conditionals. Nothing else:
+               no caching, no linter, no coverage step, no scheduled run, no artifact
+               upload, no new trigger, no permissions block.
+             - The macOS job's `- name:` values are DISTINCT from the ubuntu job's, so the
+               existing iterated parity case forces a real checks.md row for each instead
+               of silently matching the ubuntu names. A parity case satisfied by a
+               coincidence of names is a hollow one.
+             - THE LANDMINE, named because it is knowable now and expensive to discover on
+               a pushed run: four harness cases assume shellcheck is ON PATH -- :2604,
+               :2685, :2717, :2719 -- and the `macos-26-arm64` manifest S4 cited lists no
+               shellcheck. Install it in the macOS job's own shellcheck step, mirroring what
+               the ubuntu step already does with apt. Installing a tool in a CI step is not
+               a new dependency for anyone RUNNING the suite; the zero-dependency
+               constraint is about the suite's own requirements and is not relaxed.
+             - If the suite needs anything else to pass there, that is a NEW FAILING CASE:
+               return `needs-decision` naming it with expected-versus-got. This pass's
+               decisions authorise exactly two case-level changes (A's and B's) and A3
+               forbids one decision covering a group.
+             - docs/loop/checks.md is updated IN THE SAME COMMIT (A6): both jobs
+               enumerated, which platform runs which steps, the deltas table extended, and
+               A4's statement -- both jobs run the same file with the same invocation and
+               no case is conditional on platform, so the two jobs' reported totals must
+               match, and any case deliberately not run somewhere would have to be named
+               there. Also record that the macOS image's OS point-version is a moving
+               target. All four existing checks.md cases keep passing.
+             - Adds NO harness case, so this slice does not touch README.md:167. If a case
+               seems needed, it belongs to S8 -- return `needs-decision` rather than adding
+               one here and colliding with S8's literal.
+             - Guardrail exit codes, env-var overrides, subagent-only scoping, and
+               ship-check.sh's three declared gates are all unchanged (A8).
+Output:      .github/workflows/ci.yml; docs/loop/checks.md. Two files, one commit.
+Done when:   ci.yml declares two jobs -- the untouched ubuntu one and a macos-latest one
+             running the same suite -- docs/loop/checks.md enumerates both and states A4's
+             equal-totals expectation, the iterated step-name parity case passes over the
+             new YAML, and the full suite is green on this host with shellcheck clean.
+Test set:    4 cases, all existing, and that is the point of the cut: selection rule --
+             this repository ALREADY has iterated parity cases that read ci.yml itself
+             rather than a retyped copy, so the slice's test is theirs and no new case is
+             needed to prove it.
+               1. RED->GREEN, LOCALLY OBSERVABLE WITHOUT A PUSH -- :3798 (`every ci.yml
+                  guardrails step name appears in docs/loop/checks.md, iterated`) FAILS with
+                  the new job's steps in ci.yml and the checks.md hunk absent, and PASSES
+                  with both. Demonstrate both states in that order: add the YAML, run the
+                  suite, see red, add the doc, see green.                        [A6, A4]
+               2. :3716 and the extracted-run-body cases at :3661-3720 still green -- the
+                  ubuntu job's step names and bodies were not disturbed.         [A8, A6]
+               3. :3824 and :3834 still green -- the doc's existing content claims survive
+                  the doc growing a platform dimension.                              [A6]
+               4. Full suite green on this host (macOS arm64, bash 3.2) with shellcheck
+                  clean. This is the NEAREST AVAILABLE approximation of the new job's
+                  platform and is explicitly NOT proof for A1 or A5.                 [A8]
+             Fails now: :3798 cannot fail today because ci.yml has exactly the three step
+             names checks.md already lists; it becomes the slice's red the moment the second
+             job's steps exist, which is what makes it a real test rather than a formality.
+             NOT PROVABLE HERE, stated rather than implied: whether the suite passes on
+             macos-latest is knowable only from A1's real run. This slice makes that run
+             possible; it cannot make the claim.
+Do NOT:      - Do not edit tests/, scripts/, README.md, spec.md, any spike-*.md, or this
+               file.
+             - Do not restructure the ubuntu job into a matrix, rename its steps, reorder
+               them, or change their run bodies.
+             - No continue-on-error, no `if:` guard skipping a step or a platform, no
+               known-failures list, no `|| true`, no soft-fail of any kind. Return
+               `needs-decision`.
+             - Do not write the A5 platform-claim statement or name an evidence producer
+               per platform -- S8 owns that. checks.md gains WHAT RUNS WHERE, not the claim.
+             - Do not add a status badge or a CI-health section anywhere (still a non-goal).
+             - Do not add any further job, step, trigger, schedule, cache, or permission.
+             - Do not push, dispatch, or re-run anything -- the push is the human's, at A1.
+Depends on:  nothing file-wise -- its two files are disjoint from S5's and S6's, which is
+             what makes it the one lane that can genuinely be BUILT concurrently. MERGE it
+             after S6 so the first pushed run carrying the second job also carries both
+             fixes; that ordering is evidence hygiene, not a conflict.
+```
+
+### S8 — State which platforms the suite is claimed to hold on, each with a named evidence producer
+```
+Owner:       loop-build
+Context:     docs/loop/checks.md as S7 leaves it; .github/workflows/ci.yml as S7 leaves it
+             (two jobs, two `runs-on:` values); spike-platforms.md -- the candidate table,
+             the pinned manifest commits, the exact statement that "a citable image
+             manifest is not proof", and the rolling-image caveat; intent.md's host record
+             (macOS 26.6.1, arm64, `GNU bash, version 3.2.57(1)-release`);
+             tests/guardrails.test.sh:3780-3820 -- `CHECKSMD_FLAT`'s flattening helper and
+             the `checked-some 1, missing 0` iterated-grep shape to copy; spec.md A5, A4,
+             A1's evidence rule; README.md:167.
+Constraints: - The statement names EXACTLY the platforms the suite is claimed to hold on,
+               and for each one the named thing that produces the evidence:
+               `ubuntu-latest` -> the `guardrails` job's own suite step; `macos-latest` ->
+               the second job's own suite step. Nothing else is claimed.
+             - S4's LIMIT SHIPS WITH THE CLAIM, in the same place, not as a footnote
+               elsewhere: an image manifest documents what an image installed, not that the
+               suite passes there; only a real run of the suite on that platform is
+               evidence; and the images roll, so the OS point-version is a moving target. A
+               platform claimed with nothing producing evidence FAILS A5 -- and so does one
+               whose evidence is a citation.
+             - The maintainer's own host is described as WHAT THE macOS JOB APPROXIMATES
+               (bash exact, architecture exact, OS point-version close and moving), NOT as
+               a third claimed platform. A third claim would have only a person's memory
+               behind it -- that is OQ2 answer 2, which A5 fails by construction.
+             - No platform is described as covered, verified, guaranteed, or proven.
+               "Claimed, with this as the thing that produces evidence" is the vocabulary.
+             - The claim is ITERATED by a case, not prose-checked, so a third `runs-on:`
+               added later fails it rather than passing unnoticed.
+             - +2 cases exactly, appended before the final `docs (case count)` case, with
+               README.md:167 bumped to the harness's own new total in the same commit.
+             - No configurable of any kind (A9).
+Output:      docs/loop/checks.md (the claimed-platforms statement); tests/guardrails.test.sh
+             (two new cases); README.md (the one literal).
+Done when:   docs/loop/checks.md states the claimed platforms with a named evidence producer
+             each and carries the citation-is-not-proof and rolling-image limits; two new
+             iterated cases enforce both directions of that mapping; and the full suite is
+             green on this host with shellcheck clean.
+Test set:    3 cases -- 2 new, 1 existing. Selection rule: ONE CASE PER DIRECTION of the
+             mapping, because a single case covering both would keep passing while half of
+             it drifted -- the exact failure docs/loop/checks.md's own opening rule warns
+             about.
+               1. NEW, RED->GREEN: every `runs-on:` value in ci.yml appears in the
+                  claimed-platforms statement, ITERATED over the YAML, with a non-zero
+                  checked count (`checked-some 1, missing 0`, the shape :3798 already
+                  uses). Red before the statement exists; green after; red again the day a
+                  third platform lands without a row.                                [A5]
+               2. NEW, RED->GREEN: the statement carries, per claimed platform, a named
+                  evidence producer, AND carries the citation-is-not-proof limit AND the
+                  rolling-image caveat -- greps over the flattened doc, in the conjoined
+                  shape :3824 already uses. Red today: nothing in this repository states
+                  any of it.                                                     [A5, A1]
+               3. :3798 and the other three existing checks.md cases still green -- the
+                  doc grew a section and did not lose one.                        [A6, A8]
+             Fails now: `grep -ri "claimed" docs/loop/checks.md` finds nothing, and no file
+             in this repository names a platform the suite is claimed to hold on. Both new
+             cases therefore fail on the current tree by inspection, not by argument.
+Do NOT:      - Do not edit .github/workflows/ci.yml, scripts/, spec.md, any spike-*.md, or
+               this file. Do not touch tests/ beyond the two new cases.
+             - Do not claim any platform that no job in ci.yml runs the suite on, and do
+               not name the maintainer's host as a claimed platform.
+             - Do not use the words covered, verified, proven, or guaranteed about any
+               platform; do not present a manifest citation as evidence.
+             - Do not add a badge or a CI-health section (still a non-goal).
+             - Do not add a configurable, threshold, or default.
+             - Do not touch S5's section (b), S6's case B region, or any other existing
+               case; do not weaken, skip, or renumber anything.
+             - Do not push, dispatch, re-run, or tag anything.
+Depends on:  S7 -- a real dependency, not a textual one: the evidence producer must EXIST
+             before it is claimed, or the slice ships exactly the A5 failure it is written
+             to prevent, and its case 1 would assert a mapping to a job that is not there.
+             ALSO S6, for README.md:167's literal.
+```
+
+---
+
+## The human's two actions, named as the first pass named them
+
+Neither is a builder's slice, and neither is left implied.
+
+1. **A1 — push the resolved tree and read the run.** A builder cannot push, and a simulated Linux is
+   not evidence. After S5–S8 merge: push, then read both jobs' own records — each suite step's
+   conclusion must be `success` (not `skipped`, the distinction that hid this for twelve runs), and
+   each job's `total: N passed, M failed` line must show `M = 0`.
+2. **A2's resolved-tree half — read the floor again, off that run.** S1 established the floor as a
+   **lower bound against run `32026220384`** and said outright that the proof-grade count for the
+   resolved tree can only come from a real post-fix run. If that run names a third failing case, it is
+   the expected outcome of an unknown floor, not a surprise: it enters the same per-case path (a
+   recorded A3 decision first), and no slice in this pass is licensed to fix it.
+
+While reading it, compare the two jobs' totals against each other — that comparison **is** A4's
+proof, and S7's checks.md statement is what says the two must match.
+
+---
+
+## Cross-unit collisions — named again, with a landing order
+
+`docs/loop/recovered-figure-drops-slice-and-model/` still holds an `intent.md` and nothing else:
+captured, not specced, not cut. When it is cut it will want `scripts/cost-ledger-lib.sh`,
+`scripts/cost-report.sh`, `tests/guardrails.test.sh`, and `README.md:167`'s literal.
+
+- **The overlap is real this pass**, where the first pass had none. S5 edits
+  `scripts/record-cost-event.sh` — the same ledger writer's neighbourhood — and S5, S6 and S8 all
+  touch the harness and that literal.
+- **Land THIS unit's harness-touching slices (S5, S6, S8) first**, and do not start that unit's
+  harness-touching or README-touching slices until this unit's A1 run has been read. Two reasons, and
+  the second is the load-bearing one: the case-count literal conflicts by construction, and A1's
+  evidence must be attributable — a run carrying another unit's harness changes cannot tell anyone
+  whether *these* two fixes closed *these* two cases.
+- That unit's own script-only slices (`cost-report.sh`, `cost-ledger-lib.sh`, with no harness or
+  README edit) are safe to run alongside anything here.
+
+---
+
+## Criterion traceability — every criterion now assigned, the human's, or explicitly vacuous
+
+Replaces the first pass's table for the criteria it left as *"not yet assignable"*. Nothing is left in
+that state.
+
+| Criterion | Where it stands after this pass |
+|---|---|
+| **A1** — real run, real pushed commit, step `success` | **The human's, post-merge.** Unchanged from the first pass and unchangeable: a builder cannot push, and a simulated Linux is not evidence. S5–S8 make it reachable; the push makes it true. |
+| **A2** — the floor established, not assumed | **Half done, half the human's.** The observed floor is recorded in `spike-floor.md` (run `32026220384`, 2 failures, all 421 cases executed, recorded as a lower bound). The resolved-tree count is read off A1's own run, by the human. |
+| **A3** — a per-case recorded human decision, and a change matching it | **All three parts now named. Evidence:** `spike-case-a.md`, `spike-case-b.md`. **Decisions:** recorded per case in `decisions.md`, second-G1 entry, 2026-08-17. **Changes:** **S5** (case A → the code) and **S6** (case B → the case). One slice per case, never one change covering both. |
+| **A4** — no case silently absent on either platform | **Assigned: S7**, structurally and in writing. Structurally: one suite file, both jobs, same invocation, no platform conditionals, and every slice's `Do NOT` forbids a platform skip. In writing: S7's `checks.md` update states that the two jobs' reported totals must match and that anything deliberately not run somewhere would have to be named there. The comparison itself is read at A1, by the human. |
+| **A5** — claimed platforms, each with a named evidence producer | **Assigned: S8**, and it is the slice with the over-claim risk. Two claimed platforms, each with a CI job as its producer; S4's citation-is-not-proof limit and the rolling-image caveat ship in the same place as the claim; the maintainer's host is named as what the macOS job approximates, not as a third claim. Enforced by two iterated cases, not by prose. |
+| **A6** — `docs/loop/checks.md` matches both check sets | **Assigned: S7**, in the same commit as the workflow change, because this unit now does change what runs where. Enforced by an existing case that iterates `ci.yml`'s own step names, so the commit cannot land half-done. |
+| **A7** — nothing made green by removing evidence | **Cross-cutting, and pinned rather than trusted.** No assertion is loosened (both expected strings pinned above), no case is deleted, skipped, or weakened, the count never goes down, and the per-slice deltas are pinned (+2/+1/0/+2 → 426) with the harness's own final case as arbiter. Every slice's `Do NOT` forbids `continue-on-error`, a known-failures list, de-blocking a step, and a platform skip, and reaching for one returns `needs-decision`. |
+| **A8** — everything already guaranteed still holds | **Per-slice gate.** Every slice returns `bash tests/guardrails.test.sh` green on the maintainer's bash 3.2 host and `shellcheck -S warning scripts/*.sh` clean; the guardrails keep their exit codes, env overrides, and subagent-only scoping; `ship-check.sh` is untouched by all four slices, so its three declared gates are unchanged by construction. |
+| **A9** — any configurable ships unset, asserted by a test | **VACUOUS, with the reason, and made vacuous on purpose.** No slice in this group introduces a configurable: `record-cost-event.sh` already reads `LARAVEL_LOOP_COST_MAX_LINES` and S5 is forbidden from adding another, and none of S6–S8 introduces one. All four `Do NOT` lists forbid a threshold, default, or suggested value. If any slice returns `needs-decision` asking for one, A9 attaches to that slice and its test — asserting zero output and no behaviour change with the variable absent — becomes that slice's, not a later slice's. |
+| **OQ1** (per case) | Answered per case by the spikes, decided per case in `decisions.md`: case A = answer 2 (the code), case B = answer 1 (the case). Closed. |
+| **OQ2 + OQ3** (the contingent contract) | Contingency cleared by `spike-platforms.md` (a candidate named and cited, not proven). Decided: two-directional, enforced by a second job. Built by **S7**, claimed honestly by **S8**. Closed. |
+| **OQ4** (how much of the floor) | The floor read as 2 on the only completed run, and both are cut. A third case, if A1's run reveals one, needs its own A3 decision and is not this pass's — pinned above. |
+
+## Self-audit against the five-point G1 test
+
+Run before this reached the gate; a slice failing any point went back on my own bench.
+
+| | S5 | S6 | S7 | S8 |
+|---|---|---|---|---|
+| **1. One owning agent** | `loop-build` | `loop-build` | `loop-build` | `loop-build` |
+| **2. One commit's worth** | One function + its cases | One case's trigger + one new case | One job + its doc row, one commit | One statement + its two cases |
+| **3. Independently testable** | Named 5-case set; case 1 red 5/5 pre-fix by mandated falsification | Named 3-case set; case 1 red on Linux, and the asymmetry is stated | Named 4-case set; case 1 is red locally the moment the YAML lands without the doc | Named 3-case set; both new cases red on the current tree by inspection |
+| **4. Behaviour, not implementation** | "the ledger is at or under cap once appenders finish" — no algorithm named | "the trigger resolves no shellcheck" — no fixture code named | "two jobs, both enumerated, totals must match" | "each claimed platform has a named producer" |
+| **5. Dependencies explicit** | `nothing` | S5, and labelled textual-only | `nothing` file-wise; merge order stated with its reason | S7 (real) + S6 (textual) |
+| **`Do NOT` non-empty** | 9 lines | 8 lines | 8 lines | 7 lines |
+
+Two things this audit caught and changed, recorded so the gate can see the reasoning rather than the
+result: an earlier cut had **one** slice for "both fixes" (killed — A3 fails one decision applied as a
+group, and the two causes are unrelated), and an earlier cut had **S7 and S8 as one slice** (killed —
+"add a job **and also** state the platform claim" is the `and also` tell, and it would have let the
+claim land in the same commit as the thing it claims, with no moment where the A5 case could be seen
+red).
+
+---
+
+## Riskiest slice: **S5**
+
+**S5, and specifically its test — not its code.** S5 is the only slice in this unit that changes
+behaviour in the path every single hook write takes, and it is the only one whose red is not
+observable anywhere by default: `spike-case-a.md` §2 ran the failing scenario **20 times** on real
+Linux bash across two distributions, two bash versions and two CPU allocations, and it settled at cap
+every single time. The one CI failure remains the only observation of this defect that exists.
+
+That produces a specific, quiet failure shape. A builder writes a convergence case at ordinary
+pressure, it passes, the fix goes in, the suite is green, README's literal is bumped, A3's case-A
+decision reads satisfied, and A1's next run is green — while **the new case could never have failed
+and the convergence gap may still be there**, now with a test standing in front of it saying
+otherwise. That is worse than the state this unit started in, because today at least one red case
+knows the truth. It is the same shape as the first pass's S3 risk: paperwork in order, evidence gone.
+
+The whole mitigation is one constraint, and it is the line to read twice at this gate: **the new case
+is run against a copy of the pre-fix script and must fail 5/5 there before it may be trusted, and if
+no such scenario can be constructed the slice returns `needs-decision` rather than shipping a green
+test.** Nothing else in S5 defends this.
+
+Second risk inside the same slice, worth naming separately: `L7`. Appenders never blocking on the
+evict lock is a documented guarantee that outranks the cap itself in the script's own header, and the
+most natural-looking convergence fixes — retry until you get the lock, wait for the holder — cost
+exactly that. Hence case 2, labelled honestly as a regression guard that is green on both sides rather
+than dressed up as proof of the fix.
+
+**Runner-up: S7**, for a different reason — it is the slice that can discover a **new floor on a
+second platform**. Four existing ship cases assume shellcheck is on `PATH` (`:2604`, `:2685`,
+`:2717`, `:2719`) and the image manifest S4 cited lists none, which is why the install requirement is
+pinned in the envelope rather than left to be found on a pushed run. If anything *else* fails there,
+the pressure toward `continue-on-error` or "just skip it on macOS" is at its highest precisely because
+the fix group otherwise looks finished — which is why every slice's `Do NOT` forbids it by name and
+why `needs-decision` is the required answer.
+
+**S8** carries the over-claim risk the first pass nominated for S4, now one phase later: reading a
+manifest match and writing a statement the next reader takes as "covered". Its constraints keep the
+citation and its limit in the same paragraph for exactly that reason. **S6** is the lowest-risk slice
+here — its blast radius is one case's setup, the property that case guards keeps an independent guard
+at `:2536` that does not depend on `PATH` at all, and its worst outcome is a case that still only
+passes for the old reason.
