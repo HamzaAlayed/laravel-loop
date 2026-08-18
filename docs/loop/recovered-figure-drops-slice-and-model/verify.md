@@ -120,3 +120,38 @@ It cannot tell you `OQ3` was answered correctly, because it was not answered —
 that once-per-report marking suffices, and both real units are wholly transcribed, so no mixed unit
 exists yet to test that lean against. When one does, finding 1's parity case and `OQ3` both want
 revisiting.
+
+---
+
+## Finding 4 (the `(S4-n)` label collision) — accepted, with the reason, 2026-08-18
+
+Not fixed, and this is the decision rather than an omission. Two case families share the `(S4-n)`
+prefix: this unit's `S4` and `cost-ledger-blind-to-background-agents`' coverage-floor `S4` (which has
+since gained `(S4-1b)`). Renaming either family would edit case descriptions inside a **closed**
+unit's section for a purely cosmetic gain, against a pinned contract whose whole point is that
+existing cases are left alone. Nothing greps the labels, the descriptions disambiguate them on sight,
+and the suite's own arbiter is the tally, not the naming.
+
+What is worth doing instead, if it ever bites: any *new* unit prefixes its case labels with the unit
+rather than the slice number. Recorded here so the next reader does not re-derive it, and so the
+collision is on record as accepted rather than unnoticed.
+
+## Findings 1 and 2 — closed 2026-08-18, both with a case that can fail
+
+Recorded here so the verdict above is not read as still-open work.
+
+- **Finding 1 (parity on `S5`'s path)** — closed by `(S2-6)` in `55f1822`: `cost_slice_rows`' rows
+  **and** the unattributed count, diffed jq vs python3, on a fixture where a transcribed figure is
+  the thing being ranked (one en-dash range label, one host-observed invocation, one transcribed
+  invocation with no slice). Two tokens, because identical-and-empty would pass a bare diff while
+  proving nothing. Mutation-tested: with the python slice program reverted to ignoring transcribed
+  figures, `(S2-6)` fails while `(S2-5)` still passes — which is exactly the gap this finding named.
+- **Finding 2 (byte-identity for the coverage floor's unset state)** — closed by `(S4-1b)` in
+  `3624102`: a frozen literal block, the same instrument `RD8`'s cases already use, replacing the
+  decaying `git show HEAD:` comparison rather than restoring it. Mutation-tested: changing
+  `cache-read share: unavailable` to `not available` in `cost-report.sh` makes it fail. The pinned-
+  contract crossing that finding flagged stands as recorded history; what is no longer true is that
+  the property went unasserted.
+
+**Finding 3** needs nothing further: the re-point was verified as executed, and its lesson is in
+`decisions.md` for the next cut.

@@ -24,3 +24,34 @@
 ## Concerns noted, not blocking
 
 - A stale header comment in `check-budget-gate.sh` claims BG1's unset-check happens "before it reads the hook payload," but the code reads stdin first — functionally harmless (output is still zero bytes either way), just an inaccurate comment for a future reader.
+
+---
+
+## Both concerns closed 2026-08-18
+
+**The stale header comment in `check-budget-gate.sh` — fixed, in 0.3.1.** `scripts/check-budget-gate.sh:14-18`
+now reads *"With both `LARAVEL_LOOP_BUDGET_WARN` and `LARAVEL_LOOP_BUDGET_HARD` unset or empty, this
+reads stdin (`INPUT="$(cat)"`) and then exits on the very next check"* — which is what the code does.
+`CHANGELOG.md`'s 0.3.1 entry records it. Nothing outstanding.
+
+**`FS1`'s intermittent failure — fixed in 0.3.1, and re-checked today.** The flake was root-caused
+there to the case's own doubly-nested capture pattern racing under bash 3.2, not to
+`warn-full-suite.sh`, which provably wrote its warning on every run; the fix collapsed each case to a
+single invocation with one flat capture. The comment above the case
+(`tests/guardrails.test.sh`, the `R4.4` section) records 1,000 consecutive clean runs at the time.
+
+Re-checked here rather than trusted from that record: **10 consecutive full-suite runs** on a frozen
+snapshot of `e59215c`, `Darwin 25.6.0` arm64, bash 3.2.57.
+
+- Every run: `total: 460 passed, 5 failed` — **identical, run to run, with zero variance**. A flake
+  is variance; there is none across ~4,650 case executions.
+- **No `FS`-numbered case failed in any run**, and neither did the `(b) … byte-identical across the
+  second run (DL4, CV7)` case that went red once on CI (see
+  `docs/loop/cost-log-section-parse-error-on-macos-ci/intent.md`).
+- The 5 failures are artifacts of running from a **copy** rather than the working tree: the two `H4`
+  cases need a git repository, the two `check-script-modes` cases need committed file modes, and the
+  `(e)` step-region case reads the repo's own history. All five pass in the real tree, where the same
+  commit reports `466 passed, 0 failed`.
+
+The verdict above stays as history. What changed is that neither follow-up is open, and the flake
+note should no longer be cited as a live risk.
