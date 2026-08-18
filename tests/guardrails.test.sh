@@ -3075,6 +3075,22 @@ readme_ledger_check() {
 expect "docs: README documents the cost ledger (path, env vars, machine, money, rework wording)" \
   "0" "$(readme_ledger_check)"
 
+# S4 (eviction-cap-not-honoured-under-contention, spec.md E1) -- the eviction
+# header names the cap's actual guarantee (eventual convergence, E1's
+# property 3), the moment it holds at (a later invocation having arrived and
+# discharged the trim -- not merely "converges" on its own), and states
+# plainly that a bound at rest is not achievable while L7 stands; README's
+# ledger paragraph carries that same moment in one clause. Flattened first
+# (the CHECKSMD_FLAT technique) because the header wraps at ~76 columns and
+# a single-line grep for a sentence spanning several lines fails for the
+# wrong reason. One conjoined case, four labelled tokens: splitting it would
+# let one surface drift while the other stayed green.
+EVICTION_HEADER_FLAT="$(sed -n '/^# Bound + oldest-first eviction/,/^# Rework attribution/p' "$ROOT/scripts/record-cost-event.sh" | tr '#' ' ' | tr '\n' ' ' | tr -s ' ')"
+README_LEDGER_LINE="$(grep 'LARAVEL_LOOP_COST_MAX_LINES' "$README_MD")"
+expect "S4: eviction header states the cap's property (eventual convergence), the moment it holds at (a later invocation has arrived), that a bound at rest is not achievable while L7 stands, and README's ledger paragraph carries the same moment" \
+  "property yes, moment yes, l7-limit yes, readme-moment yes" \
+  "property $(printf '%s' "$EVICTION_HEADER_FLAT" | grep -qi 'eventual convergence' && echo yes || echo no), moment $(printf '%s' "$EVICTION_HEADER_FLAT" | grep -qi 'later invocation has arrived' && echo yes || echo no), l7-limit $(printf '%s' "$EVICTION_HEADER_FLAT" | grep -qi 'bound at rest is not achievable' && printf '%s' "$EVICTION_HEADER_FLAT" | grep -qi 'L7' && echo yes || echo no), readme-moment $(printf '%s' "$README_LEDGER_LINE" | grep -qi 'later invocation has arrived' && echo yes || echo no)"
+
 # S8 (spec.md X6) -- README documents /cost, the budget gate (both env
 # vars), the per-phase family, the full-suite guard's escape hatch, "unset
 # means disabled", the no-default reasoning, and the never-money statement.
