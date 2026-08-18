@@ -601,3 +601,699 @@ Fix group: NOT CUT. OQ1 is held for the spike, so an envelope now would commit t
 2. Re-slice — say which, and why
 3. Spec is wrong — back to loop-spec
 ```
+
+---
+---
+
+# Second G1 — the fix group, cut 2026-08-18
+
+Everything above stands. This section **extends** it: the first pass's *Pinned contracts* table
+stays in force verbatim for the surfaces it covers, S-numbering continues at **S4**, and nothing
+here contradicts an earlier line. Where a first-pass statement was written for a markdown-only pass
+and no longer applies to a code-touching one (the `427 cases` pin, "no lane touches `scripts/`"),
+this section says so explicitly rather than quietly overriding it.
+
+**4 slices · parallel set: EMPTY (and that is a finding, not an omission) · critical path
+S4 → S5 → S6 → S7**
+
+## The decision this pass is cut against
+
+`docs/loop/decisions.md`'s newest entry — *"Second G1: the ledger promises convergence, and a later
+invocation is obliged to trim (2026-08-18)"* — is the input, restated so no slice re-derives it and
+no slice reopens it:
+
+| # | Decided | Consequence for this cut |
+|---|---|---|
+| 1 | The cap promises **`E1`'s property 3 — eventual convergence — stated explicitly**, where today it is only *implied* by the header's accepted-cost sentence ("a ledger that sits slightly over cap for a moment", `scripts/record-cost-event.sh:97-98`) | **S4**, and it is the seam |
+| 2 | Obligation **class 3** — a later invocation checks and trims **on arrival, unconditionally, regardless of what its own append needs** | **S5** |
+| 3 | Case (f)'s assertion is **replaced** with `S2`'s deterministic lock-hold construction — not deleted, not weakened | **S5**, in the same commit as the behaviour it proves |
+
+**The load-bearing reason class 3 was chosen, restated because it is also this cut's guardrail:**
+`S1` rated class 3 the only obligation class that is **fully `L7`-compatible at zero cost to any
+appending invocation** (`spike-oq2-bound-at-rest.md` §3, row 3: *"Fully compatible — it changes
+nothing about any appending invocation's own path"*). So a cut that puts new work on an appending
+invocation's own path has drifted off the decision, and every slice below is written to make that
+drift visible rather than possible. A builder that concludes it needs to touch the appending path
+returns **`needs-decision`**.
+
+`OQ1`, `OQ2`, `OQ3` and `OQ5` are **answered and closed**. No slice reopens any of them. `OQ4` (the
+stale evict lock) remains **out of scope**, exactly as in the first pass: no slice, not folded in,
+one recorded observation line if a lane trips over it.
+
+### The three things that blocked the first cut, and where each now stands
+
+The first pass named three blockers. All three are discharged, which is why the group is cuttable now
+and was not then:
+
+1. **Whether there is a fix to make at all** (`OQ1`) → answered: property 3 stated, class 3
+   obliged. Both halves produce work, so the group has both a documentation slice and a behaviour
+   slice, not one or the other.
+2. **Whether the chosen answer is buildable** (`S1`) → answered: property 2 is **not achievable**
+   alongside `L7`, and class 3 is achievable at zero appending-path cost. `E5`'s second branch
+   (revising `L7`) therefore never opens — **`L7` is not amended by any slice here**, and that was
+   explicitly foreclosed at this gate.
+3. **Whether the change can be falsified before it is believed** (`S2`) → answered: **yes**, 5/5 red
+   against HEAD `d24e2ce` and 5/5 against pre-`S5`, with a 0/5 sub-budget control. `E3` is meetable,
+   and `S5` inherits the obligation to reproduce its own red rather than cite `S2`'s.
+
+---
+
+## The seam
+
+**S4 — say what the cap promises.** It is the smallest change that delivers observable value, it is
+the one thing `spec.md` puts deliberately first (*"until the property is stated, none of the others
+can be checked against anything"*), and — unlike a refactor-first opening — a reader of the ledger's
+mechanism is better off the moment it lands, with or without S5.
+
+It is also honestly *only* documentation, and the ordering is chosen so that it is not documentation
+ahead of code: **property 3 is already true today.** Today a ledger left over cap converges when the
+next *appending* invocation runs; S4 writes that down, with the moment it holds at and the limit
+`L7` puts on it. S5 then tightens *which* later invocation discharges it — any arrival, not only an
+appending one — and amends the mechanism sentence in the same commit. So no slice ever leaves the
+header describing behaviour the script does not have.
+
+The alternative order (S5 first, S4 second) was considered and not taken: it would leave one commit
+in which the code converges on arrival while the only written statement of the cap remains the
+implied one that started this whole unit.
+
+---
+
+## Order and concurrency
+
+```
+S4  state the property (E1)                     README, script header, +1 case
+ └─→ S5  oblige an arrival that appends nothing to trim (class 3, E3, E5, E6)
+     │       script, case (f) REPLACED, +3 cases        ← riskiest
+     └─→ S6  measure the cost where it is now paid (E8's after-half)   markdown only
+         └─→ S7  record what this fix foreclosed, with the number (E9) decisions.md
+```
+
+**Parallel set: empty.** Not a missed lane — four independent reasons, each of which alone forces a
+sequence:
+
+- **S4 → S5** is textual twice over: both edit the same header block
+  (`scripts/record-cost-event.sh:85-116`) and both add cases to `tests/guardrails.test.sh`, so both
+  move `README.md`'s case-count literal. Two lanes moving that one number conflict *by
+  construction*, and the loser's merge leaves the suite red on a case its diff never touched.
+- **S5 → S6** is logical: `E8`'s after-half measures the changed script. There is nothing to measure
+  before S5.
+- **S6 → S7** is logical: S7's entry carries S6's number. A decisions entry that says "the cost is
+  small" instead of a figure is exactly the adjective this repository's `E8` refuses.
+- The whole group shares `tests/guardrails.test.sh` with a **concurrently building neighbour unit** —
+  see *Cross-unit landing order* below.
+
+Stating an empty parallel set plainly is the finding: this group is four sequential merges, and any
+plan that promises otherwise is promising a rebase.
+
+---
+
+## Case-count deltas — pinned as DELTAS, never as absolute literals
+
+⚠ **`recovered-figure-drops-slice-and-model` is building concurrently and its six slices move
+`README.md:167` from 427 through to 460. Its S1 is in flight at this gate.** The absolute case count
+at the moment any slice below builds is therefore **not knowable here**, and a pinned absolute would
+be wrong the moment the neighbour merges — turning the harness's own last case red on a diff this
+lane never touched.
+
+| Slice | Case-count delta | What produces it |
+|---|---|---|
+| **S4** | **+1** | one conjoined docs case over the flattened header + README ledger paragraph |
+| **S5** | **+3** | case (f) **replaced** in place (net 0) + three new cases (arrival trims on a Bash-shaped event; arrival while the lock is held does nothing and does not wait; arrival at/under cap is a no-op) |
+| **S6** | **0** | markdown only |
+| **S7** | **0** | markdown only |
+| **group** | **+4** | |
+
+**Build-time computation rule, binding on every lane:**
+
+1. Merge local `main` in first (`docs/loop/conventions.md`, *Confirm a lane's base*).
+2. Read the live literal from `main`, never from this document:
+   `sed -n '/^## Development/,/^## /p' README.md | grep -oE '[0-9]+ cases'`.
+3. Write `that number + this slice's delta` back into the same line. Nothing else in
+   `README.md`'s `## Development` block changes.
+4. The arbiter is the harness's own **last** case, `docs (case count)`
+   (`tests/guardrails.test.sh:4017`), whose `PASS + FAIL + 1` must equal the new literal. Green
+   there is the proof; this table is only a forecast.
+5. **New cases go before that last case**, which stays last in the file — its arithmetic is the
+   grand total only if it runs last, as its own comment says.
+6. A lane whose **honest delta differs** from the table (a conjoined case split in two, a case that
+   fires inside a loop) states the real delta in its return and computes the literal from it. The
+   table is not a licence to write the wrong number.
+
+---
+
+## Pinned contracts for the fix group
+
+Extends the first pass's table; a builder that believes one is wrong returns `needs-decision` rather
+than changing it.
+
+| Contract | Value | Why it is pinned |
+|---|---|---|
+| One trim loop, not two | The arrival trim and the append-path trim share **exactly one** implementation inside `record-cost-event.sh` — the existing loop at `:274-284`, factored out of `append_and_evict()` and called from both. A second copy is a defect, not a style choice | Two copies of a rule can only *promise* agreement; one shared program makes it structural. This repository's own precedent, twice: `cost-ledger-lib.sh`'s header and `check-script-modes.sh`'s G0 entry in `decisions.md` |
+| Where the obligation lives | Only on arrival paths **this invocation ends without appending**: the `Bash` rework branch (`:537-540`) when no `cap_trip` was emitted, and the deduped duplicate-finish discard (`:762-784`, its `exit 0` at `:779`) | This is class 3 as decided, and it is the placement that keeps the appending path untouched |
+| Where it must **not** live | Not on the appending paths (`:441`, `:782`); not before `append_and_evict()`; not in `record-recovered-cost.sh` (a deliberate, human-typed CLI with its own independent copy, out of scope); not on the two early exits `SubagentStop` (`:528`) and the unmatched-event `*)` (`:529`) — neither is registered in `hooks.json`, so a filesystem read there buys nothing and only widens the diff | The first is the decision's own guardrail; the rest are scope control |
+| One trim per invocation, ever | No invocation performs both an arrival trim and an append-path trim. **Checked by reading the diff at G2, not by a case** — a case asserting it could not fail, since a double trim and a single trim leave the same file | Naming the unfalsifiable check as unfalsifiable, rather than shipping a test that cannot go red |
+| The arrival trim never waits | One `mkdir "$EVICT_LOCK"` attempt, no poll loop, no retry, no `sleep`. Lock lost → return 0 and let the holder finish | `L6` (cost accounting never blocks or delays) and `L7`'s spirit. The arrival path fires on the frequent `PostToolUse`/`Bash` registration; a wait there would delay a real tool return |
+| No bound, counter, or no-progress guard | The trim loop keeps its `while :;` shape and its I/O breaks, including `S9`'s `mv` break. Re-adding an attempt cap restores the very convergence gap `S5` removed | `decisions.md`'s G2-follow-up entry, and `spec.md`'s *Already rejected* |
+| `L7` is not amended | Its header sentence (`:95-98`), its documented precedence over `L9` (`:62-67`), and case (g) (`tests/guardrails.test.sh:467-486`) are all untouched and green. `E5`'s second branch never opens | Explicitly foreclosed at this gate; questioning `L7` is its own unit at G0 |
+| Replaced ≠ weakened, and the difference is spelled out | Case (f) keeps its letter, its position and its section. Its **assertion and construction change**. A *weakened* case asserts less than before or can no longer fail; this one asserts **strictly more** (the hole is constructed, the file is observed over cap at rest, *then* observed converged) and is red 5/5 against the pre-change script where the old one was 0/N locally across 8 arms | `spec.md`'s non-goal — *no case weakened, deleted, skipped, or renumbered* — needs a stated distinction, or a builder will read "replace" as licence to relax |
+| What the old construction guarded, and where that cover now lives | The dropped raw-`>>`-writer arm's pressure (a sustained stream landing throughout the winner's own loop) stays guarded by case (a) (80 sequential events, cap 50, newest-in-order) and case (b) (60 **concurrent real** hook invocations settle at or under cap, never empty, every line parseable). Neither is modified | "Nothing is lost" is a claim that has to name where the cover moved, or it is a hope |
+| `E1`'s "hard cap" scope | E1's grep condition covers the **ledger line cap** only, in `scripts/record-cost-event.sh` and `README.md`'s ledger paragraph. The **budget gate's** unrelated "hard cap" (`commands/loop.md:63`, `scripts/check-budget-gate.sh:404`, and the harness's own grep filter at `tests/guardrails.test.sh:2228`) is a different mechanism and is **out of bounds** | A lane that greps the repo for `hard cap` and "fixes every hit" edits a different feature and turns case `:2228` red |
+| Header greps are done flattened | Any case asserting header or README wording flattens first (`tr '\n' ' '`, the `CHECKSMD_FLAT` technique already in this suite) before grepping | The header wraps at ~76 columns; a single-line grep for a sentence that spans three lines fails for the wrong reason |
+| New configurables | **None.** No env var, threshold, default, or suggested value, anywhere. A lane that thinks it needs one returns `needs-decision` | `E7`, and the standing repository rule |
+| The repository's own `.claude/` | Never written to. Every measurement and every trial runs against a throwaway `CLAUDE_PROJECT_DIR` | The real ledger is other units' evidence |
+| Older script versions | Read-only via `git show <rev>:scripts/record-cost-event.sh > "$TMP/..."`. No `checkout`, no branch, no stash, no reset | Carried forward from the first pass |
+| Counts, never rates | Every trial figure is `N/M`, one trial = one sample. No percentages, no "usually", no "intermittent" | `E4`, and it binds S5, S6 and S7 |
+| Nobody pushes | No lane pushes, dispatches, re-runs, cancels or tags. `E2` is the human's, after the group merges | Carried forward from the first pass |
+| First-pass pins that this pass **supersedes**, named rather than silently dropped | The `427 cases` pin and "no lane touches `scripts/`, `tests/`, `README.md`" were pins **for the markdown-only spike pass**. This pass touches all three, under the delta rule above. Everything else in the first table stands unchanged | A superseded pin has to be named as superseded, or the document contradicts itself |
+
+---
+
+## Slices
+
+### S4 — State what the cap promises, and the moment it holds at
+```
+Owner:       loop-build
+Context:     scripts/record-cost-event.sh -- the "Bound + oldest-first eviction" header block
+             (:85-116). Specifically :88-90 ("Every invocation that appends a line then checks
+             whether the ledger is over cap and, if so, evicts the oldest lines itself"), the
+             L7 sentence at :95-98 with its accepted cost ("a ledger that sits slightly over
+             cap for a moment"), and the convergence-loop note at :105-112.
+             README.md's cost-ledger paragraph (:92) -- "Bound it with
+             LARAVEL_LOOP_COST_MAX_LINES (default 5,000; oldest lines evicted first)", a bound
+             stated with no moment attached.
+             spec.md E1 and its three candidate properties (:44-60); decisions.md's newest
+             entry (this gate's decision, all three parts);
+             spike-oq2-bound-at-rest.md SS1-SS3 -- L7 quoted verbatim, the not-achievable
+             verdict, and the per-class table whose row 3 is the chosen obligation.
+             tests/guardrails.test.sh :3029-3050 (the existing README/script ledger docs case,
+             `readme_ledger_check`) as the shape and the neighbourhood for the new case; the
+             CHECKSMD_FLAT flatten-then-grep technique used by the docs/loop/checks.md cases;
+             tests/guardrails.test.sh:4017 (`docs (case count)`), which must stay last.
+Constraints: - STATE PROPERTY 3, IN THOSE TERMS: the ledger is at or under cap once a later
+               invocation has arrived and discharged the trim; it may sit over cap until then;
+               and with L7 as written that is the strongest property available -- a bound AT
+               REST is NOT achievable, per spike-oq2-bound-at-rest.md SS2. All three parts, in
+               the header block where a reader of the mechanism already goes.
+             - The property statement must name the MOMENT it holds at. "Converges" on its own
+               is what the file already implies and is what let a case and a codebase disagree
+               about one word for two releases.
+             - README's ledger paragraph gets the same moment, in one clause. It currently
+               promises a bound with no moment, to a reader who never opens the script.
+             - E1's grep condition is scoped to the LEDGER LINE CAP. Do not touch the budget
+               gate's unrelated "hard cap" wording (commands/loop.md:63,
+               scripts/check-budget-gate.sh:404) or the harness grep filter at :2228.
+             - Documentation only: not one line of behaviour changes in this slice. `git diff
+               main -- scripts/` shows comment lines only.
+             - Do not describe the arrival obligation as existing yet -- S5 builds it and
+               amends :88-90 itself. Property 3 as stated here is true of today's script.
+             - Case count: +1. Compute README's literal from `main` at build time per the rule
+               above; never from a number written in this document.
+             - shellcheck -S warning scripts/*.sh stays clean; bash 3.2 only.
+Output:      scripts/record-cost-event.sh (header comment), README.md (ledger paragraph +
+             the `## Development` case-count literal), tests/guardrails.test.sh (+1 case).
+Done when:   A reader of the eviction header learns which property the cap guarantees, at what
+             moment it holds, and that a bound at rest is not achievable while L7 stands; a
+             reader of README learns the same moment in one clause; and a case asserts it.
+Test set:    1 case. Selection rule: ONE CONJOINED CASE with labelled tokens over the
+             flattened header and the flattened README paragraph -- this suite's own house
+             shape (case 6 of the checks.md group, `readme_ledger_check`), chosen because two
+             separate cases would let one surface drift while the other stayed green, and a
+             labelled token still names which half broke. Four tokens:
+               1. property     -- the header names eventual convergence as the guarantee   [E1]
+               2. moment       -- it names the moment it holds at (a later invocation
+                                  having arrived), not merely that it converges            [E1]
+               3. l7-limit     -- it states that a bound at rest is not achievable while L7
+                                  holds, so the limit ships with the promise            [E1,E5]
+               4. readme-moment-- README's ledger paragraph carries the same moment         [E1]
+             Fails now: none of the four strings exists. The header states the accepted cost
+             ("slightly over cap for a moment") and the loop's own convergence, and never the
+             ledger's promise or its moment; README states a bound with no moment at all.
+             Falsify it, do not assume: run the new case against the pre-change files
+             (`git stash push -- scripts/ README.md`, or grep the pre-change text out with
+             `git show HEAD:`) and record RED in the return before making it green.
+             Passes after: all four tokens present, and `docs (case count)` green on the
+             recomputed literal.
+Do NOT:      - Do not change any behaviour: no code line in scripts/, no new function, no new
+               call site. S5 owns the mechanism.
+             - Do not touch the budget gate's "hard cap" wording anywhere, or the harness's
+               grep filter at tests/guardrails.test.sh:2228.
+             - Do not edit case (f), case (g), case (a), case (b), or case (h); do not
+               renumber, reletter, skip or delete any case.
+             - Do not edit scripts/record-recovered-cost.sh, scripts/ship-check.sh,
+               .github/, docs/loop/checks.md, spec.md, the three spike-*.md files, or any
+               file under docs/loop/recovered-figure-drops-slice-and-model/.
+             - Do not pin an absolute case count read from this document; compute it from main.
+             - Do not introduce an env var, threshold, default, or suggested value.
+             - Do not reopen OQ1, OQ2, OQ3 or OQ5, and do not touch the stale evict lock (OQ4).
+             - Do not write to this repository's own .claude/.
+             - Do not push, dispatch, re-run, cancel, or tag anything.
+Depends on:  nothing
+```
+
+### S5 — Oblige an arrival that appends nothing to trim the ledger on arrival
+```
+Owner:       loop-build
+Context:     scripts/record-cost-event.sh: append_and_evict() in full (:253-288) -- the L7 poll
+             (:257-260), the unconditional `>>` (:263), the single `mkdir "$EVICT_LOCK"`
+             attempt (:265), the convergence loop and its four I/O breaks (:274-284, including
+             S9's `mv` break at :283), and `rmdir` (:285). Its two appending call sites: :441
+             (cap_trip) and :782 (the finish/start record).
+             The arrival paths that append nothing: the Bash rework branch (:537-540, whose
+             handle_bash_rework_observation at :477-516 appends only when it emits a cap_trip
+             at :512), and the duplicate-finish discard (:762-784, `exit 0` at :779 when the
+             finished-marker mkdir loses). Also read, and deliberately NOT to be touched:
+             SubagentStop (:528) and the unmatched-event `*)` (:529), neither registered in
+             hooks/hooks.json.
+             hooks/hooks.json -- the three registrations that decide which arrivals are even
+             reachable: PreToolUse Agent|Task, PostToolUse Bash, PostToolUse Agent|Task.
+             spike-oq5-local-red.md SS3 -- the deterministic lock-hold construction, 5/5 red
+             vs HEAD and 5/5 vs pre-S5, AND its 0/5 sub-budget control (HOLD=0.02s), which is
+             the evidence for the synchronous-release change required below.
+             spike-oq2-bound-at-rest.md SS3 row 3 -- class 3, "fully compatible... zero on the
+             invocation that made the run's last append".
+             tests/guardrails.test.sh: case (f) at :437-465 (the assertion being replaced, at
+             :464), case (g) at :467-486 (untouched, must stay green), case (b) at :407-435 and
+             case (a) at :383-405 (where the dropped raw-writer arm's cover now lives), case
+             (h) at :488-540 (the mv-break guard), the `cost()` helper at :70, `finish_json`,
+             and `bash_test_json` at :593-613 in the REWORK section (defined AFTER the eviction
+             section -- see the placement constraint below).
+             docs/loop/decisions.md's newest entry; spec.md E3, E4, E5, E6, E7 and the failure-
+             mode table.
+Constraints: - THE BEHAVIOUR: an invocation that arrives and appends nothing checks the
+               ledger's line count and, if over cap, trims it -- unconditionally, regardless
+               of what its own event needed. This is obligation class 3 as decided.
+             - ZERO NEW WORK ON ANY APPENDING INVOCATION'S OWN PATH. The append path's
+               observable work is unchanged: same poll, same `>>`, same single mkdir attempt,
+               same loop. If your change adds a `wc -l`, a subprocess, or a branch to an
+               invocation that appends, you have drifted off the decision -- return
+               `needs-decision`. S6 measures this claim; do not make it unmeasurable.
+             - ONE TRIM LOOP. Factor the existing loop (:274-284) into a function both paths
+               call. Do not copy it. Do not alter its break set, and do not add an attempt
+               bound, iteration counter, or no-progress guard -- all three are foreclosed.
+             - THE ARRIVAL TRIM NEVER WAITS: one mkdir attempt, no poll, no retry, no sleep;
+               lock lost -> return 0. It fires on the PostToolUse/Bash registration, which is
+               the most frequent hook arrival in a real session, and delaying a tool return
+               there would trade L6 for a bound nobody asked for.
+             - ONE TRIM PER INVOCATION, EVER: an invocation that emits a cap_trip (and so
+               already trims via append_and_evict) does not also arrival-trim. Unfalsifiable by
+               a case (both leave the same file), so it is a read at G2 -- write it so the
+               reader can see it.
+             - L7 IS NOT AMENDED. Header sentence (:95-98), L9 precedence (:62-67) and case (g)
+               are untouched, and case (g) stays green.
+             - CASE (f) IS REPLACED IN ITS ASSERTION AND CONSTRUCTION, NOT WEAKENED AND NOT
+               DELETED. Same letter, same position, same section. The replacement asserts
+               STRICTLY MORE than the old one: that the hole is constructed AND that it closes.
+               Use S2's construction with ONE change -- release the lock SYNCHRONOUSLY (mkdir
+               the lock; run the real finish hook, which polls, gives up, appends and loses the
+               race; assert OVER cap; rmdir the lock; deliver one arrival that appends nothing;
+               assert AT OR UNDER cap) instead of S2's backgrounded `sleep N; rmdir`. Reason,
+               and it is S2's own evidence: its 0/5 control at HOLD=0.02s shows a hold shorter
+               than L7's poll budget flips the arm's colour, so a timed hold on a loaded CI
+               runner could release early and make the case green for the wrong reason. No
+               sleep, no background job, no timing dependence beyond L7's own bounded poll.
+             - The over-cap-before token is what stops the case being vacuous. Both tokens
+               assert, in one `expect`, in this suite's `"yes yes"` style. Dropping the first
+               token is weakening the case.
+             - E3 IS THIS SLICE'S: reproduce your OWN red before green. Obtain the pre-change
+               script read-only (`git show <rev>:scripts/record-cost-event.sh` into a temp
+               file -- never checkout/branch/stash of the tree), run the replaced case against
+               it 5 times and the changed one 5 times, and record both counts and the shas in
+               your return. Citing S2's 5/5 is not a substitute: S2 falsified the hole, you are
+               falsifying the fix.
+             - PLACEMENT: `bash_test_json` (:593) is defined AFTER the eviction section, so the
+               Bash-arrival case belongs in the rework section beside it; the other cases
+               belong in the eviction section. Do not move, re-order, or duplicate an existing
+               helper to work around this.
+             - E6: cases (a), (b), (c), (d), (e), (g), (h) are unmodified and green. E7: no env
+               var, threshold, default or literal is introduced -- evidence it that way, by
+               grepping your own diff for `LARAVEL_LOOP_` and for new numeric literals.
+             - Case count: +3 (case (f) replaced in place is net 0). Compute README's literal
+               from `main` at build time; state your honest delta in your return if it differs.
+             - bash 3.2 only; shellcheck -S warning scripts/*.sh clean; the hook exits 0 on
+               every path (L6).
+Output:      scripts/record-cost-event.sh (the factored trim function, two arrival call sites,
+             the amended mechanism sentence at :88-90), tests/guardrails.test.sh (case (f)
+             replaced + 3 new cases), README.md (`## Development` literal only).
+Done when:   A ledger left over cap at rest by a lock-losing last appender is at or under cap
+             again as soon as ANY later invocation arrives -- including one that appends
+             nothing at all -- and case (f), in its replaced form, proves it: red 5/5 against
+             the pre-change script, green 5/5 after.
+Test set:    4 cases. Selection rule: one per thing this mechanism can get wrong that no other
+             case in the suite would catch -- the property itself, each of the two obliged call
+             sites, the never-wait failure mode, and the at-cap boundary. The 20000-line
+             "converge a massively over-cap file on one arrival" arm was CONSIDERED AND NOT
+             TAKEN: cases (a) and (b) already guard multi-iteration convergence, and a second
+             20000-line arm would double this suite's slowest section to cover an iteration
+             count the shared loop already owns.
+               1. case (f), REPLACED: held lock -> real finish appends as a lock loser ->
+                  ledger observed OVER cap at rest -> lock released -> one arrival that appends
+                  nothing (a duplicate finish for an id already recorded, which is discarded at
+                  :779 and appends nothing) -> ledger at or under cap. One `expect`, tokens
+                  "yes yes".                                          [E1 property 3, E3, OQ1]
+               2. the frequent real arrival: a PostToolUse/Bash event (`bash_test_json ...
+                  pass`) against a ledger seeded over cap trims it to cap, appends no line of
+                  its own, and exits 0. This is the path that fires most in a real session, and
+                  no existing case sends a Bash event with an over-cap ledger.        [class 3]
+               3. never waits: with the evict lock held by another process, an arrival that
+                  appends nothing returns with its wall clock well under the hold, exits 0, and
+                  leaves the ledger untrimmed -- case (g)'s shape, for the NEW path, which case
+                  (g) does not cover because case (g)'s subject is an appender.        [L6, E5]
+               4. boundary, at or under cap: an arrival with the ledger AT cap changes nothing
+                  -- byte-identical ledger, no leftover `.evict.` temp file, exit 0.  [H3, E6]
+             Fails now: today no arrival that appends nothing ever reads the ledger's line
+             count, so 1, 2 and 3 have no code path at all; 4 passes trivially today and is
+             kept as the regression guard for the path 1-3 add -- say so in its comment rather
+             than presenting it as red-before.
+             Passes after: 1-3 green, 4 still green, (a)(b)(c)(d)(e)(g)(h) untouched and green,
+             `docs (case count)` green on the recomputed literal.
+Do NOT:      - Do not add work of any kind to an appending invocation's path, and do not place
+               the arrival trim before append_and_evict() on a path that will append.
+             - Do not amend L7: not its header sentence, not its L9 precedence, not case (g).
+             - Do not add an attempt bound, an iteration counter, or a no-progress guard.
+             - Do not copy the trim loop; there is exactly one implementation.
+             - Do not weaken, delete, skip, reletter, renumber or reorder any case. Case (f) is
+               replaced in place, keeping its letter and position.
+             - Do not touch scripts/record-recovered-cost.sh (its own independent
+               append_and_evict is deliberate and out of scope), scripts/ship-check.sh,
+               .github/, docs/loop/checks.md, hooks/hooks.json, spec.md, the three spike-*.md
+               files, or docs/loop/recovered-figure-drops-slice-and-model/.
+             - Do not reach for continue-on-error, a known-failures list, quarantining,
+               de-blocking a step, or a platform skip -- out of bounds by non-goal even when it
+               is the fastest route to green. Return `needs-decision` instead.
+             - Do not investigate or fix the stale evict lock (OQ4): one observation line if you
+               trip over it. A red you cannot show the lock absent for is not this unit's red.
+             - Do not introduce an env var, threshold, default, or suggested value.
+             - Do not write to this repository's own .claude/; throwaway CLAUDE_PROJECT_DIR
+               only. Do not `git checkout`/branch/stash to obtain the pre-change script.
+             - Do not pin an absolute case count from this document.
+             - Do not push, dispatch, re-run, cancel, or tag anything.
+Depends on:  S4 -- textual (same header block, same case-count literal) AND semantic (S5 amends
+             the mechanism sentence that S4 writes the property into). Not a layer habit: if S5
+             landed first, one commit would exist in which the code converges on arrival while
+             the only written statement of the cap is the implied one that started this unit.
+```
+
+### S6 — Measure what the change costs where it is now paid, against S1's recorded baseline
+```
+Owner:       loop-build
+Context:     spike-oq2-bound-at-rest.md SS4 -- E8's before-half, and the figures this slice
+             measures against: under cap n=20 mean 148.0 ms / median 144.5 ms (min 136, max
+             216); over cap n=20 mean 153.2 ms / median 149.5 ms (min 145, max 180); host
+             macOS 26.6.1 arm64 GNU bash 3.2.57(1)-release; sha d24e2ce; method -- payload
+             built OUTSIDE the timed interval, one `bash record-cost-event.sh` per trial under
+             a fresh throwaway CLAUDE_PROJECT_DIR, over-cap arm re-seeded to 5000 lines before
+             each trial with cap 15 so every trial runs a full convergence loop.
+             spec.md E8 and E4. scripts/record-cost-event.sh as changed by S5.
+             hooks/hooks.json -- PostToolUse/Bash is the registration that makes the arrival
+             path frequent, which is why it is the arm that matters here.
+Constraints: - REPRODUCE S1'S METHOD EXACTLY for the two comparable arms, or the comparison is
+               not one: same host, same trial count (n=20 per arm), same payload-outside-the-
+               timed-interval construction, same throwaway-directory discipline, same seeding.
+               State the host and the sha you measured.
+             - THREE ARMS, and the third is the new information:
+                 (a) appending invocation, ledger under cap -- expected UNCHANGED vs 148.0/144.5
+                 (b) appending invocation, ledger over cap  -- expected UNCHANGED vs 153.2/149.5
+                 (c) an arrival that appends nothing (a PostToolUse/Bash event), with the
+                     ledger over cap and with it under cap -- the newly-paid work, which had no
+                     baseline because the path did not exist.
+             - E8 IS ANSWERED WITH A NUMBER, NOT AN ADJECTIVE. "Negligible", "small", "no
+               measurable difference" are all refused. Report mean, median, min, max, n.
+             - THE CLAIM UNDER TEST IS FALSIFIABLE, AND YOU MAY FALSIFY IT: if arm (a) or (b)
+               sits outside its baseline arm's own observed min-max spread, say so plainly and
+               return `needs-decision` -- that would mean S5 put cost on the appending path
+               after all, which is the one thing this gate's decision forbids. Do not round it
+               away and do not average it out.
+             - Counts, never rates (E4). One trial is one sample; 20 trials is 20 samples, not
+               a distribution to extrapolate from.
+             - Markdown only: this slice's whole diff is one new file. No code, no case, no
+               change to the case-count literal.
+             - Never the repository's own .claude/: throwaway CLAUDE_PROJECT_DIR per trial.
+Output:      docs/loop/eviction-cap-not-honoured-under-contention/measure-e8-after.md
+Done when:   That file states, in numbers: the three arms with mean/median/min/max/n each, the
+             host, the sha, the method (and where it is identical to S1's), the delta of arms
+             (a) and (b) against S1's recorded before-figures, and the arrival path's own cost
+             with the ledger over and under cap.
+Test set:    4 checks. THE PROOF IS A MEASUREMENT, NOT A HARNESS CASE, and that is stated in
+             the file rather than disguised: a timing assertion in this suite would be flaky on
+             a shared CI runner and would be the kind of case that goes red for reasons the diff
+             cannot explain. Selection rule: one check per way this record could mislead
+             someone downstream who cannot re-run it.
+               1. arms (a) and (b) are compared against S1's exact figures, and the comparison
+                  states whether each sits inside the baseline arm's own min-max spread    [E8]
+               2. arm (c) is reported with both ledger states, since the over-cap one is the
+                  only place the new work is actually paid                                 [E8]
+               3. every arm carries n, mean, median, min, max -- no arm summarised in prose
+                                                                                        [E8,E4]
+               4. the method section names each point where it matches S1's and each where it
+                  could not (and why), so a second person can re-run it            [E8, E3-ish]
+             Fails now: no after-figure exists anywhere; E8 has a before-half and nothing to
+             compare it to, and the arrival path has never been timed because it did not exist.
+             Passes after: three arms, twelve figures, one method section, one explicit verdict
+             on whether the appending path's cost moved.
+Do NOT:      - Do not edit scripts/, tests/, .github/, README.md, spec.md, decisions.md, the
+               three spike-*.md files, or any other unit's artifacts. One new markdown file.
+             - Do not "fix" a disappointing number by changing the script; that would be S5's
+               work arriving in the wrong slice. Report it and return `needs-decision`.
+             - Do not measure on a container, VM, or a different host and present it as
+               comparable to S1's -- S1's figures are host-specific and so are yours.
+             - Do not state a rate, a percentage, or an expectation.
+             - Do not write to this repository's own .claude/.
+             - Do not push, dispatch, re-run, cancel, or tag anything.
+Depends on:  S5 -- there is nothing to measure until the arrival path exists. Logical, not
+             textual: this slice shares no file with S5.
+```
+
+### S7 — Record what this fix foreclosed, with the measured number
+```
+Owner:       loop-build
+Context:     docs/loop/decisions.md -- its newest entry ("Second G1: the ledger promises
+             convergence, and a later invocation is obliged to trim", 2026-08-18), which
+             already forecloses property 2, obligation classes 1/2/4/5, leaving the assertion
+             as it stands, deleting or weakening the case, and amending L7. This slice ADDS to
+             that entry (or appends a short follow-up beneath it); it never rewrites it.
+             This section of slices.md -- the Pinned contracts table, which is where the
+             placement choices being recorded were actually made.
+             measure-e8-after.md (S6's output) for the number.
+             spec.md E9, E4, E2.
+Constraints: - RECORD WHAT THIS PASS FORECLOSED THAT THE GATE ENTRY DID NOT, because these were
+               G1's choices and not the gate's:
+                 * arrival-trimming on EVERY invocation including appenders -- rejected: it
+                   puts new work on an appending invocation's own path, which is the one thing
+                   the chosen obligation class was chosen for avoiding;
+                 * a second copy of the trim loop for the arrival path -- rejected: two copies
+                   of one rule can only promise agreement (cost-ledger-lib.sh's own precedent);
+                 * extending the obligation to scripts/record-recovered-cost.sh -- rejected:
+                   a deliberate human-typed CLI, no contention, its independent copy is
+                   documented as deliberate;
+                 * obliging the two unregistered early exits (SubagentStop, unmatched event) --
+                   rejected: unreachable through hooks/hooks.json, so it buys nothing;
+                 * S2's TIMED lock release in the replaced case -- rejected in favour of a
+                   synchronous release, on S2's own 0/5 sub-budget control: a timed hold can
+                   release before L7's poll budget expires on a loaded runner and make the case
+                   green for the wrong reason;
+                 * the 20000-line raw-writer arm as a kept case -- dropped, with cases (a) and
+                   (b) named as where that pressure stays guarded;
+                 * an attempt bound / iteration counter / no-progress guard -- already
+                   foreclosed, restated so a future reader does not re-propose it here.
+             - CARRY S6'S NUMBER, not an adjective: the measured cost on the newly-obliged
+               arrival path, and whether the appending path's own cost moved.
+             - STATE E2 AS OUTSTANDING AND WHOSE IT IS: a real pushed run on both guarding
+               platforms is the human's, post-merge, and one green run is ONE SAMPLE, not a
+               rate (E4). Do not write a sentence that reads as though merging closed it.
+             - STATE E3 AS MET AND HOW: red-before/green-after, with S5's trial counts and the
+               script shas, and S2's independent 5/5 as the prior falsification of the hole
+               itself.
+             - Markdown only, one file. No case, no literal change, no code.
+Output:      docs/loop/decisions.md (this pass's foreclosures, appended -- the existing entry is
+             not rewritten).
+Done when:   A future session reading decisions.md alone can see which placement was chosen,
+             which alternatives were considered and rejected and why, what the change cost as a
+             number, and that E2 is still open and belongs to the human.
+Test set:    1 check, and it is a READ, not a harness case -- nothing in this suite greps
+             decisions.md today and adding a grep case would freeze the prose of a file whose
+             whole value is being written freely. Selection rule: the one thing this entry can
+             fail at is silence about a rejected alternative, so the check is completeness
+             against the list above.
+               1. every bullet in the Constraints list above appears in the entry with its
+                  reason, S6's number is present as a number, and E2 is named as the human's
+                  outstanding action with one-green-run-is-one-sample stated       [E9, E4, E2]
+             Fails now: decisions.md's newest entry records the gate's decision (property 3,
+             class 3, the replaced assertion) and none of the placement choices, because none
+             of them had been made when it was written.
+             Passes after: all seven foreclosures, one figure, one outstanding-human-action
+             sentence.
+Do NOT:      - Do not rewrite, reword, or reorder the existing gate entry; append.
+             - Do not edit scripts/, tests/, .github/, README.md, spec.md, the three
+               spike-*.md files, or docs/loop/recovered-figure-drops-slice-and-model/.
+             - Do not claim E2 as met, and do not describe the fix as verified on CI.
+             - Do not state a rate or a percentage anywhere.
+             - Do not re-open OQ1/OQ2/OQ3/OQ5, and do not record a position on OQ4 beyond
+               "still out of scope, still compounds, still needs its own intent".
+             - Do not push, dispatch, re-run, cancel, or tag anything.
+Depends on:  S6 -- the entry carries S6's measured figure. (And S5 transitively, for the
+             placement it records.)
+```
+
+---
+
+## Self-audit against the five-point G1 test
+
+Run on my own bench before this reached the gate.
+
+| Test | S4 | S5 | S6 | S7 |
+|---|---|---|---|---|
+| **1. One owning agent** | `loop-build`, one lane | `loop-build`, one lane | `loop-build`, one lane | `loop-build`, one lane |
+| **2. One commit's worth** | A header block, one README clause, one case. No "and also": the README clause is the same statement for a reader who never opens the script | Code + the case that proves it, which is one commit by construction — splitting them would commit either a red suite or an untested fix | One markdown file | One markdown append |
+| **3. Independently testable** | 1 conjoined case, 4 labelled tokens, red today because none of the four strings exists | 4 cases, selection rule stated, 3 of them with no code path today; plus its own 5/5 red-before against the pre-change script | 4 named checks; the proof is a measurement and the file says so | 1 named check, and it is declared a read rather than dressed up as a case |
+| **4. Criteria as observable behaviour** | What a reader of the mechanism and a reader of README each learn | A ledger left over cap at rest is at or under cap after the next arrival, whatever that arrival was | Twelve figures and one explicit verdict on whether the appending path moved | What a future session can reconstruct from decisions.md alone |
+| **5. Dependencies explicit** | `nothing` | `S4`, with both reasons named (textual + semantic) | `S5`, named as logical-not-textual | `S6` |
+
+**Set sizes: 1, 4, 4, 1.** S5 at 4 is `test-design`'s "large, worth a second look" band, and it got
+one: the four are one mechanism's property, its two obliged call sites, and one boundary — not four
+behaviours. The cut that would split it (code in one slice, case (f)'s replacement in another) is
+the one thing this repository's own hooks forbid, because one half would be a red suite and the
+other an untested fix.
+
+**Sent back to myself during this pass, recorded because the rejected cut is the useful part:**
+
+- **A separate "factor the trim loop out" refactor slice.** Rejected: a refactor that delivers
+  nothing observable is not a seam, and it would put the one risky edit (`append_and_evict`'s loop)
+  in a commit with no case that could catch a mistake in it.
+- **E8's after-half folded into S5**, which is what my own first pass promised ("in the same
+  commit"). Deliberately changed, and here is why: S5 does **not** change the appending path — that
+  is the whole point of class 3 — so the after-half is no longer "measure the path you changed", it
+  is a 60-trial *falsification of the claim that nothing changed*, plus the first measurement of a
+  path that did not previously exist. Folding that into S5 makes S5 two commits' worth, and worse,
+  makes a disappointing number look like a build failure instead of a finding that belongs at a
+  human's desk.
+- **A stale-evict-lock slice.** Still out (`OQ4`). It has the same observable as this unit's hole
+  and would license a fix validated against the wrong defect.
+
+---
+
+## Cross-unit landing order
+
+**`docs/loop/recovered-figure-drops-slice-and-model` is live and building right now** — six
+sequential reader-side slices, its own delta table walking `README.md:167` from 427 to 460, **S1 in
+flight at this gate**. Shared surfaces, named here rather than discovered at merge:
+
+| Shared surface | This group | The neighbour |
+|---|---|---|
+| `README.md`'s `## Development` case-count literal | S4 (+1), S5 (+3) | every one of its six slices |
+| `tests/guardrails.test.sh` | eviction section (~:380-540), rework section (~:585+), docs section (~:3029+) — all inserts **before** the final `docs (case count)` case | its cost-report / cost-ledger-lib sections, same final-case rule |
+| `README.md` prose | S4, the cost-ledger paragraph (~:92) | its S6, README prose around `/cost` and recovered figures — adjacent, possibly the same block |
+| `docs/loop/decisions.md` | S7, appended at the end | its S6, appended at the end — the **same insertion point**, which is the classic silent conflict |
+
+**Recommended order: let the neighbour finish first, then run this group.** Two reasons, neither of
+them a coin flip: its S1 is already in flight and its remaining five slices are sequential by its own
+table, so interleaving means every lane of mine rebases against a literal that moves under it; and
+its S6 and my S7 append to the same end of `decisions.md`, which conflicts textually every time.
+
+**Either order survives, because of the delta rule.** No slice above carries an absolute case count.
+Each lane reads the literal from `main` at build time and adds its own delta, so a lane that happens
+to build after the neighbour's S4 lands computes 449+1 without being told, and one that builds before
+computes 427+1 — both correct, neither pinned here. **The only unsafe thing is a lane from each unit
+in flight at the same time**; if that is unavoidable, land the harness-touching one first and merge
+`main` into the other before it writes a line.
+
+---
+
+## Criterion traceability — supersedes the first pass's table
+
+Nothing is dropped, nothing is claimed as assigned that is not, and nothing is left "not yet
+assignable" — that phrasing was the first pass's honest state and this pass retires it.
+
+| Criterion | Owner, after this cut |
+|---|---|
+| **E1** — the cap's property written down, at the moment it holds | **S4.** Property 3 named, the moment named, the `L7` limit shipped with the promise, in the header block and in README's ledger paragraph, with one conjoined case over both. |
+| **E2** — the case green on both guarding platforms, on a real pushed commit | **The human's, post-merge. No slice claims it,** in this pass or the last. A builder does not push, and no container or local green substitutes. What to read when it runs: both `guardrails` and `guardrails-macos` reporting an identical `total: N passed, M failed`, with the replaced eviction convergence case passing on each. `S7` records it as outstanding so merging cannot be mistaken for closing it. |
+| **E3** — the change falsified before it is believed | **Met, in two independent halves.** The hole: `S2`, landed — 5/5 red vs HEAD `d24e2ce`, 5/5 vs pre-`S5`, 0/5 sub-budget control. The fix: **`S5`**, which must reproduce its own red — the replaced case (f) run 5× against the pre-change script obtained read-only, 5× against the changed one, both counts and both shas in its return. Citing `S2` is explicitly not a substitute. |
+| **E4** — no green run read as a rate | **Cross-cutting: `S5`, `S6`, `S7`.** Counts per arm with the version each ran against; twelve figures with `n` each; and `S7` stating in writing that the coming green CI run is one sample. |
+| **E5** — `L7` not traded silently | **`S5`, structurally.** `L7`'s second branch never opens: `S1` established property 2 is unachievable, class 3 was chosen precisely because it costs the appending path nothing, and the header sentence, the `L9` precedence and case (g) are all untouched. Evidence is case (g) green and unmodified, plus `S6`'s arms (a) and (b) showing the appending path's own cost did not move. |
+| **E6** — nothing already guaranteed regresses | **`S5`.** Cases (a), (b), (c), (d), (e), (g), (h) unmodified and green — `H3`, `H5`, `L5`, `L6`, `L9`, the non-numeric-cap fallback and the `mv`-break each keep their existing guard — plus the case-count delta rule, which is how "the suite's case total does not drop" is enforced rather than hoped. |
+| **E7** — no new threshold, default, or suggested value | **Vacuous by construction, and evidenced rather than asserted.** No slice introduces a configurable; `S5` greps its own diff for `LARAVEL_LOOP_` and for new numeric literals and reports the result. The zero-output-when-unset case E7 asks for has nothing to be written about — a lane that finds itself needing one has drifted and returns `needs-decision`. |
+| **E8** — the closing mechanism's cost measured where it is paid | **Before-half `S1`, landed, figures pinned in this section. After-half `S6`,** three arms: the appending path twice (expected unchanged, and falsifiable against S1's own min-max spread) and the newly-obliged arrival path, which is where the cost actually moved to. |
+| **E9** — the `L7`/`OQ1` answer recorded so it is not re-litigated | **Already written at this gate** — `decisions.md`'s newest entry forecloses property 2, classes 1/2/4/5, leaving the assertion, deleting the case, and amending `L7`. **`S7`** adds what that entry could not contain: the placement choices made *here*, the rejected variants, `S6`'s number, and `E2`'s outstanding status. |
+| **OQ1** | **Answered** at this gate: property 3, stated explicitly. Closed; no slice reopens it. |
+| **OQ2** | **Answered** by `S1`: property 2 is not achievable alongside `L7`. Closed. |
+| **OQ3** | **Answered** by `S3`: the fixture models a harsher world than production — mechanism matches a lock-loser, arrival rate does not. This is *why* case (f)'s construction is replaced rather than tuned, and it is recorded in `S7`. Closed. |
+| **OQ4** (the stale evict lock) | **Still out of scope.** No slice. It has the same observable as this unit's hole, still compounds with it, and still needs its own intent. One observation line if a lane trips over it. |
+| **OQ5** | **Answered** by `S2`: yes, a local red is constructible. Its honest gap — the filesystem dimension recorded **untried**, not tried-and-negative — is carried forward as a known limit of that lane, not re-opened by any slice here. |
+
+---
+
+## Riskiest slice: **S5**
+
+Not S6, which can only produce a number someone argues with, and not S4, whose worst outcome is a
+sentence a human rewords at G2. **S5 is the only slice that changes what the software does**, and it
+carries three distinct ways to be wrong, in descending order of how likely they are to survive
+review:
+
+1. **A new blocking surface on the most frequent hook arrival in the repository.** The arrival trim
+   lands on the `PostToolUse`/`Bash` registration — which fires on *every* Bash tool call in a real
+   session, far more often than any `Agent|Task` event — and the trim loop it calls is deliberately
+   **unbounded** (`while :;`, no attempt cap, by a recorded decision that must not be reversed). An
+   over-cap ledger plus a concurrent append stream could therefore hold a Bash tool's return for as
+   long as convergence takes, on a path that never previously touched the ledger at all. This is the
+   line worth reading twice at this gate. Three things contain it and none of them removes it: the
+   arrival trim takes one `mkdir` attempt and never waits on the lock; `S9`'s `mv` break plus the
+   loop's three other I/O breaks bound every real failure mode; and **`S6` measures it** — arm (c),
+   ledger over cap, in numbers. If the number is uncomfortable, the mitigation is a new decision at a
+   gate, not a bound smuggled into this slice.
+2. **Drift onto the appending path.** The tidiest-looking implementation — "check on arrival, at the
+   top, for every invocation" — is precisely the one the decision forbids, because it charges every
+   appending invocation a `wc -l` it does not pay today. It will look like simplification, it will
+   pass every case in the suite, and only a read of the diff (or `S6`'s arms (a) and (b)) catches it.
+   Hence a `needs-decision` instruction in the envelope rather than a hope.
+3. **A replaced case that is green for the wrong reason.** Two specific routes: dropping the
+   over-cap-before token (leaving an assertion that passes whether or not the hole was ever
+   constructed — the exact defect class that let a regression through a 426-case green suite before),
+   and keeping `S2`'s *timed* lock release (whose own 0/5 sub-budget control shows a hold shorter than
+   `L7`'s poll budget flips the arm's colour, so a loaded CI runner could release early and hand
+   everyone a green case that proves nothing). The envelope pins the synchronous release and both
+   tokens for exactly this reason.
+
+**Runner-up: S7**, for a quieter failure — an entry that records the decision but not the
+alternatives, which is how a rejected design gets re-proposed in three months. Its check is
+completeness against a list, precisely because "write down what we decided" reliably produces prose
+about the choice and silence about the seven things it closed.
+
+**And one honest residual nobody's slice closes:** `S2` recorded the **filesystem dimension as
+untried** — not tried-and-negative — so the local evidence base for this unit has a named hole in it.
+No slice above fills it, because a red found on a different filesystem would not change the
+mechanism, the property, or the obligation this cut implements. It stays a limit of `S2`'s finding,
+and `E2`'s real pushed run remains the only evidence about the guarding platforms.
+
+---
+
+# G1 — Slices — eviction-cap-not-honoured-under-contention (second G1: the fix group)
+
+```
+Slices: 4  ·  Parallel: 0 (empty, and that is the finding)  ·  Critical path: S4 → S5 → S6 → S7
+Case-count deltas: S4 +1 · S5 +3 · S6 0 · S7 0  (group +4, computed from main at build time —
+                   never from an absolute literal, because the neighbour unit is moving it now)
+Riskiest: S5 — the only slice that changes behaviour. It puts an unbounded trim loop on the
+          most frequent hook arrival in the repo (PostToolUse/Bash), its tidiest-looking
+          implementation is the one the decision forbids (work on the appending path), and its
+          replaced case can go green for the wrong reason if either the over-cap-before token
+          or the synchronous lock release is dropped.
+
+S4 · state what the cap promises — property 3, its moment, and L7's limit, in the header and
+     README; the seam, and true of today's script          · depends on nothing
+S5 · oblige an arrival that appends nothing to trim on arrival (class 3); case (f) REPLACED
+     with the synchronous lock-hold construction, red 5/5 before          · depends on S4
+S6 · measure the cost where it is now paid — three arms against S1's recorded before-figures,
+     falsifiable if the appending path moved                              · depends on S5
+S7 · record what this fix foreclosed, with S6's number, and E2 as still the human's
+                                                                          · depends on S6
+
+Human-owned, no slice claims it: E2 — a real pushed run, both platforms, after the group
+                                merges. One green run is one sample.
+Cross-unit: let recovered-figure-drops-slice-and-model finish first (its S1 is in flight; its
+            S6 and this S7 append to the same end of decisions.md). Either order survives the
+            delta rule; two lanes from different units in flight at once does not.
+
+1. Approve — brief S4, then S5, then S6, then S7, sequentially  (recommended)
+2. Re-slice — say which, and why
+3. Spec is wrong — back to loop-spec
+```
