@@ -5,6 +5,37 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Bookkeeping and test-coverage work only — no behaviour change, no new switch, no version bump. This
+section exists so the harness's live case count and this file stop disagreeing: 0.6.1 shipped at 465
+cases, and the two cases below take the tree to 466.
+
+### Fixed
+
+- **Byte-identity coverage for the coverage floor's unset state**, given a durable instrument.
+  `LARAVEL_LOOP_COST_MIN_COVERAGE` unset must leave a report unchanged; the case that proved it used
+  to diff against `git show HEAD:scripts/cost-report.sh`, which stopped meaning anything the moment
+  another slice legitimately touched that file. It is now a frozen literal block, the same instrument
+  the recovery cases already use, so a change to that output has to be acknowledged deliberately
+  rather than absorbed silently.
+- **Parser parity asserted on the path that ranks a transcribed figure.** The `jq` and `python3`
+  programs were compared on recovery-free fixtures only, so the per-slice ranking of a recovered
+  figure — added in 0.6.1 — was exercised by each program and compared by neither.
+
+### Notes
+
+- Both new cases were mutation-tested: each was shown to fail against a deliberately broken program
+  before being trusted. A case nobody has watched fail is a case nobody should rely on.
+- A 10-run sweep on a frozen snapshot found **zero variance** (identical results run to run across
+  roughly 4,650 case executions), which closes an old `FS1` flake note as no longer a live risk.
+- Two closed units gained their `log.md` close artifact, and two long-deferred gaps were captured as
+  intents rather than left as asides in other units' records: the stale evict lock, and resumed
+  invocations never reaching the ledger.
+- One new observation is on record with its cause deliberately unassigned: a `write-cost-log-section.sh`
+  invocation degraded to a parse error once on a macOS CI runner, 1 red in 3 samples on the same
+  commit, not reproducible locally in 150 iterations.
+
 ## [0.6.1] - 2026-08-18
 
 Two defect fixes to shipped behaviour, both found by the plugin's own checks rather than by a
