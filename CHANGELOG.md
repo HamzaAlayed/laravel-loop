@@ -5,6 +5,53 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-08-18
+
+Two defect fixes to shipped behaviour, both found by the plugin's own checks rather than by a
+user. No new command, no new switch, no new threshold, no default changed.
+
+### Fixed
+
+- **The ledger's line cap is now honoured under contention, and the repository says which property
+  it promises.** `LARAVEL_LOOP_COST_MAX_LINES` guarantees *eventual convergence* — at or under cap
+  once a later invocation has arrived and discharged the trim — not a bound at rest, and the
+  eviction header and README now state that in the words the code is held to. A bound at rest was
+  established as *not achievable* while appenders never block on the evict lock, so the fix
+  obliges the arrival instead: an invocation that appends nothing at all (a `PostToolUse`/`Bash`
+  event, or a duplicate finish already recorded) checks the ledger and trims it, unconditionally,
+  through the same single trim loop the appending path uses. It never waits — one `mkdir` attempt,
+  no poll, no retry — so an appending invocation's own cost did not move: measured at −0.5 ms mean
+  under cap and −2.6 ms mean over it, both versions' ranges overlapping, n=20 per arm. The newly
+  obliged arrival pays 16.1 ms mean where it converges a 5,000-line ledger and 6.7 ms where there
+  is nothing to do. Previously a lock-losing last appender could leave the ledger over cap
+  indefinitely, and the guardrail case that was supposed to catch it could not be reproduced
+  locally at all; the replaced case is red on demand against the pre-fix script and green after,
+  and both guarding platforms report it passing on a real pushed commit.
+- **`/cost` no longer drops a transcribed figure's other dimensions.** A figure recovered with
+  `scripts/record-recovered-cost.sh` was counted in coverage and totals but vanished from the
+  per-slice ranking, the per-phase model line, and the rework token share — so a wholly
+  transcribed unit read `no slice attributed to any priced invocation`, `unavailable` for every
+  phase's model, and `token share: unavailable (no priced invocations are marked rework)` printed
+  directly beneath a non-zero rework count. All three now read the dimensions from the
+  invocation's **own** `start`/`finish` records, which is the only place they are ever written; a
+  recovered record still carries nothing but a token figure. Host-observed figures keep
+  precedence, the two are never summed, and a duplicated recovered line still yields one of
+  everything. Where an invocation's own records name no slice, it is reported **unattributed**
+  with its token count stated in the ranking's own section rather than silently omitted — and a
+  concentration verdict is printed only when the ranked tokens and the total they are compared
+  against cover the same invocations.
+
+### Notes
+
+- Harness grew from 440 to 465 cases. Both parser programs (`jq` and `python3`) are now compared
+  against each other on a ledger where a transcribed figure is the thing being ranked — the gap
+  that let the two drift in the first place.
+- Both units carry a `verify.md` with a CONCERNS verdict: every acceptance criterion is met with
+  its evidence, and the two open items are recorded rather than closed — the append-cost
+  comparison against the earlier baseline is inconclusive because that baseline's timing
+  instrument was never recorded, and one new case guards a regression rather than proving the fix.
+- One green run per platform is one sample. It is not a claim that either failure class is gone.
+
 ## [0.6.0] - 2026-08-17
 
 Teaches the cost ledger to be honest about what it cannot see, and gives it a deliberate,

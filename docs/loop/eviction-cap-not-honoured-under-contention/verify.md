@@ -1,8 +1,9 @@
 # Verify — eviction-cap-not-honoured-under-contention (fix group, S4–S7)
 
-**Verdict: CONCERNS** — every criterion checkable from this seat is proven and its evidence
-reproduces, `E2` is **unmet and structurally outstanding** (a real pushed run, the human's), and one
-case in `S5`'s set is green against the pre-change script where its brief forecast red.
+**Verdict: CONCERNS** — all nine criteria are now met, `E2` included (second pass below, on a real
+pushed commit), and every figure reproduces. The verdict stays CONCERNS on two recorded findings, not
+on a criterion: one case in `S5`'s set is green against the pre-change script where its brief forecast
+red, and `E8`'s cross-document comparison is inconclusive by its own admission.
 
 **Scope, declared rather than implied:**
 
@@ -24,7 +25,7 @@ case in `S5`'s set is green against the pre-change script where its brief foreca
 | Criterion | Verdict | Proven by, and does it run |
 |---|---|---|
 | **E1** — the cap's property is written down, with the moment it holds at | **MET** | `S4`'s conjoined docs case (`S4: eviction header states the cap's property …`) — runs, green, flattens the header first so the multi-line sentence is greppable. Independently checked: `grep -rn "hard cap"` finds the phrase only in the **budget gate's** unrelated wording (`scripts/check-budget-gate.sh:417`, `commands/loop.md:63`) and in this unit's own docs — never in the ledger mechanism, which is `E1`'s actual scope |
-| **E2** — green on both guarding platforms, on a real pushed commit | **UNMET — outstanding, and it is the human's** | Nothing has been pushed: `main` is **34 commits ahead of `origin/main`**, so neither `guardrails` nor `guardrails-macos` has ever run against this fix. Unmeetable from a builder's or verifier's seat by the spec's own design, recorded as outstanding in `decisions.md` rather than covered for. **No local run in this pass is offered as a substitute** |
+| **E2** — green on both guarding platforms, on a real pushed commit | **MET — see the second pass below** | Run `32173406965` on `55f1822`: `guardrails` (`ubuntu-latest`) and `guardrails-macos` both report the eviction convergence case `ok` and both report `total: 465 passed, 0 failed` — identical, which is `A4`'s shape. It was unmet at the first pass, when nothing had been pushed; no local run was ever offered as a substitute |
 | **E3** — the change is falsified before it is believed | **MET, re-reproduced here** | The **merged** case (f) run against `git show d883886:scripts/record-cost-event.sh` in an isolated tree copy: **red** (`expected yes yes, got yes no` — the hole constructed, no convergence), and green in the merged tree. The Bash-arrival case is red the same way (`got 20 no 0` against cap 15). Trial counts and shas in `S5`'s commit message; `S2`'s independent 5/5 remains the prior falsification of the hole itself |
 | **E4** — no green run read as a rate | **MET** | `measure-e8-after.md` contains **zero** `%` characters; `decisions.md` carries `one green run is one sample` verbatim. Every trial figure is `N/M` or an ms count with `n=20` stated |
 | **E5** — `L7` is not traded silently | **MET (first branch — `L7` unrevised)** | Case (g)'s whole block is **byte-identical** pre-`S4` vs `HEAD` (md5 `f1067344…` both sides) and green. `diff` of the `L7`-guarantee and `L9`-precedence lines shows exactly one changed line, and it is the duplicate-finish **discard comment** `S5` legitimately extended — not the guarantee, not the precedence. `E5`'s second branch never opened |
@@ -98,3 +99,31 @@ they are outside the diff's blast radius and are **not** this group's red.
 It cannot tell you `E2` will be green. The mechanism converges on this host, by construction and by
 measurement; the guarding platforms have said nothing yet, and one green run from them will be one
 sample.
+
+---
+
+## Second pass — `E2` met on a real pushed commit
+
+`main` was pushed at `55f1822` (36 commits, the first push since `bb3c23b`). CI run
+**`32173406965`**, both jobs green:
+
+| Job | Runner | Eviction convergence case | Arrival cases | Total line |
+|---|---|---|---|---|
+| `guardrails` | `ubuntu-latest` | `ok  eviction convergence: a lock-losing last appender leaves the ledger over cap at rest, and it converges as soon as ANY later arrival appends nothing` | `arrival trim never waits`, `arrival trim boundary`, `arrival trim: a passing Bash event over cap` — all `ok` | `total: 465 passed, 0 failed` |
+| `guardrails-macos` | `macos-latest` | same case, `ok` | same three, all `ok` | `total: 465 passed, 0 failed` |
+
+The two `total:` lines are **identical**, which is what `A4`'s cross-job comparison asks for, and
+`shellcheck` plus `scripts are executable` passed on both runners.
+
+**Read this as one sample, because that is what it is (`E4`).** One green run on each platform is one
+observation per platform, not a rate and not proof that the failure class is gone. The case it
+exercises is deterministic — it constructs the lock-hold rather than racing for it — which is why a
+single green run is meaningful here at all; a timing-dependent case would need many.
+
+The prior two pushed runs (`32117525156`, `32113202275`) are red in this history and stay red: the
+first is the observation that opened this unit, the second is `A1`'s recorded failure from the unit
+before it. Neither is retroactively fixed by this run, and this record does not present them as
+resolved.
+
+**Unchanged by the push:** findings 1 and 2 above. They are why this verdict reads CONCERNS rather
+than PASS.
