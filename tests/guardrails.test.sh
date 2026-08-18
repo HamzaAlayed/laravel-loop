@@ -4143,20 +4143,31 @@ expect "6: claimed-platforms statement names each platform's evidence producer, 
 # ---------------------------------------------------------------------------
 echo "cost report + budget gate: incomplete slice ranking says so (S1, recovered-figure-drops-slice-and-model, spec.md RD3/RD4)"
 
-# Fixture 1 -- all-transcribed, real shape: a start+finish carrying model and
-# slice, the finish itself async_launched with no total_tokens, plus a
-# `recovered` line supplying the only figure this invocation has. Reproduces
-# the live `harness-fails-only-on-linux` shape at unit scale: cost_scan (and
-# so COST_N_PRICED/COST_TOKENS_PRICED) counts it priced, but cost_slice_rows
-# -- before S5 -- never recognises it as priced at all, so the ranking is
-# empty AND COST_SLICE_UNKNOWN_PRICED stays 0: the "pass never saw it" state,
-# distinct from the pre-existing "priced but no slice" state below.
+# Fixture 1 -- all-transcribed, real shape: a start+finish carrying model, the
+# finish itself async_launched with no total_tokens, plus a `recovered` line
+# supplying the only figure this invocation has. Reproduces the live
+# `harness-fails-only-on-linux` shape at unit scale: cost_scan (and so
+# COST_N_PRICED/COST_TOKENS_PRICED) counts it priced, and the whole priced
+# population sits outside the ranking, which is what (S1-2) asserts the
+# Slices section must say out loud.
+#
+# S5 RE-POINTED THIS FIXTURE, and it is a re-point rather than a weakening:
+# the records carried `"slice":"S1"` when S1 was built, because before S5 the
+# slice pass discarded every `recovered` record and so ranked nothing whatever
+# the label said ("the pass never saw it"). After S5 that same fixture ranks
+# correctly and has nothing outside the ranking, so the assertion below could
+# only ever pass while the defect existed. Dropping the label moves the
+# fixture to the state the assertion is about -- a priced invocation the
+# ranking genuinely cannot place -- leaving both assertions byte-identical and
+# both still able to go red. The clash itself was a G1 defect: S1's cases and
+# S5's own "Done when" disagreed about this fixture, and the human ruled at
+# the S5 lane (see decisions.md).
 S1ATDIR="$(mktemp -d)"
 mkdir -p "$S1ATDIR/.claude"
 S1ATLEDGER="$S1ATDIR/.claude/loop-cost.jsonl"
 {
-  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s1at1","slug":"s1-all-transcribed","slice":"S1","phase":"build","agent":"loop-build","model":"opus","model_source":"derived"}'
-  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s1at1","slug":"s1-all-transcribed","slice":"S1","phase":"build","agent":"loop-build","model":"opus","model_source":"derived","status":"async_launched"}'
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s1at1","slug":"s1-all-transcribed","phase":"build","agent":"loop-build","model":"opus","model_source":"derived"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s1at1","slug":"s1-all-transcribed","phase":"build","agent":"loop-build","model":"opus","model_source":"derived","status":"async_launched"}'
   printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s1at1","slug":"s1-all-transcribed","total_tokens":42000,"token_source":"transcribed"}'
 } > "$S1ATLEDGER"
 S1AT_OUT="$(report "$S1ATDIR" s1-all-transcribed)"
@@ -4178,28 +4189,35 @@ expect "(S1-2) RD3: Slices section names the unattributed count and token total,
 
 rm -rf "$S1ATDIR"
 
-# Fixture 2 -- mixed: one observed/ranked invocation (S1, 50000 tokens, the
-# LARGE one -- visible to cost_slice_rows today because it is genuinely
-# host-priced) and one transcribed-only invocation (S2, 10000 tokens --
-# invisible to cost_slice_rows today, same mechanism as fixture 1). Verified
-# live before writing any code: today this exact fixture makes
-# cost-report.sh print "S1 is 83% of this unit's priced total -- above the
-# 30% concentration threshold" from a ranking that never saw S2 at all, and
-# makes check-budget-gate.sh recommend re-slicing "S1" as "the largest share"
-# on the same incomplete population.
+# Fixture 2 -- mixed and deliberately INCOMPLETE: one observed, ranked
+# invocation (S1, 50000 tokens) and one priced invocation the ranking cannot
+# place (10000 transcribed tokens, no slice on its own start/finish records).
+# The population is unequal, so the concentration verdict and the gate's
+# re-slice recommendation must both stay silent about a "largest share" --
+# that is what the three cases below assert.
+#
+# S5 RE-POINTED THIS FIXTURE, same reason as fixture 1 and the same G1 defect:
+# the second invocation carried `"slice":"S2"` when S1 was built, and was
+# invisible to the slice pass only because the pass discarded `recovered`
+# records. After S5 it ranks, the population is complete, and the 83 %
+# concentration flag fires -- which is exactly what S5's own "Done when"
+# requires and what (S1-3) forbade. Dropping the label keeps every assertion
+# below byte-identical while pointing them at a population that is still
+# genuinely incomplete; the now-complete mixed shape is asserted in S5's own
+# section, where the flag is required to fire.
 S1MIXDIR="$(mktemp -d)"
 mkdir -p "$S1MIXDIR/.claude"
 S1MIXLEDGER="$S1MIXDIR/.claude/loop-cost.jsonl"
 {
   printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s1mix-big","slug":"s1-mixed-fixture","slice":"S1","phase":"build","agent":"loop-build"}'
   printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s1mix-big","slug":"s1-mixed-fixture","slice":"S1","phase":"build","agent":"loop-build","status":"completed","total_tokens":50000}'
-  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s1mix-small","slug":"s1-mixed-fixture","slice":"S2","phase":"build","agent":"loop-build"}'
-  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s1mix-small","slug":"s1-mixed-fixture","slice":"S2","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s1mix-small","slug":"s1-mixed-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s1mix-small","slug":"s1-mixed-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
   printf '%s\n' '{"ts":5,"event":"recovered","invocation_id":"s1mix-small","slug":"s1-mixed-fixture","total_tokens":10000,"token_source":"transcribed"}'
 } > "$S1MIXLEDGER"
 S1MIX_OUT="$(report "$S1MIXDIR" s1-mixed-fixture)"
 
-expect "(S1-3) RD4: mixed fixture -- no 'concentration threshold' string anywhere (today it prints 'S1 is 83%...')" "no" \
+expect "(S1-3) RD4: incomplete mixed fixture -- no 'concentration threshold' string anywhere while a priced invocation sits outside the ranking" "no" \
   "$(printf '%s\n' "$S1MIX_OUT" | grep -qF 'concentration threshold' && echo yes || echo no)"
 
 # (S1-4) guard, CO7 unassessable shape (existing UNASSESS_OUT fixture: one
@@ -4558,6 +4576,144 @@ rm -rf "$S4TRDIR"
 # unavailable, and a host-observed priced-rework fixture still reads 25%.
 expect "(S4-4) guard: all-unpriced rework (CO5) still unavailable, host-observed priced-rework (CO5) still 25%" "yes yes" \
   "$(printf '%s\n' "$REWORKU_OUT" | grep -q 'token share: unavailable' && echo yes || echo no) $(printf '%s\n' "$REWORKP_OUT" | grep -q 'token share: 25% of priced tokens' && echo yes || echo no)"
+
+# ---------------------------------------------------------------------------
+echo "cost report per-slice ranking reads recovered figures (S5, recovered-figure-drops-slice-and-model, spec.md RD2/RD5/RD6/RD7/RD8/RD10)"
+
+# (S5-1) The happy path, in the real ledger's own shape: a transcribed-only
+# invocation whose start/finish records carry a slice label that is a RANGE
+# containing a multi-byte en-dash -- `S1–S4`, exactly as two of the 21 real
+# recovered records' invocations are labelled. Before S5 the slice pass
+# discarded every `recovered` record, so this printed `no slice attributed to
+# any priced invocation` while cost_scan counted the very same invocation
+# priced. The label is asserted whole, so a byte-level mangling of the en-dash
+# fails the case rather than passing a substring match.
+S5RDIR="$(mktemp -d)"
+mkdir -p "$S5RDIR/.claude"
+S5RLEDGER="$S5RDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s5r1","slug":"s5-ranked","slice":"S1–S4","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s5r1","slug":"s5-ranked","slice":"S1–S4","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s5r1","slug":"s5-ranked","total_tokens":50000,"token_source":"transcribed"}'
+} > "$S5RLEDGER"
+S5R_OUT="$(report "$S5RDIR" s5-ranked)"
+expect "(S5-1) RD2: a transcribed-only invocation is ranked against the slice its own records name, en-dash label intact" "yes yes 0" \
+  "$(printf '%s\n' "$S5R_OUT" | grep -qF 'S1–S4' && echo yes || echo no) $(printf '%s\n' "$S5R_OUT" | grep -qE 'S1–S4 +50000 tokens \(1 priced invocation\(s\), 0 reworked\)' && echo yes || echo no) $(printf '%s\n' "$S5R_OUT" | grep -c 'no slice attributed to any priced invocation')"
+rm -rf "$S5RDIR"
+
+# (S5-2) The mixed shape, now COMPLETE: one observed invocation (S1, 50000)
+# and one transcribed-only invocation (S2, 10000) whose records both carry a
+# slice. Both rows rank, the populations reconcile so nothing sits outside the
+# ranking, and the concentration verdict -- which S1 gated on population
+# equality -- is therefore assessable and fires for the 83 % holder. This is
+# the fixture S1's own cases were re-pointed away from, asserted here in the
+# state S5's envelope requires.
+S5MIXDIR="$(mktemp -d)"
+mkdir -p "$S5MIXDIR/.claude"
+S5MIXLEDGER="$S5MIXDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s5mix-big","slug":"s5-mixed","slice":"S1","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s5mix-big","slug":"s5-mixed","slice":"S1","phase":"build","agent":"loop-build","status":"completed","total_tokens":50000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s5mix-small","slug":"s5-mixed","slice":"S2","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s5mix-small","slug":"s5-mixed","slice":"S2","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":5,"event":"recovered","invocation_id":"s5mix-small","slug":"s5-mixed","total_tokens":10000,"token_source":"transcribed"}'
+} > "$S5MIXLEDGER"
+S5MIX_OUT="$(report "$S5MIXDIR" s5-mixed)"
+expect "(S5-2) RD2: mixed fixture ranks both rows, nothing sits outside the ranking, and the 83 % concentration flag fires" "yes yes 0 yes" \
+  "$(printf '%s\n' "$S5MIX_OUT" | grep -qE 'S1 +50000 tokens \(1 priced invocation\(s\)' && echo yes || echo no) $(printf '%s\n' "$S5MIX_OUT" | grep -qE 'S2 +10000 tokens \(1 priced invocation\(s\)' && echo yes || echo no) $(printf '%s\n' "$S5MIX_OUT" | grep -c 'sit outside this ranking') $(printf '%s\n' "$S5MIX_OUT" | grep -qE 'S1 is 83% .*concentration threshold' && echo yes || echo no)"
+
+# (S5-3) RD5, the slice-less half: a transcribed figure whose invocation
+# carries NO slice on its own records is counted in COST_SLICE_UNKNOWN_PRICED
+# -- it is priced, so the population must account for it -- and no slice name
+# is invented for it. Read off the library directly, because the count is the
+# thing being asserted, not its rendering.
+s5_unknown_check() { # $1 ledger $2 slug -> "<unknown> <rows>"
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  # >/dev/null: cost_slice_rows PRINTS the rows as well as publishing them in
+  # COST_SLICE_ROWS (see its doc block), so a helper that echoes the variable
+  # too would report every row twice.
+  cost_slice_rows "$1" "$2" >/dev/null
+  printf '%s %s' "$COST_SLICE_UNKNOWN_PRICED" "$(printf '%s' "$COST_SLICE_ROWS" | grep -c . )"
+}
+S5NSDIR="$(mktemp -d)"
+mkdir -p "$S5NSDIR/.claude"
+S5NSLEDGER="$S5NSDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s5ns1","slug":"s5-noslice","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s5ns1","slug":"s5-noslice","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s5ns1","slug":"s5-noslice","total_tokens":7000,"token_source":"transcribed"}'
+} > "$S5NSLEDGER"
+expect "(S5-3) RD5: a transcribed figure with no slice on its own records is counted unattributed, and no slice name is invented" "1 0" \
+  "$(s5_unknown_check "$S5NSLEDGER" s5-noslice)"
+rm -rf "$S5NSDIR"
+
+# (S5-4) RD5's boundary: a `recovered` record for an id with NO start and no
+# finish anywhere (the hand-written shape). It is neither ranked NOR counted
+# as priced -- cost_scan does not count it priced either, so the two passes
+# still reconcile -- nothing is fabricated, and the report exits 0.
+S5ORPHDIR="$(mktemp -d)"
+mkdir -p "$S5ORPHDIR/.claude"
+S5ORPHLEDGER="$S5ORPHDIR/.claude/loop-cost.jsonl"
+printf '%s\n' '{"ts":1,"event":"recovered","invocation_id":"s5-orphan","slug":"s5-orphan-unit","total_tokens":9999,"token_source":"transcribed"}' > "$S5ORPHLEDGER"
+S5ORPH_OUT="$(report "$S5ORPHDIR" s5-orphan-unit)"
+expect "(S5-4) RD5 boundary: a recovered record with no start/finish is neither ranked nor counted priced, nothing fabricated, exit 0" "0 0 0 0" \
+  "$(report_exit "$S5ORPHDIR" s5-orphan-unit) $(printf '%s\n' "$S5ORPH_OUT" | grep -c '9999') $(printf '%s\n' "$S5ORPH_OUT" | grep -c 'sit outside this ranking') $(printf '%s' "$(s5_unknown_check "$S5ORPHLEDGER" s5-orphan-unit)" | cut -d' ' -f1)"
+rm -rf "$S5ORPHDIR"
+
+# (S5-5) RD6, exactly-once: a SECOND identical `recovered` line for the same
+# invocation_id yields one attribution -- every per-slice row byte-identical
+# to the single-line fixture's, not a doubled token total.
+S5DUPDIR="$(mktemp -d)"
+mkdir -p "$S5DUPDIR/.claude"
+S5DUPLEDGER="$S5DUPDIR/.claude/loop-cost.jsonl"
+{
+  cat "$S5MIXLEDGER"
+  printf '%s\n' '{"ts":6,"event":"recovered","invocation_id":"s5mix-small","slug":"s5-mixed","total_tokens":10000,"token_source":"transcribed"}'
+} > "$S5DUPLEDGER"
+s5_rows() { # $1 ledger $2 slug
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_slice_rows "$1" "$2" >/dev/null   # see s5_unknown_check on the redirect
+  printf '%s' "$COST_SLICE_ROWS"
+}
+expect "(S5-5) RD6: a duplicated recovered line leaves every per-slice row identical to the single-line fixture" "" \
+  "$(diff <(s5_rows "$S5MIXLEDGER" s5-mixed) <(s5_rows "$S5DUPLEDGER" s5-mixed))"
+rm -rf "$S5DUPDIR"
+
+# (S5-6) RD7, observed-wins inside THIS pass: an invocation with both a
+# host-observed figure (12102) and a disagreeing transcribed one (11035) --
+# the (S8-1) conflict shape, given a slice label here because the fixture at
+# :1338 carries none and so produces no slice row at all to assert on. The
+# slice row must hold the OBSERVED figure, never the transcribed one and never
+# their sum, exactly as cost_scan resolves it.
+S5CONFDIR="$(mktemp -d)"
+mkdir -p "$S5CONFDIR/.claude"
+S5CONFLEDGER="$S5CONFDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s5conf1","slug":"s5-conflict","slice":"S3","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s5conf1","slug":"s5-conflict","slice":"S3","phase":"build","agent":"loop-build","status":"completed","total_tokens":12102}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s5conf1","slug":"s5-conflict","total_tokens":11035,"token_source":"transcribed"}'
+} > "$S5CONFLEDGER"
+expect "(S5-6) RD7: with both figures present the slice row carries the observed one, not the transcribed one and not their sum" "S3	12102	1	0	0" \
+  "$(s5_rows "$S5CONFLEDGER" s5-conflict)"
+rm -rf "$S5CONFDIR"
+
+# (S5-7) RD8 + RD10 together. RD8: a recovery-free fixture whose priced
+# invocations all carry a slice is untouched by this slice -- byte-identical
+# to the block S1 froze, so reading `recovered` records changed nothing for a
+# run that produced none. RD10: on the now-complete mixed fixture the report
+# and the gate name the SAME top slice, which is only interesting once the
+# ranking includes transcribed figures -- before S5 the gate would have named
+# a top slice from a population missing them.
+S5MIX_JSON="$(budget_payload s5-mixed)"
+S5MIX_GATE_ERR="$(CLAUDE_PROJECT_DIR="$S5MIXDIR" LARAVEL_LOOP_BUDGET_HARD=1000 gate_stderr "$S5MIX_JSON")"
+S5MIX_REPORT_TOP="$(printf '%s\n' "$S5MIX_OUT" | sed -n '/^Slices/,/^$/p' | sed -n '2p' | awk '{print $1}')"
+S5MIX_GATE_TOP="$(printf '%s\n' "$S5MIX_GATE_ERR" | grep -oE 'Re-slice "[^"]+"' | head -1 | sed 's/Re-slice "//; s/"$//')"
+expect "(S5-7) RD8: recovery-free fixture still byte-identical to the frozen block; RD10: report and gate name the same top slice on the complete mixed fixture" " S1 S1" \
+  "$(diff <(printf '%s' "$S1_FROZEN_CONC") <(printf '%s' "$CONC_OUT")) $S5MIX_REPORT_TOP $S5MIX_GATE_TOP"
+
+rm -rf "$S5MIXDIR"
 
 # ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
