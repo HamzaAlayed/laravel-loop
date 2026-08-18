@@ -1681,6 +1681,67 @@ expect "(S4-1) CL5: LARAVEL_LOOP_COST_MIN_COVERAGE unset -> total priced tokens 
   "total-prints yes, not-established no" \
   "total-prints $(printf '%s\n' "$S4_NEW_UNSET_OUT" | grep -q 'total priced tokens' && echo yes || echo no), not-established $(printf '%s\n' "$S4_NEW_UNSET_OUT" | grep -qi 'not established' && echo yes || echo no)"
 
+# (S4-1b) G2 follow-up (recovered-figure verify.md finding 2): the byte-identity
+# half of what (S4-1) used to assert, restored with a durable instrument. The
+# old case diffed against `git show HEAD:scripts/cost-report.sh`, which decayed
+# the moment any other slice legitimately touched that file; (S4-1) above now
+# asserts the floor's own opt-in property directly, which is correct but no
+# longer proves that unset output is unchanged BYTE FOR BYTE.
+#
+# A frozen literal is the right instrument for that, and it is the one this
+# suite already uses for the same job elsewhere (RD8's blocks in S1, S3 and
+# S5's sections). It cannot decay silently: a slice that legitimately changes
+# this output must update the block deliberately, which is the review moment
+# the moving-HEAD diff never provided.
+read -r -d '' S4_FROZEN_UNSET <<'FROZEN'
+Coverage:
+  based on 1 of 2 invocations that carry a token figure (1 unpriced, not counted) -- 50 % coverage; wholly unobserved: build
+  unpriced invocation(s), by reason (taken only from the finish record's own status, never guessed):
+    1 launched in background, outcome never observed
+  Why: for a backgrounded invocation, the token figure is measured by the host
+  and delivered into the session when it finishes -- it is not captured here.
+  0 invocation(s) started with no finish recorded yet -- in flight, not counted as unpriced (plus 1 launched in background and never subsequently observed -- also unresolved, counted separately above, never folded into this count).
+  per phase (priced/total invocations; in-flight and unpriced called out, never folded together):
+    spec   1/1 priced (0 unpriced)
+    slice  0/0 priced (0 unpriced)
+    build  0/1 priced (1 unpriced)
+    verify 0/0 priced (0 unpriced)
+  elapsed (wall-clock, first recorded start to last recorded finish; never summed across overlapping invocations): 3 second(s)
+
+Tokens (priced subset only -- never the unit's whole cost):
+  total priced tokens: 1000
+  based on 1 of 2 invocations that carry a token figure (1 unpriced, not counted) -- 50 % coverage; wholly unobserved: build
+  cache-read share: unavailable (cache_read_tokens absent from every priced record)
+
+Phases (priced invocations only; model per phase, model_source shown when derived):
+    spec   unavailable
+    slice  unavailable
+    build  unavailable
+    verify unavailable
+
+Rework:
+  This measures the cost of slices that were not right first time, at whole-invocation
+  granularity -- not the cost of retrying. An invocation needing even one refine pass has
+  its WHOLE token cost counted as rework, deliberately over-attributing rather than
+  estimating a per-pass split. This is not comparable to the requirements document's
+  <15% target (Sec.10), which was calibrated against a narrower, per-pass definition.
+  No pass/fail verdict against that target is printed here.
+  count: 0 of 2 invocation(s) marked rework
+  token share: unavailable (no priced invocations are marked rework)
+
+Slices (top by priced tokens, priced subset only):
+  no slice attributed to any priced invocation.
+  1 priced invocation(s), 1000 token(s) sit outside this ranking -- unattributed.
+
+Flags:
+  concentration could not be assessed -- 1 priced invocation(s) carry no slice attribution.
+
+Budget:
+  no threshold is set (LARAVEL_LOOP_BUDGET_WARN, LARAVEL_LOOP_BUDGET_HARD are both unset) -- nothing will gate.
+FROZEN
+expect "(S4-1b) CL5: the floor unset leaves this fixture's whole report byte-identical to a frozen block" "" \
+  "$(diff <(printf '%s' "$S4_FROZEN_UNSET") <(printf '%s' "$S4_NEW_UNSET_OUT"))"
+
 # (S4-2) above coverage -> no unit-level total; cost read as not
 # established; the observed subset stays visible only in Coverage above,
 # never repeated here as a second, competing figure.
