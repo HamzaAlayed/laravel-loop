@@ -1022,7 +1022,17 @@ cost_list_slugs() {
 # jq -> python3 -> a safe no-op, and still counts the three record shapes of
 # E6 identically to cost_scan (cap_trip excluded; a start with no finish
 # excluded; only a resolved, PRICED invocation contributes a token to a
-# slice's total, per CV5). ---------------------------------------------------
+# slice's total, per CV5).
+#
+# recovered-figure-drops-slice-and-model S5 (RD2): this pass reads `recovered`
+# records too, so an invocation whose ONLY token figure is transcribed is
+# ranked against the slice its own start/finish records name -- with the same
+# observed-wins precedence cost_scan uses, and never a sum of the two figures.
+# A `recovered` record contributes tokens and nothing else: the slice label,
+# like the phase and the model, is only ever read from a start/finish record,
+# and a `recovered` record for an id that has neither is left unranked and
+# uncounted rather than given an invented label (RD5).
+# ---------------------------------------------------------------------------
 
 _cost_slice_jq_program() {
   cat <<'JQ_EOF'
@@ -1031,13 +1041,14 @@ def to_rec: (try fromjson catch null);
   ( {inv:{}}
   ; ($line | to_rec) as $r
   | if $r == null or ($r|type) != "object" then .
-    elif (($r.event // "") == "start" or ($r.event // "") == "finish") then
+    elif (($r.event // "") == "start" or ($r.event // "") == "finish" or ($r.event // "") == "recovered") then
       (($r.slug // "unknown")) as $slg
       | if ($slugfilter != "" and $slugfilter != $slg) then .
         else
           (($r.invocation_id // "noid")) as $id
           | (.inv[$id] // {start:false, finish:false, priced:false, tokens:null,
-                           slice:null, phase_detail:null}) as $e
+                           slice:null, phase_detail:null,
+                           transcribed:false, transcribed_tokens:null}) as $e
           | ( $e
               | if $r.event == "start" then (.start = true) | (.slice = ($r.slice // .slice)) else . end
               | if $r.event == "finish" then
@@ -1050,13 +1061,32 @@ def to_rec: (try fromjson catch null);
                        (.priced = false)
                      end)
                 else . end
+              | if $r.event == "recovered" then
+                  # S5 (RD2): a `recovered` record prices an invocation in THIS
+                  # pass too, exactly as it already does in cost_scan. It never
+                  # creates an invocation of its own (an id with no start/finish
+                  # stays unranked and uncounted, RD5), and it contributes no
+                  # dimension but tokens -- the slice label comes from the
+                  # invocation's own start/finish records, which is the only
+                  # place it is ever written.
+                  (if (($r|has("total_tokens")) and ($r.total_tokens != null)) then
+                     (.transcribed = true) | (.transcribed_tokens = $r.total_tokens)
+                   else . end)
+                else . end
             ) as $ne
           | .inv[$id] = $ne
         end
     else . end
   )
 ) as $acc
-| ($acc.inv | to_entries | map(select(.value.finish and .value.priced))) as $priced
+# Observed-wins precedence, mirrored from cost_scan (:429/:434) rather than
+# re-invented: an invocation with a host-observed figure uses it, one whose
+# ONLY figure is transcribed is priced by that figure, and the two are never
+# summed, averaged, maxed or minned for one invocation.
+| ($acc.inv | to_entries
+   | map(select(.value.finish and (.value.priced or .value.transcribed)))
+   | map(.value.etokens = (if .value.priced then .value.tokens else .value.transcribed_tokens end))
+  ) as $priced
 | (reduce $priced[] as $e (
      {unknown:0, slices:{}}
    ;
@@ -1064,10 +1094,10 @@ def to_rec: (try fromjson catch null);
        (.unknown += 1)
      else
        ($e.value.slice) as $s
-       | (.slices[$s].tokens = ((.slices[$s].tokens // 0) + $e.value.tokens))
+       | (.slices[$s].tokens = ((.slices[$s].tokens // 0) + $e.value.etokens))
        | (.slices[$s].inv = ((.slices[$s].inv // 0) + 1))
        | (if $e.value.phase_detail == "rework" then
-            (.slices[$s].rtokens = ((.slices[$s].rtokens // 0) + $e.value.tokens))
+            (.slices[$s].rtokens = ((.slices[$s].rtokens // 0) + $e.value.etokens))
             | (.slices[$s].rinv = ((.slices[$s].rinv // 0) + 1))
           else . end)
      end
@@ -1099,14 +1129,15 @@ for raw in sys.stdin:
     except Exception:
         continue
     event = r.get("event") or ""
-    if event not in ("start", "finish"):
+    if event not in ("start", "finish", "recovered"):
         continue
     slg = r.get("slug") or "unknown"
     if slugfilter != "" and slugfilter != slg:
         continue
     invid = r.get("invocation_id") or "noid"
     e = inv.get(invid) or {"start": False, "finish": False, "priced": False,
-                            "tokens": None, "slice": None, "phase_detail": None}
+                            "tokens": None, "slice": None, "phase_detail": None,
+                            "transcribed": False, "transcribed_tokens": None}
     if event == "start":
         e["start"] = True
         e["slice"] = r.get("slice") or e["slice"]
@@ -1119,22 +1150,31 @@ for raw in sys.stdin:
             e["tokens"] = r.get("total_tokens")
         else:
             e["priced"] = False
+    if event == "recovered":
+        # S5 (RD2): see the jq program's comment -- tokens only, never a
+        # dimension, never an invocation of its own.
+        if "total_tokens" in r and r.get("total_tokens") is not None:
+            e["transcribed"] = True
+            e["transcribed_tokens"] = r.get("total_tokens")
     inv[invid] = e
 
 unknown = 0
 slices = {}
 for e in inv.values():
-    if not (e["finish"] and e["priced"]):
+    if not (e["finish"] and (e["priced"] or e["transcribed"])):
         continue
+    # Observed-wins precedence, mirrored from cost_scan (:628/:634): never a
+    # sum, an average, a max or a min of the two figures for one invocation.
+    etokens = e["tokens"] if e["priced"] else e["transcribed_tokens"]
     s = e["slice"] or ""
     if s == "":
         unknown += 1
         continue
     d = slices.setdefault(s, {"tokens": 0, "inv": 0, "rtokens": 0, "rinv": 0})
-    d["tokens"] += e["tokens"]
+    d["tokens"] += etokens
     d["inv"] += 1
     if e["phase_detail"] == "rework":
-        d["rtokens"] += e["tokens"]
+        d["rtokens"] += etokens
         d["rinv"] += 1
 
 out = [f"META\tCOST_SLICE_UNKNOWN_PRICED\t{unknown}"]
