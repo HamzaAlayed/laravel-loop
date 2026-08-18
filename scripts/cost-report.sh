@@ -369,7 +369,18 @@ print_rework() {
 # flag -- printed only where slice-level coverage supports the comparison.
 # Where a priced invocation carries no slice at all, ranking would silently
 # under-count whichever slice that tokens actually belonged to, so this
-# says the comparison could not be assessed instead of guessing (CO7). -----
+# says the comparison could not be assessed instead of guessing (CO7).
+#
+# recovered-figure-drops-slice-and-model S1 (RD3/RD4): the same incompleteness
+# can also arise with COST_SLICE_UNKNOWN_PRICED at zero -- a priced invocation
+# this pass never even recognised as priced (pre-S5, any invocation priced
+# only by a `recovered` record). cost_slice_unranked() states BOTH cases the
+# same way: how many invocations and how many tokens sit outside the ranking.
+# The COST_SLICE_UNKNOWN_PRICED>0 branch below is kept byte-identical on
+# purpose (RD8/RC6 -- a run that transcribed nothing must read exactly as it
+# always has); the new line in the Slices section is the only thing added for
+# that path, and a concentration verdict never prints while either gap is
+# nonzero (RD4). -------------------------------------------------------------
 print_slices_and_flags() {
   if [ "${COST_N_PRICED:-0}" -eq 0 ]; then
     printf 'Slices: no priced invocations for this unit -- nothing to rank by cost.\n'
@@ -385,6 +396,12 @@ print_slices_and_flags() {
   cost_slice_rows "$LEDGER" "$SLUG" >/dev/null
   local rows="$COST_SLICE_ROWS" unknown="${COST_SLICE_UNKNOWN_PRICED:-0}"
 
+  # Same reason as above: a side effect this caller reads afterward, so this
+  # runs outside any command substitution too.
+  cost_slice_unranked
+  local outside_n="${COST_SLICE_OUTSIDE_N:-0}" outside_tokens="${COST_SLICE_OUTSIDE_TOKENS:-0}"
+  local unreconciled="${COST_SLICE_OUTSIDE_UNRECONCILED:-0}"
+
   printf 'Slices (top by priced tokens, priced subset only):\n'
   if [ -z "$rows" ]; then
     printf '  no slice attributed to any priced invocation.\n'
@@ -394,11 +411,20 @@ print_slices_and_flags() {
       printf '  %-20s %s tokens (%s priced invocation(s), %s reworked)\n' "$slice" "$tokens" "$inv" "$rinv"
     done
   fi
+  if [ "$outside_n" -gt 0 ] || [ "$unreconciled" -eq 1 ]; then
+    printf '  %s priced invocation(s), %s token(s) sit outside this ranking -- unattributed.\n' \
+      "$outside_n" "$outside_tokens"
+  fi
 
   printf '\n'
   printf 'Flags:\n'
   if [ "$unknown" -gt 0 ]; then
     printf '  concentration could not be assessed -- %s priced invocation(s) carry no slice attribution.\n' "$unknown"
+    return 0
+  fi
+  if [ "$outside_n" -gt 0 ] || [ "$unreconciled" -eq 1 ]; then
+    printf '  concentration could not be assessed -- %s priced invocation(s), %s token(s) sit outside this ranking.\n' \
+      "$outside_n" "$outside_tokens"
     return 0
   fi
   if [ -z "$rows" ]; then

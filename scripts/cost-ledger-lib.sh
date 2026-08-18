@@ -57,6 +57,12 @@
 #   cost_scan <ledger-path> <slug-or-empty>
 #   cost_list_slugs <ledger-path>
 #   cost_slice_rows <ledger-path> <slug-or-empty>   (added in cost-reporting-v0.3 S3)
+#   cost_slice_unranked   (added in recovered-figure-drops-slice-and-model S1) -- takes
+#     no arguments and reparses nothing; pure shell arithmetic over the globals cost_scan
+#     and cost_slice_rows already published for the caller's own ledger/slug (CV7/CV8: one
+#     arithmetic, two surfaces). A caller must have already called both for the ledger/slug
+#     it wants this answer for -- both cost-report.sh and check-budget-gate.sh already do,
+#     for other reasons, before calling this.
 #   cost_invocation_lookup <ledger-path> <invocation-id>   (added in
 #     cost-ledger-blind-to-background-agents S9, RC group) -- the one question
 #     scripts/record-recovered-cost.sh needs answered before it may write
@@ -230,6 +236,32 @@
 #                             rework_priced_invocations, sorted by priced_tokens descending,
 #                             ties broken by slice name ascending (byte ordering, never a
 #                             locale-dependent sort -- CV7)
+#
+# recovered-figure-drops-slice-and-model S1 (RD3/RD4): cost_slice_rows's own ranking can be
+# INCOMPLETE relative to the unit total cost_scan reports, two different ways -- a priced
+# invocation carrying no `slice` at all (already counted once above, in
+# COST_SLICE_UNKNOWN_PRICED), or a priced invocation this pass never recognised as priced in
+# the first place (pre-S5, any invocation priced only by a `recovered` record, since this
+# pass's own event filter discards that event type before any join happens). Either way, a
+# concentration verdict computed only over the ranked rows would compare an incomplete
+# population against the unit's whole priced total and could print a number nobody can trust.
+# cost_slice_unranked() states the gap instead of hiding it, as pure arithmetic over what
+# cost_scan and cost_slice_rows already published -- it re-parses nothing and re-implements
+# neither pass. Sets, as a side effect (call it directly after cost_scan and cost_slice_rows
+# have both already run for this ledger/slug; nothing here calls either itself):
+#   COST_SLICE_OUTSIDE_N          COST_N_PRICED minus the sum of the `inv` column over every
+#                             row in COST_SLICE_ROWS -- how many priced invocations this
+#                             unit's total counts that the per-slice ranking does not.
+#   COST_SLICE_OUTSIDE_TOKENS      COST_TOKENS_PRICED minus the sum of the `tokens` column over
+#                             every COST_SLICE_ROWS row -- the token total that gap represents.
+#   COST_SLICE_OUTSIDE_UNRECONCILED  "1" if either subtraction above would go negative (the
+#                             ranked rows claim more invocations or tokens than cost_scan
+#                             itself counted as priced -- the `noid` keying asymmetry pinned
+#                             in slices.md is one way this can happen), else "0". Both OUTSIDE
+#                             figures clamp to 0 in that case rather than ever printing a
+#                             negative count; a caller checks UNRECONCILED explicitly, never
+#                             infers it from a zero (a genuinely complete ranking also reads
+#                             zero for both).
 #
 # COST_N_INVOCATIONS deliberately does NOT include COST_N_INFLIGHT: an in-flight
 # invocation has not resolved into "carries a token figure" or "does not" yet,
@@ -1139,6 +1171,44 @@ $row"
   done <<EOF
 $out
 EOF
+  return 0
+}
+
+# --- cost_slice_unranked: added in recovered-figure-drops-slice-and-model S1
+# (see the doc block near the top of this file, next to cost_slice_rows's own,
+# for exactly what this sets and why). Shell arithmetic only, over globals
+# cost_scan and cost_slice_rows already set for the caller's own ledger/slug --
+# this never opens the ledger itself and never re-implements either parser
+# program (both are on this slice's Do NOT list). Summed with a here-string
+# loop, deliberately never `printf | while`: bash 3.2 has no `lastpipe`, so a
+# pipeline loop's body runs in a subshell and any sum it accumulates is lost
+# the moment the pipeline exits -- cost-report.sh:392's own loop has exactly
+# this shape and only ever prints, never accumulates, for the same reason. ---
+cost_slice_unranked() {
+  local ranked_inv=0 ranked_tokens=0 slice tokens inv _rtokens _rinv
+  COST_SLICE_OUTSIDE_N=0
+  COST_SLICE_OUTSIDE_TOKENS=0
+  COST_SLICE_OUTSIDE_UNRECONCILED=0
+
+  if [ -n "${COST_SLICE_ROWS:-}" ]; then
+    while IFS=$'\t' read -r slice tokens inv _rtokens _rinv; do
+      [ -z "$slice" ] && continue
+      ranked_tokens=$((ranked_tokens + tokens))
+      ranked_inv=$((ranked_inv + inv))
+    done <<EOF
+${COST_SLICE_ROWS}
+EOF
+  fi
+
+  local n=$(( ${COST_N_PRICED:-0} - ranked_inv ))
+  local t=$(( ${COST_TOKENS_PRICED:-0} - ranked_tokens ))
+
+  if [ "$n" -lt 0 ] || [ "$t" -lt 0 ]; then
+    COST_SLICE_OUTSIDE_UNRECONCILED=1
+  else
+    COST_SLICE_OUTSIDE_N="$n"
+    COST_SLICE_OUTSIDE_TOKENS="$t"
+  fi
   return 0
 }
 
