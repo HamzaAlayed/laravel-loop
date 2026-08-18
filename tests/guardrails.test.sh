@@ -2614,6 +2614,31 @@ new_shellcheck_absent_path() {
   printf '%s' "$dir"
 }
 
+# recovered-figure-drops-slice-and-model S2 -- makes jq genuinely absent while
+# leaving every other tool cost-report.sh/cost-ledger-lib.sh might reach for
+# (python3, grep, sed, ...) resolvable, so a parity case exercises the real
+# python3 fallback rather than a parse-error path. A CURATED list, the same
+# shape as new_shellcheck_absent_path above, is NOT enough here: verified
+# 2026-08-18 that a sparser PATH missing grep/sed makes the lib report a
+# parse error instead of falling through to python3, which would make a
+# parity case pass for the wrong reason. Symlinking every resolvable entry of
+# the standard bin directories, skipping only jq's own name, avoids that.
+new_jq_absent_path() {
+  local dir bindir f base
+  dir="$(mktemp -d)"
+  for bindir in /usr/bin /bin /usr/sbin /sbin /opt/homebrew/bin /usr/local/bin; do
+    [ -d "$bindir" ] || continue
+    for f in "$bindir"/*; do
+      [ -e "$f" ] || continue
+      base="$(basename "$f")"
+      [ "$base" = "jq" ] && continue
+      [ -e "$dir/$base" ] && continue
+      ln -s "$f" "$dir/$base" 2>/dev/null
+    done
+  done
+  printf '%s' "$dir"
+}
+
 SHIP1="$(new_ship_fixture)"
 ship_run "$SHIP1"
 GATE_LINES="$(printf '%s\n' "$SHIP_OUT" | grep -cE '^gate [0-9]: ')"
@@ -4146,6 +4171,83 @@ expect "(S1-7) RD10: report and gate state the same unattributed invocation coun
   "1 1" "$S1MIX_REPORT_N $S1MIX_GATE_N"
 
 rm -rf "$S1MIXDIR"
+
+# ---------------------------------------------------------------------------
+echo "cost report parser parity: jq vs python3 (S2, recovered-figure-drops-slice-and-model)"
+
+# (S2-1) self-check of the fixture itself: a parity case over a broken PATH
+# proves nothing, so this asserts the precondition directly, under the exact
+# PATH the cases below use -- python3 resolves, jq does not.
+JQ_ABSENT_PATH="$(new_jq_absent_path)"
+expect "(S2-1) new_jq_absent_path resolves python3 and not jq" "python3 yes, jq no" \
+  "python3 $(PATH="$JQ_ABSENT_PATH" command -v python3 >/dev/null 2>&1 && echo yes || echo no), jq $(PATH="$JQ_ABSENT_PATH" command -v jq >/dev/null 2>&1 && echo yes || echo no)"
+
+# (S2-2) cost_scan via the full report, on the S7 recovered fixture (the
+# same ledger content as the S7 fixture above -- reconstructed here because
+# that fixture's directory was already removed).
+S2S7DIR="$(mktemp -d)"
+mkdir -p "$S2S7DIR/.claude"
+S2S7LEDGER="$S2S7DIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s7c1","slug":"s7-fixture","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s7c1","slug":"s7-fixture","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":1000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s7c2","slug":"s7-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s7c2","slug":"s7-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":5,"event":"start","invocation_id":"s7c3","slug":"s7-fixture","phase":"verify","agent":"loop-verify"}'
+  printf '%s\n' '{"ts":6,"event":"finish","invocation_id":"s7c3","slug":"s7-fixture","phase":"verify","agent":"loop-verify","status":"async_launched"}'
+  printf '%s\n' '{"ts":7,"event":"recovered","invocation_id":"s7c2","slug":"s7-fixture","total_tokens":11035,"token_source":"transcribed"}'
+} > "$S2S7LEDGER"
+S2S7_JQ_OUT="$(report "$S2S7DIR" s7-fixture)"
+S2S7_PY_OUT="$(PATH="$JQ_ABSENT_PATH" report "$S2S7DIR" s7-fixture)"
+expect "(S2-2) full report byte-identical jq vs python3 on the S7 recovered fixture" "" \
+  "$(diff <(printf '%s' "$S2S7_JQ_OUT") <(printf '%s' "$S2S7_PY_OUT"))"
+rm -rf "$S2S7DIR"
+
+# (S2-3) cost_scan via the full report, on the S8 observed/transcribed
+# conflict fixture (reconstructed for the same reason as S2-2).
+S2S8DIR="$(mktemp -d)"
+mkdir -p "$S2S8DIR/.claude"
+S2S8LEDGER="$S2S8DIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s8c1","slug":"s8-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s8c1","slug":"s8-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":12102}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s8c1","slug":"s8-fixture","total_tokens":11035,"token_source":"transcribed"}'
+} > "$S2S8LEDGER"
+S2S8_JQ_OUT="$(report "$S2S8DIR" s8-fixture)"
+S2S8_PY_OUT="$(PATH="$JQ_ABSENT_PATH" report "$S2S8DIR" s8-fixture)"
+expect "(S2-3) full report byte-identical jq vs python3 on the S8 observed/transcribed conflict fixture" "" \
+  "$(diff <(printf '%s' "$S2S8_JQ_OUT") <(printf '%s' "$S2S8_PY_OUT"))"
+rm -rf "$S2S8DIR"
+
+# (S2-4) cost_scan via the full report, on the (d) CO7 concentration fixture
+# (reconstructed for the same reason as S2-2/S2-3).
+S2CONCDIR="$(mktemp -d)"
+mkdir -p "$S2CONCDIR/.claude"
+S2CONCLEDGER="$S2CONCDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"c1","slug":"slice-conc","slice":"S1","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"c1","slug":"slice-conc","slice":"S1","phase":"build","agent":"loop-build","status":"completed","total_tokens":8000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"c2","slug":"slice-conc","slice":"S2","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"c2","slug":"slice-conc","slice":"S2","phase":"build","agent":"loop-build","status":"completed","total_tokens":2000}'
+} > "$S2CONCLEDGER"
+S2CONC_JQ_OUT="$(report "$S2CONCDIR" slice-conc)"
+S2CONC_PY_OUT="$(PATH="$JQ_ABSENT_PATH" report "$S2CONCDIR" slice-conc)"
+expect "(S2-4) full report byte-identical jq vs python3 on the (d) CO7 concentration fixture" "" \
+  "$(diff <(printf '%s' "$S2CONC_JQ_OUT") <(printf '%s' "$S2CONC_PY_OUT"))"
+
+# (S2-5) cost_slice_rows' own rows, byte-identical jq vs python3, on the same
+# concentration fixture -- the reader S5 will teach to recognise a recovered
+# record, proven testable before that slice touches it.
+s2_conc_rows() {
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_slice_rows "$S2CONCLEDGER" "slice-conc"
+}
+S2CONC_ROWS_JQ="$(s2_conc_rows)"
+S2CONC_ROWS_PY="$(PATH="$JQ_ABSENT_PATH" s2_conc_rows)"
+expect "(S2-5) cost_slice_rows' rows byte-identical jq vs python3 on the concentration fixture" "" \
+  "$(diff <(printf '%s' "$S2CONC_ROWS_JQ") <(printf '%s' "$S2CONC_ROWS_PY"))"
+rm -rf "$S2CONCDIR" "$JQ_ABSENT_PATH"
 
 # ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
