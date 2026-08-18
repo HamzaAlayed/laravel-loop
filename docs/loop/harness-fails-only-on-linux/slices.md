@@ -1048,3 +1048,89 @@ citation and its limit in the same paragraph for exactly that reason. **S6** is 
 here — its blast radius is one case's setup, the property that case guards keeps an independent guard
 at `:2536` that does not depend on `PATH` at all, and its worst outcome is a case that still only
 passes for the old reason.
+
+---
+
+# Third pass — S9, the regression S5 shipped
+
+Cut by the orchestrator, not `loop-slice`: the fix and its test are fully determined by the G2
+follow-up decision recorded in `docs/loop/decisions.md`, and `loop-protocol` warns that a full
+slicing pass on a one-slice task is pure latency. Recorded here so the envelope is auditable.
+
+### S9 — Break the eviction loop on a failed `mv`, like its three siblings
+```
+Owner:       loop-build
+Context:     scripts/record-cost-event.sh -- `append_and_evict()`'s eviction loop as S5 left
+             it (~:274-285). Its four failure paths: non-numeric `wc` -> break; converged ->
+             break; `mktemp` failure -> break; `tail` failure-or-empty -> break; and
+             `mv -f ... || rm -f "$tmp"` -> NO break, which is the defect.
+             The loop's own comment already states the rule it violates: "every other break
+             below is a real I/O condition, never an arbitrary attempt cap." A failing `mv`
+             IS a real I/O condition.
+             The script's header contract, unchanged by S5 and currently broken by it:
+             "Exits 0 on every path, including its own internal errors: cost accounting must
+             never block, delay, or alter a spawn."
+             docs/loop/harness-fails-only-on-linux/verify.md -- finding (a), with two
+             independent reproductions (209 iterations under `chflags uchg`; 501 in a
+             separate re-check).
+             scripts/ship-check.sh's `run_bounded()` -- the house pattern for bounding a
+             command with bash job control, because GNU `timeout` is absent on the
+             maintainer's macOS host.
+             README.md:167's `426 cases` literal.
+Constraints: - THE CHANGE IS ONE LINE, and it is named because the human chose it, not left
+               open: `mv -f "$tmp" "$OUT" 2>/dev/null || { rm -f "$tmp"; break; }`. Do not
+               reintroduce an attempt bound, a counter, or a no-progress guard -- those were
+               the options NOT chosen. If the one-line form proves insufficient, return
+               `needs-decision` rather than substituting another shape.
+             - CONVERGENCE MUST NOT REGRESS: the loop still retries while trims succeed and
+               the file is over cap. S5's own convergence case must stay green, unmodified.
+             - THE NEW CASE MUST NOT HANG THE SUITE. A test that runs the pre-fix loop
+               un-bounded would never return. Bound the observation with bash job control,
+               following `run_bounded()`'s precedent -- never GNU `timeout`, absent on bash
+               3.2 macOS.
+             - A PORTABLE TRIGGER IS REQUIRED for a persistently failing `mv`. `chflags` is
+               macOS-only and `chattr +i` needs root, so neither is portable. One approach
+               that is, and needs no privileges: put a stub `mv` that exits non-zero early on
+               `PATH`, since the script calls `mv` unqualified. Use that or anything else
+               portable; if no portable trigger can be built, return `needs-decision` with
+               what was tried rather than a macOS-only case.
+             - FALSIFY IT: run the new case's own body against a copy of the CURRENT script
+               (`git show HEAD:scripts/record-cost-event.sh` into a temp dir) and show it
+               fails there -- the loop does not terminate -- then passes against the fixed
+               script. A case that cannot fail against today's HEAD proves nothing.
+             - NO NEW CONFIGURABLE (A9). No change to the ledger's format, retention order,
+               cap variable, or any other write path.
+             - +1 case, appended before the final `docs (case count)` case which stays last;
+               README.md:167 bumped to the harness's own new total in the same commit.
+             - bash 3.2 and the runner's bash both; `shellcheck -S warning scripts/*.sh`
+               clean; existing cases pass unmodified and the count never goes down.
+Output:      scripts/record-cost-event.sh (the one line); tests/guardrails.test.sh (one new
+             case in section (b)); README.md (the one literal).
+Done when:   With `mv` made to fail persistently, `append_and_evict()` returns rather than
+             looping, the evict lock is released, and the invocation exits 0 -- observed
+             within a bound, red against today's HEAD and green after -- while S5's
+             convergence case and every other existing case stay green.
+Test set:    2 cases -- 1 new, 1 existing regression. Selection rule: exactly one new
+             condition is in play (a persistently failing `mv`), and exactly one existing
+             invariant must not move (convergence).
+               1. NEW, RED->GREEN: with a failing `mv` in force, the eviction path terminates
+                  within a bound and the lock directory is released. Red against HEAD, green
+                  after -- falsified as described above.                        [the finding]
+               2. S5's convergence case unmodified and green: the loop still drains to cap
+                  when trims succeed.                              [A7, no convergence loss]
+             Fails now: nothing in this repository exercises a failing `mv` inside the
+             eviction loop, which is why the regression shipped through a 426-case green
+             suite and a G2 pass on every other criterion.
+Do NOT:      - Do not add an attempt bound, iteration counter, or no-progress guard.
+             - Do not touch the stale-lock behaviour. It is confirmed pre-existing and a
+               prior decision deliberately scoped it out; changing it here needs its own
+               recorded decision.
+             - Do not edit scripts/ship-check.sh, cost-ledger-lib.sh, cost-report.sh,
+               record-recovered-cost.sh, or check-budget-gate.sh.
+             - Do not edit .github/workflows/ci.yml, docs/loop/checks.md, spec.md, any
+               spike-*.md, verify.md, log.md, or this file.
+             - Do not modify, weaken, skip, or renumber any existing case.
+             - Do not add an env var, threshold, or default.
+             - Do not push, dispatch, re-run, or tag anything.
+Depends on:  nothing -- S5 through S8 are all merged.
+```

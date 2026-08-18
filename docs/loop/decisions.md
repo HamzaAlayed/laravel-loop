@@ -206,3 +206,33 @@ This forecloses:
 
 Instead: two fixes in two different artifacts, one per case, plus a second job whose citation's own
 limit is recorded alongside it.
+
+## G2 follow-up: break the eviction loop on a failed `mv` (2026-08-18)
+
+Decided after G2 returned **CONCERNS** on `harness-fails-only-on-linux`: S5's convergence fix
+replaced a fixed 5-attempt bound with `while :;` and left `mv -f ... || rm -f "$tmp"` without a
+break, so a persistently failing `mv` loops forever. Reproduced twice independently (209 iterations
+under `chflags uchg`, 501 in a separate re-check) and confirmed **new** — the pre-fix bounded loop
+always terminated.
+
+The decision is the one-line form: `mv -f "$tmp" "$OUT" 2>/dev/null || { rm -f "$tmp"; break; }`.
+This is not a new design; it makes the fourth I/O failure behave like its three siblings, which the
+loop's own comment already prescribes — *"every other break below is a real I/O condition, never an
+arbitrary attempt cap."*
+
+This forecloses:
+- **Re-adding an attempt bound or iteration counter** — that is the arbitrary cap S5 removed for a
+  reason, and re-adding it would restore the convergence gap the whole unit exists to close.
+- **A no-progress guard** (exit when a trim fails to reduce the count) — considered and not taken.
+  It catches the same path plus hypothetical future ones, at the cost of more state and a subtler
+  invariant to test. Available later if a second non-progressing path ever appears.
+- **Both guards together** — rejected as more surface for a test that cannot fail, for a defect
+  with one known route.
+- **Fixing the stale lock in the same slice** — rejected. It is confirmed pre-existing rather than
+  introduced, a prior decision deliberately scoped it out, and riding it along here would change a
+  recorded decision without its own gate. The verifier's point that the two failure paths *compound*
+  stands as a named, open gap.
+
+Instead: one line, one new case with a portable failing-`mv` trigger, falsified against today's HEAD
+so it cannot be a test that never could have failed — which is exactly how the regression got
+through a 426-case green suite in the first place.
