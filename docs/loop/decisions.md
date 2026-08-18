@@ -387,3 +387,56 @@ not a rate, and not a claim that the cap now holds on CI.
 
 **`OQ4`, the stale evict lock:** still out of scope, still compounds with this mechanism, still needs
 its own intent. No lane tripped over it, and no position on it is recorded here.
+
+## G1 + build-out: a recovered figure's other dimensions are restored reader-side (2026-08-18)
+
+`recovered-figure-drops-slice-and-model`, decided at G1 and recorded here after the slices landed.
+
+**The answer is reader-side.** A `recovered` record keeps the shape it already has — `ts`, `event`,
+`invocation_id`, `slug`, `total_tokens`, `token_source` — and every other dimension a report shows
+for that invocation (its phase, its model, its slice) is read from the invocation's **own
+`start`/`finish` records**, which the hook already wrote. Nothing new is written; the readers stop
+discarding what is already on disk.
+
+**Why, and the number that decided it:** **21 recovered records already exist** in this repository's
+own ledger. A writer-side answer — adding fields to the record shape — helps only records written
+after it ships and would strand all 21 unless a human re-typed them. A split writer/reader fix was
+considered as a real third option at G0 and declined for the same reason. The reader is where the
+figures already are.
+
+**This pass forecloses:**
+- **A writer-side field** on the `recovered` record. Pinned shape, documented twice
+  (`record-recovered-cost.sh:47-53`, `cost-ledger-lib.sh:131-137`); only a human may overturn it.
+- **A fuzzy selector** on `record-recovered-cost.sh` (no slug, slice, agent or recency matching) —
+  one explicit `invocation_id`, typed by a human, stays the only way in.
+- **Hook wiring / automatic transcription** (`S11`). Still held: automating over a record shape is a
+  different question from what the reader does with the shape it has.
+- **Transcript scraping** as a recovery path. Its own intent exists; it is not decided here.
+- **Hand-editing `.claude/loop-cost.jsonl`.** No slice did, and no slice may.
+- **Any threshold.** The 30 % concentration figure is neither raised, lowered, nor made
+  configurable, and no coverage floor, budget or per-phase value ships set, commented out, or
+  suggested.
+- **`OQ5`'s resumed-invocation capture gap** — out at G0: it needs a hook matcher `RC7` forbids.
+- **`RD8`'s letter over its purpose.** `RD8` is read as `RC6` — the transcription feature leaves no
+  trace on a run that used none — not as a freeze on the report. So the unattributed count and its
+  token total are stated for a recovery-free ledger too, with the pre-existing Flags sentence kept
+  byte-identical, and `RD8` is asserted on a recovery-free fixture whose priced invocations all carry
+  a slice. If the letter is preferred, the alternative was to gate the new line on
+  `COST_N_PRICED_TRANSCRIBED > 0` — weaker, because it makes the report's honesty depend on a record
+  type. Offered at the gate and declined.
+- **`OQ3`, per-row transcribed marking**, stays uncut behind the human's answer at G1 — `S7` was
+  never cut, and this entry records no position on it.
+
+**A G1 defect this pass hit, recorded rather than smoothed over.** `S1` was sequenced before `S5`,
+and four of `S1`'s cases (`S1-2`, `S1-3`, `S1-6`, `S1-7`) encoded the pre-`S5` state as their
+expected value. `(S1-3)` forbade the string `concentration threshold` on a mixed fixture that `S5`'s
+own *Done when* requires the 83 % concentration flag to fire on — two briefs from one gate,
+contradicting each other on one fixture. The unit's pinned contracts say no lane edits an existing
+case and that a lane which believes a pin is wrong returns `needs-decision`, so the `S5` lane stopped
+and the human ruled: **re-point the four cases inside `S5`** rather than cut a migration slice. The
+two fixtures drop the `slice` label from their transcribed invocations, which moves each case to a
+population that is still genuinely incomplete after `S5`, leaving all four assertions byte-identical
+and still able to go red; the now-complete mixed shape is asserted in `S5`'s own section instead.
+Each fixture comment says it is a re-point and why. The lesson for the next cut: when one slice's
+guards assert the absence of a symptom a later slice is required to produce, the cut owes a migration
+step, not a pin forbidding one.

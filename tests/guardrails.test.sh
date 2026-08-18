@@ -4716,6 +4716,64 @@ expect "(S5-7) RD8: recovery-free fixture still byte-identical to the frozen blo
 rm -rf "$S5MIXDIR"
 
 # ---------------------------------------------------------------------------
+echo "docs: a restored dimension is documented and this gate's decisions are recorded (S6, recovered-figure-drops-slice-and-model, spec.md RD9)"
+
+# The one README paragraph this slice adds, isolated once and reused by the
+# three README cases below -- README is one line per paragraph, so the
+# paragraph IS the grep unit, and (S6-4) needs it isolated to assert what it
+# does NOT say.
+S6_README_DIMS="$(grep -F 'A recovered record carries exactly one dimension' "$README_MD")"
+
+# (S6-1) README states WHERE a restored dimension comes from -- the
+# invocation's own start/finish records, never the recovered record. Before
+# this slice README said a recovered figure is model-transcribed and stopped
+# there, which left a reader unable to explain how a slice row can exist for a
+# figure nobody measured.
+expect "(S6-1) README states the restored dimensions come from the invocation's own start/finish records" "yes yes" \
+  "$(printf '%s' "$S6_README_DIMS" | grep -qF 'comes from the invocation'"'"'s own `start` and `finish` records' && echo yes || echo no) $(printf '%s' "$S6_README_DIMS" | grep -qF 'neither carries those fields nor invents them' && echo yes || echo no)"
+
+# (S6-2) README states the honest failure mode: a priced invocation whose own
+# records name no slice is reported unattributed, never guessed -- and the
+# orphan shape (a recovered record with no start/finish anywhere) is left out
+# of both the ranking and the priced population.
+expect "(S6-2) README states a priced invocation with no slice is reported unattributed, never guessed" "yes yes yes" \
+  "$(printf '%s' "$S6_README_DIMS" | grep -qF 'nothing is guessed' && echo yes || echo no) $(printf '%s' "$S6_README_DIMS" | grep -qF 'reported as **unattributed**' && echo yes || echo no) $(printf '%s' "$S6_README_DIMS" | grep -qF 'no `start` or `finish` anywhere is left out of the ranking' && echo yes || echo no)"
+
+# (S6-3) decisions.md records the reader-side answer WITH its reason -- the 21
+# records already on disk, which is the fact that decided it. A future session
+# reading decisions.md alone must find both, or the entry is a conclusion
+# without an argument.
+s6_decisions_check() {
+  local bad=0 dec="$ROOT/docs/loop/decisions.md"
+  grep -qi 'reader-side' "$dec" || bad=1
+  grep -qi '21 recovered records already exist' "$dec" || bad=1
+  grep -qi 'writer-side field' "$dec" || bad=1
+  grep -qi 'transcript scraping' "$dec" || bad=1
+  grep -qi 'fuzzy selector' "$dec" || bad=1
+  echo $bad
+}
+expect "(S6-3) decisions.md records the reader-side answer, the 21 records as its reason, and what the pass forecloses" "0" \
+  "$(s6_decisions_check)"
+
+# (S6-4) RD9 guard, both halves. The report's coverage sentence still says a
+# transcribed figure is `transcribed rather than host-observed` -- asserted on
+# a live report, not on the source -- and README's new paragraph never
+# describes a restored dimension as observed, in any form: it is the fields'
+# provenance being explained, and calling any of it observed would undo
+# exactly the distinction the sentence above preserves.
+S6RD9DIR="$(mktemp -d)"
+mkdir -p "$S6RD9DIR/.claude"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s6r1","slug":"s6-rd9","slice":"S1","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s6r1","slug":"s6-rd9","slice":"S1","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s6r1","slug":"s6-rd9","total_tokens":1234,"token_source":"transcribed"}'
+} > "$S6RD9DIR/.claude/loop-cost.jsonl"
+S6RD9_OUT="$(report "$S6RD9DIR" s6-rd9)"
+expect "(S6-4) RD9: the coverage sentence still says transcribed rather than host-observed, and README's restored-dimension paragraph never calls one observed" "yes 0" \
+  "$(printf '%s\n' "$S6RD9_OUT" | grep -qF 'transcribed rather than host-observed' && echo yes || echo no) $(printf '%s' "$S6_README_DIMS" | grep -ci 'observed')"
+rm -rf "$S6RD9DIR"
+
+# ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
 # file. The harness's actual total is only known once every case above has
 # run, including any inside a loop that fires more than once per source
