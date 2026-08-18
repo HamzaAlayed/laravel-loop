@@ -315,3 +315,75 @@ This forecloses:
 Instead: say which property the cap actually promises, oblige a later invocation to trim so
 convergence is not merely contingent on one happening to run, and replace an assertion nothing could
 reproduce locally with one that goes red 5/5 on demand.
+
+## Build-out of that decision: where the arrival trim was placed, and what the placement foreclosed (2026-08-18)
+
+A follow-up to the entry above, not a revision of it. The gate decided the **property** (`E1`'s
+property 3) and the **obligation class** (class 3). Everything below is a placement choice made at
+G1 and carried out in S5, recorded because a future reader would otherwise have to re-derive it —
+or re-propose something already declined.
+
+**What was chosen.** Exactly one trim loop exists in `record-cost-event.sh`: the existing loop,
+factored out of `append_and_evict()` into `converge_ledger()` and called by both paths. The
+obligation sits on the two arrival paths that end **without appending** — the `Bash` rework branch
+when it emits no `cap_trip`, and the deduped duplicate-finish discard — each via `trim_on_arrival()`,
+which makes **one** `mkdir` attempt on the evict lock and returns 0 if it loses. No invocation ever
+performs both an arrival trim and an append-path trim; that is unfalsifiable by a test (a double
+trim and a single trim leave the same file), so it is written to be read, and was read at merge.
+
+**What that forecloses:**
+- **Arrival-trimming on every invocation, appenders included.** Rejected: it puts new work on an
+  appending invocation's own path, which is the single property class 3 was chosen for avoiding. It
+  would also make S6's measurement meaningless as a check on the decision.
+- **A second copy of the trim loop for the arrival path.** Rejected: two copies of one rule can only
+  *promise* agreement, while one shared program makes it structural. This repository's own precedent,
+  twice — `cost-ledger-lib.sh`'s two parser programs (whose drift is exactly what
+  `recovered-figure-drops-slice-and-model` is fixing) and `check-script-modes.sh`'s G0 entry above.
+- **Extending the obligation to `scripts/record-recovered-cost.sh`.** Rejected: it is a deliberate,
+  human-typed CLI with no contention, and its independent `append_and_evict` copy is documented as
+  deliberate. Widening the diff there buys no convergence.
+- **Obliging the two unregistered early exits** — `SubagentStop` and the unmatched-event `*)`.
+  Rejected: neither is registered in `hooks/hooks.json`, so a filesystem read there is unreachable in
+  practice and only widens the diff.
+- **S2's *timed* lock release in the replaced case.** Rejected in favour of a synchronous release
+  (hold the lock, run the real finish hook, assert over cap, `rmdir`, deliver one arrival, assert
+  converged) on S2's own evidence: its 0/5 control at `HOLD=0.02s` shows a hold shorter than `L7`'s
+  poll budget flips the arm's colour, so a timed hold on a loaded runner could release early and make
+  the case green for the wrong reason. The replaced case now depends on no timing beyond `L7`'s own
+  bounded poll.
+- **Keeping the 20000-line raw-writer arm as a case.** Dropped with its cover named rather than
+  assumed: case (a) (80 sequential events, cap 50, newest-in-order) and case (b) (60 concurrent real
+  hook invocations settle at or under cap, never empty, every line parseable) still guard the
+  sustained-pressure dimension it stood for. Neither was modified.
+- **An attempt bound, an iteration counter, or a no-progress guard.** Already foreclosed by the
+  `G2 follow-up: break the eviction loop on a failed mv` entry above; restated here because the
+  arrival path is a fresh place to re-propose one. The loop keeps its `while :;` shape and its I/O
+  breaks, including S9's `mv` break.
+
+**What it cost, as a number** (`measure-e8-after.md`, n=20 per arm per version, interleaved
+before/after on one host, sha `13d3407`, pre-change script `d883886`):
+- The **appending** path did not move: arm (a) -0.5 ms mean / +0.9 ms median, arm (b) -2.6 ms mean /
+  +4.6 ms median, both versions' min-max ranges overlapping.
+- The **newly obliged arrival** pays **+16.1 ms mean / +15.7 ms median** when the ledger is over cap
+  and **+6.7 ms mean / +7.1 ms median** when it is not; the duplicate-finish arrival pays +21.3 /
+  +21.7 and +9.2 / +6.2 respectively. In both over-cap arms the pre-change script left the ledger at
+  5000 lines and the post-change one left it at 15.
+- Recorded with it: the absolute figures for the appending arms sit **below**
+  `spike-oq2-bound-at-rest.md` §4's observed min for the same arms, so the cross-document spread
+  check is inconclusive and the same-driver control stands in its place. That substitution is stated
+  in `measure-e8-after.md` §4 rather than smoothed over.
+
+**`E3` is met, and here is how.** S5 reproduced its own red before green: the replaced case's
+construction, extracted standalone, is red 5/5 against `git show d883886:scripts/record-cost-event.sh`
+(`yes no` — the hole constructed, no convergence) and green 5/5 against the changed script
+(`yes yes`), host `Darwin 25.6.0` arm64, bash 3.2.57. S2's independent 5/5 against HEAD and 5/5
+against pre-S5 remains the prior falsification of the hole itself — the property never held, so this
+was never S5-the-earlier-slice's regression.
+
+**`E2` is outstanding, and it is the human's.** No lane pushed, dispatched, re-ran, cancelled or
+tagged anything. A real pushed run on both guarding platforms is the only evidence about the guarding
+checks, and merging this group did not produce it. When it happens, **one green run is one sample** —
+not a rate, and not a claim that the cap now holds on CI.
+
+**`OQ4`, the stale evict lock:** still out of scope, still compounds with this mechanism, still needs
+its own intent. No lane tripped over it, and no position on it is recorded here.
