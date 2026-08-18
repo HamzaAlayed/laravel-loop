@@ -280,7 +280,7 @@ append_and_evict() {
         rm -f "$tmp"
         break
       fi
-      mv -f "$tmp" "$OUT" 2>/dev/null || rm -f "$tmp"
+      mv -f "$tmp" "$OUT" 2>/dev/null || { rm -f "$tmp"; break; }
     done
     rmdir "$EVICT_LOCK" 2>/dev/null
   fi

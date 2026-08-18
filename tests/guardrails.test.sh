@@ -484,6 +484,60 @@ wait "$L7_HOLDER_PID" 2>/dev/null
 expect "L7: an append lands its line while the evict lock is held, and its own wall clock stays well under the hold time" "yes yes" \
   "$(grep -q toolu-l7-1 "$LEDGER" && echo yes || echo no) $([ "$L7_ELAPSED" -lt "$L7_HOLD_SECONDS" ] && echo yes || echo no)"
 
+# -- (h) mv-failure regression (S9, verify.md finding (a)): the pre-fix loop
+# has three break paths for real I/O conditions (non-numeric wc, converged,
+# mktemp failure, tail failure-or-empty) but none for a persistently failing
+# `mv -f` -- reproduced at 209 and 501 iterations with no break reached. The
+# script calls `mv` unqualified, so a stub `mv` placed first on PATH is a
+# portable, privilege-free trigger (chflags is macOS-only; chattr +i needs
+# root). The observation is bounded with bash job control -- never GNU
+# `timeout`, absent on the maintainer's bash 3.2 macOS host -- following
+# ship-check.sh's run_bounded() precedent: run in its own process group,
+# poll with kill -0, and TERM/KILL the whole group if the bound is hit.
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
+MVFAIL_CAP=5
+MVFAIL_BOUND=5
+MVFAIL_BIN="$(mktemp -d)"
+cat > "$MVFAIL_BIN/mv" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$MVFAIL_BIN/mv"
+for i in $(seq 1 20); do printf '{"raw":%d}\n' "$i" >> "$LEDGER"; done
+MVFAIL_OUT="$(mktemp)"
+(
+  set -m
+  PATH="$MVFAIL_BIN:$PATH" LARAVEL_LOOP_COST_MAX_LINES=$MVFAIL_CAP \
+    cost "$(finish_json loop-build toolu-mvfail1 "d" "" sess-mvfail completed 1 1 "")" >"$MVFAIL_OUT" 2>&1 &
+  echo $! >"$MVFAIL_OUT.pid"
+  wait $!
+  echo $? >"$MVFAIL_OUT.exit"
+) >/dev/null 2>/dev/null &
+MVFAIL_RUNNER=$!
+MVFAIL_START="$SECONDS"
+while kill -0 "$MVFAIL_RUNNER" 2>/dev/null; do
+  if [ $((SECONDS - MVFAIL_START)) -ge "$MVFAIL_BOUND" ]; then
+    MVFAIL_PGID="$(cat "$MVFAIL_OUT.pid" 2>/dev/null || true)"
+    if [ -n "$MVFAIL_PGID" ]; then
+      kill -TERM "-$MVFAIL_PGID" 2>/dev/null
+      sleep 0.3
+      kill -KILL "-$MVFAIL_PGID" 2>/dev/null
+    fi
+    kill -KILL "$MVFAIL_RUNNER" 2>/dev/null
+    wait "$MVFAIL_RUNNER" 2>/dev/null
+    break
+  fi
+  sleep 0.05
+done
+wait "$MVFAIL_RUNNER" 2>/dev/null
+MVFAIL_RETURNED="$([ -f "$MVFAIL_OUT.exit" ] && echo yes || echo no)"
+MVFAIL_EXIT="$(cat "$MVFAIL_OUT.exit" 2>/dev/null || echo -1)"
+MVFAIL_LOCK="$COSTDIR/.claude/loop-cost-evict.lock"
+expect "mv failure: append_and_evict() returns within the bound, exits 0, and releases the evict lock" "yes 0 no" \
+  "$MVFAIL_RETURNED $MVFAIL_EXIT $([ -d "$MVFAIL_LOCK" ] && echo yes || echo no)"
+rm -rf "$MVFAIL_BIN" "$MVFAIL_OUT" "$MVFAIL_OUT.pid" "$MVFAIL_OUT.exit"
+
 # -- (c) `.claude/loop-cost.jsonl` is git-ignored, and a fixture repo shows no
 # ledger (or its S3/S4 sidecar state) in `git status` after events (H4).
 GITFIX="$(mktemp -d)"
