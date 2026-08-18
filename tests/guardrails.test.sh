@@ -4371,7 +4371,46 @@ S2CONC_ROWS_JQ="$(s2_conc_rows)"
 S2CONC_ROWS_PY="$(PATH="$JQ_ABSENT_PATH" s2_conc_rows)"
 expect "(S2-5) cost_slice_rows' rows byte-identical jq vs python3 on the concentration fixture" "" \
   "$(diff <(printf '%s' "$S2CONC_ROWS_JQ") <(printf '%s' "$S2CONC_ROWS_PY"))"
-rm -rf "$S2CONCDIR" "$JQ_ABSENT_PATH"
+rm -rf "$S2CONCDIR"
+
+# (S2-6) G2 follow-up (verify.md finding 1): the same rows parity, on a ledger
+# where a TRANSCRIBED figure is the thing being ranked -- the path S5 added.
+# (S2-5) above runs on a recovery-free fixture and S2-2/S2-3's recovered
+# fixtures carry no `slice` label at all, so before this case the SLICEROW
+# emission path for a transcribed figure was exercised by each program and
+# compared by NEITHER. The label is a real-world en-dash range, as two of the
+# 21 real recovered records' invocations are labelled.
+#
+# Both tokens matter: identical-and-empty would pass a bare diff while proving
+# nothing, so the row count is asserted alongside the agreement. A future
+# change that quietly stops ranking transcribed figures fails on the second
+# token rather than passing on the first.
+S2TRDIR="$(mktemp -d)"
+mkdir -p "$S2TRDIR/.claude"
+S2TRLEDGER="$S2TRDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s2tr-big","slug":"s2-transcribed","slice":"S1–S4","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s2tr-big","slug":"s2-transcribed","slice":"S1–S4","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s2tr-big","slug":"s2-transcribed","total_tokens":50000,"token_source":"transcribed"}'
+  printf '%s\n' '{"ts":4,"event":"start","invocation_id":"s2tr-obs","slug":"s2-transcribed","slice":"S2","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":5,"event":"finish","invocation_id":"s2tr-obs","slug":"s2-transcribed","slice":"S2","phase":"build","agent":"loop-build","status":"completed","total_tokens":10000}'
+  printf '%s\n' '{"ts":6,"event":"start","invocation_id":"s2tr-noslice","slug":"s2-transcribed","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":7,"event":"finish","invocation_id":"s2tr-noslice","slug":"s2-transcribed","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":8,"event":"recovered","invocation_id":"s2tr-noslice","slug":"s2-transcribed","total_tokens":7000,"token_source":"transcribed"}'
+} > "$S2TRLEDGER"
+s2_tr_rows() {
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  # >/dev/null: cost_slice_rows prints the rows AND publishes them, so the
+  # unattributed count is read from the global rather than from stdout.
+  cost_slice_rows "$S2TRLEDGER" "s2-transcribed" >/dev/null
+  printf '%s\n%s' "$COST_SLICE_ROWS" "unknown=$COST_SLICE_UNKNOWN_PRICED"
+}
+S2TR_ROWS_JQ="$(s2_tr_rows)"
+S2TR_ROWS_PY="$(PATH="$JQ_ABSENT_PATH" s2_tr_rows)"
+expect "(S2-6) cost_slice_rows' rows AND unattributed count byte-identical jq vs python3 on a fixture where a transcribed figure is ranked" " 3" \
+  "$(diff <(printf '%s' "$S2TR_ROWS_JQ") <(printf '%s' "$S2TR_ROWS_PY")) $(printf '%s' "$S2TR_ROWS_JQ" | grep -c .)"
+rm -rf "$S2TRDIR" "$JQ_ABSENT_PATH"
 
 # ---------------------------------------------------------------------------
 echo "cost report: per-phase model restored for a transcribed-only figure (S3, recovered-figure-drops-slice-and-model, spec.md RD1/RD5/RD6/RD8/RD11)"
