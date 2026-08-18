@@ -23,3 +23,26 @@ None of the three affect go/hold correctness; they're coverage gaps on already-c
 ## Out-of-bounds check
 
 Confirmed clean via `git diff a48ed14..HEAD --name-status`: no scripts beyond `ship-check.sh`, no hook/CI changes, `CHANGELOG.md`/`VERSION`/`.claude-plugin/plugin.json` untouched by this unit.
+
+---
+
+## The three concerns are closed — verified 2026-08-18
+
+All three were filed above as accepted-not-fixed coverage gaps. Each now has the case it wanted, and
+the citations are line numbers in `tests/guardrails.test.sh` as it stands at this commit:
+
+1. **Ship's disclaimer against `ship-check.sh`'s own stdout** — closed. `:2901` matches the script's
+   summary for *"own release readiness" … "not a check of a" … "downstream Laravel application"*, and
+   `:2910` asserts it, so the claim is checked where the concern said it was not: against the
+   script's output, not only `commands/ship.md`'s prose.
+2. **`observe.md`'s O4, O5 and O6** — closed, one case each: `:2648` (O4, attribution recorded as a
+   followable reference, never a guess), `:2654` (O5, no credentials, no telemetry client, no network
+   call), `:2661` (O6, project-agnostic, assumes nothing about language or toolchain). Previously
+   only O1–O3 had assertions.
+3. **`loop-protocol`'s `↺` claim** — closed. `:2670` asserts directly that the outer-loop diagram's
+   `↺` resolves to `/observe`'s capture step, reading `skills/loop-protocol/SKILL.md` itself rather
+   than README's equivalent sentence.
+
+The verdict above (`CONCERNS`, go) is unchanged as history. What changed is that its three follow-ups
+are no longer outstanding, and this file now says so rather than leaving a reader to discover it by
+grepping the harness.

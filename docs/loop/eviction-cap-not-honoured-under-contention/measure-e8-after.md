@@ -145,3 +145,72 @@ with a figure in `spike-oq2-bound-at-rest.md` §4:
   and what to do with it is not this slice's call.
 - No change to `scripts/`, `tests/`, `README.md`, `.github/`, `spec.md`, `decisions.md`, the three
   `spike-*.md` files, or any other unit's artifacts.
+
+---
+
+## 6. Appendix — the instrument, recorded so the next comparison is like-for-like
+
+§4's flag exists because `spike-oq2-bound-at-rest.md` §4 records *that* wall clock was taken around
+each invocation but not *with what*, which is why its absolute figures cannot be compared against
+anything measured differently. That gap is closed here in the only direction still available: the
+driver used for every figure in this file is written down, so a second person can reproduce these
+numbers exactly, and so the next unit that measures an append has an instrument to match rather than
+a description to guess at.
+
+It is deliberately **not** added under `scripts/`. Nothing in the plugin's runtime needs it, and a
+measurement harness in `scripts/` would fall inside `shellcheck scripts/*.sh`, the script-mode rule,
+and the ship gate for no benefit. It lives here, next to the figures it produced.
+
+```python
+#!/usr/bin/env python3
+"""E8's instrument. One timed interval = one `bash <script>` invocation.
+Payloads are built once, outside every timed interval. Trials alternate
+versions so host drift lands on both sides rather than on one."""
+import json, os, shutil, statistics, subprocess, tempfile, time
+
+ROOT = "<repo root>"
+POST = os.path.join(ROOT, "scripts", "record-cost-event.sh")
+PRE  = "<git show d883886:scripts/record-cost-event.sh > this path>"
+N = 20
+
+FINISH = json.dumps({
+    "hook_event_name": "PostToolUse", "session_id": "sess-ctl", "tool_name": "Agent",
+    "tool_use_id": "toolu-ctl",
+    "tool_input": {"subagent_type": "loop-build", "description": "d", "prompt": ""},
+    "tool_response": {"status": "completed", "total_tokens": 1, "duration_ms": 1},
+})
+BASH_PASS = json.dumps({
+    "hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": "sess-ctl-bash",
+    "agent_type": "loop-build", "tool_input": {"command": "php artisan test --filter=E8Test"},
+    "tool_response": "PASS  Tests\\Feature\\E8Test\n  Tests: 1 passed",
+})
+
+def seed(ledger, lines):
+    with open(ledger, "w") as fh:
+        for i in range(1, lines + 1):
+            fh.write('{"seed":%d}\n' % i)
+
+def run(script, payload, projdir, cap):
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=projdir, CLAUDE_PLUGIN_ROOT=ROOT,
+               LARAVEL_LOOP_COST_MAX_LINES=str(cap))
+    t0 = time.perf_counter()
+    subprocess.run(["bash", script], input=payload.encode(), env=env,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return (time.perf_counter() - t0) * 1000.0     # milliseconds
+
+# per arm: a fresh throwaway CLAUDE_PROJECT_DIR per version, seeded once for
+# an under-cap arm and re-seeded before EVERY trial for an over-cap arm, then
+# N interleaved trials (pre, post, pre, post, ...). Report mean / median /
+# min / max / n per version, and the post-minus-pre delta of mean and median.
+```
+
+**Two things this instrument makes explicit, both of which cost a run to learn:**
+
+1. **A reused `tool_use_id` silently changes what you are measuring.** The dedup marker means trials
+   2..N of an appending arm become *duplicate-finish arrivals* — a different code path. Every
+   appending arm must vary the id per trial; the arms that deliberately reuse one are labelled as
+   arrivals in §2 and §3.
+2. **`time.perf_counter()` around `subprocess.run` measures a tighter interval than a shell-level
+   timestamp pair does.** That is the most likely reading of §4's flag, and it is why the same-driver
+   control is the comparison this file rests on. Absolute figures here are comparable to each other
+   and to anything measured with this driver — and to nothing else.

@@ -107,3 +107,34 @@ $ bash scripts/check-budget-gate.sh --phase verify --unit cost-ledger-blind-to-b
 Verified: the full CL/RC/X criteria set against fixtures, via the harness reproduced directly (not accepted from the build report); the `Do NOT` lists of all ten slices via diff inspection; two independent red-before-green spot-checks (S1, S9) beyond the two requested, in an isolated scratch copy that never mutated the tracked working tree; the `LARAVEL_LOOP_COST_MIN_COVERAGE` no-number guard's genuineness.
 
 Not verified (explicitly out of scope per spec.md, not a gap in this pass): DC4 and DC5, which require a real `/loop` run with background lanes and a human's own eye — the harness cannot exercise the live hook or transcript path, and the spec says so itself. S11 was confirmed *not built* (correct — it was held, not approved) rather than evaluated against criteria, since none apply to it. `cost-measurement-v0.2`'s DC1 and `cost-reporting-v0.3`'s DC2/DC3 remain open per the spec and are not addressed by this verify pass.
+
+---
+
+## DC4 and DC5 — confirmed by the maintainer 2026-08-17, after this verdict was written
+
+The note above records `DC4` and `DC5` as "not verified (explicitly out of scope per spec.md)". That
+is no longer the state of the record and this file should not be read as though it were: `spec.md`
+now carries both as `[x]` with maintainer confirmations dated **2026-08-17**, which postdate this
+verdict.
+
+- **`DC4`** — confirmed against the `ship-gate-blind-to-ci` run: seven backgrounded invocations, all
+  recorded `async_launched` and unpriced, with the coverage output accounting for them at every
+  point.
+- **`DC5`** — confirmed with seven of seven figures transcribed by hand from their own completion
+  notifications, coverage moving 0 % → 100 % for that unit, every figure permanently labelled
+  `transcribed rather than host-observed`. The maintainer accepted an orchestrating agent's reading
+  of the notifications as satisfying "the human saw" for that check.
+
+Two things worth carrying forward rather than treating as closed by those ticks:
+
+1. **`DC5`'s comparand is not on disk.** Completion notifications live in a session, not in the
+   repository, so a correctly transcribed figure and an invented one are indistinguishable from the
+   ledger alone. The 21 recovered records were written in three batches (7 within one second, 14
+   across two), which is consistent with one agent writing them from its own context — exactly what
+   `spec.md` records the maintainer accepting. Anyone wanting `DC5` as machine-checkable evidence
+   needs a run where the notification figures are captured independently at the time.
+2. **The run `DC4` was confirmed against no longer reproduces that state.** `ship-gate-blind-to-ci`
+   now reads 100 % covered, because recovery records were appended at 2026-08-17T11:38:13 — after
+   the check. Two other real units (`eviction-cap-not-honoured-under-contention`, 8 invocations, and
+   `recovered-figure-drops-slice-and-model`, 6) still sit at 0 % coverage, so the `DC4` output can be
+   re-read against a genuinely backgrounded run without new instrumentation.
