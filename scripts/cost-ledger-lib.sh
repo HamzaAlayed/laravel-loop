@@ -471,6 +471,7 @@ def phase_key:
            # observed figure is never displaced by a later `recovered` line.
            (.priced += 1) | (.tokens += $e.value.transcribed_tokens)
            | (.byphase[$pk].priced += 1) | (.byphase[$pk].tokens += $e.value.transcribed_tokens)
+           | (.byphase[$pk].models[(($e.value.model // "unavailable") + "::" + ($e.value.model_source // "unknown"))] = 1)
            | (.priced_transcribed += 1) | (.tokens_transcribed += $e.value.transcribed_tokens)
          else
            (.unpriced += 1) | (.byphase[$pk].unpriced += 1)
@@ -674,6 +675,8 @@ for invid, e in inv.items():
             agg["tokens"] += e["transcribed_tokens"]
             byphase[pk]["priced"] += 1
             byphase[pk]["tokens"] += e["transcribed_tokens"]
+            mkey = (e["model"] or "unavailable") + "::" + (e["model_source"] or "unknown")
+            byphase[pk]["models"][mkey] = 1
             agg["priced_transcribed"] += 1
             agg["tokens_transcribed"] += e["transcribed_tokens"]
         else:
