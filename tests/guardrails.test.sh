@@ -4266,6 +4266,164 @@ expect "(S2-5) cost_slice_rows' rows byte-identical jq vs python3 on the concent
 rm -rf "$S2CONCDIR" "$JQ_ABSENT_PATH"
 
 # ---------------------------------------------------------------------------
+echo "cost report: per-phase model restored for a transcribed-only figure (S3, recovered-figure-drops-slice-and-model, spec.md RD1/RD5/RD6/RD8/RD11)"
+
+# (S3-1) RD1 happy path: a start+finish carrying model+model_source, the
+# finish itself async_launched with no total_tokens, plus a `recovered` line
+# supplying the only figure -- the real shape verified against all 21
+# existing recovered records. The Phases block must name the model those
+# records carry, marked (derived) because the records say derived.
+S3ATDIR="$(mktemp -d)"
+mkdir -p "$S3ATDIR/.claude"
+S3ATLEDGER="$S3ATDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3at1","slug":"s3-all-transcribed","phase":"build","agent":"loop-build","model":"opus","model_source":"derived"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3at1","slug":"s3-all-transcribed","phase":"build","agent":"loop-build","model":"opus","model_source":"derived","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s3at1","slug":"s3-all-transcribed","total_tokens":42000,"token_source":"transcribed"}'
+} > "$S3ATLEDGER"
+S3AT_OUT="$(report "$S3ATDIR" s3-all-transcribed)"
+expect "(S3-1) RD1: all-transcribed unit -- build phase reads 'opus (derived)' (today: unavailable)" "yes" \
+  "$(printf '%s\n' "$S3AT_OUT" | grep -qE 'build[[:space:]]+opus \(derived\)' && echo yes || echo no)"
+rm -rf "$S3ATDIR"
+
+# (S3-2) RD5: a transcribed-only invocation whose own start/finish records
+# carry NO model -- the phase still reads unavailable, and no model name
+# absent from the ledger is fabricated or inherited.
+S3NMDIR="$(mktemp -d)"
+mkdir -p "$S3NMDIR/.claude"
+S3NMLEDGER="$S3NMDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3nm1","slug":"s3-no-model","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3nm1","slug":"s3-no-model","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s3nm1","slug":"s3-no-model","total_tokens":9000,"token_source":"transcribed"}'
+} > "$S3NMLEDGER"
+S3NM_OUT="$(report "$S3NMDIR" s3-no-model)"
+S3NM_UNAVAILABLE="$(printf '%s\n' "$S3NM_OUT" | grep -qE 'build[[:space:]]+unavailable' && echo yes || echo no)"
+S3NM_FABRICATED="$(printf '%s\n' "$S3NM_OUT" | sed -n '/^Phases/,/^$/p' | grep -qE 'opus|sonnet|claude-' && echo yes || echo no)"
+expect "(S3-2) RD5: transcribed-only, no model -- build phase reads unavailable, nothing fabricated" "yes no" \
+  "$S3NM_UNAVAILABLE $S3NM_FABRICATED"
+rm -rf "$S3NMDIR"
+
+# (S3-3) mixed phase: one observed invocation carrying a model, one
+# transcribed-only invocation whose own records carry none, both in the
+# SAME phase -- both entries must be named, neither dropped. Verified live
+# before writing any code: today's output reads "build  sonnet" alone,
+# silently suppressing the transcribed entry.
+S3MPDIR="$(mktemp -d)"
+mkdir -p "$S3MPDIR/.claude"
+S3MPLEDGER="$S3MPDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3mpa","slug":"s3-mixed-phase","phase":"build","agent":"loop-build","model":"sonnet","model_source":"observed"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3mpa","slug":"s3-mixed-phase","phase":"build","agent":"loop-build","model":"sonnet","model_source":"observed","status":"completed","total_tokens":5000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s3mpb","slug":"s3-mixed-phase","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s3mpb","slug":"s3-mixed-phase","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":5,"event":"recovered","invocation_id":"s3mpb","slug":"s3-mixed-phase","total_tokens":9000,"token_source":"transcribed"}'
+} > "$S3MPLEDGER"
+S3MP_OUT="$(report "$S3MPDIR" s3-mixed-phase)"
+expect "(S3-3) mixed phase: observed model AND unavailable both named, neither dropped (today drops the transcribed entry)" "yes" \
+  "$(printf '%s\n' "$S3MP_OUT" | grep -qE 'build[[:space:]]+sonnet, unavailable' && echo yes || echo no)"
+rm -rf "$S3MPDIR"
+
+# (S3-4) RD6: the recovered line duplicated for the same invocation_id --
+# identical phase model line and identical counters to the single-line
+# fixture (S3-1). Exactly-once precedence extends to the model write.
+S3DUPDIR="$(mktemp -d)"
+mkdir -p "$S3DUPDIR/.claude"
+S3DUPLEDGER="$S3DUPDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3d1","slug":"s3-dup","phase":"build","agent":"loop-build","model":"opus","model_source":"derived"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3d1","slug":"s3-dup","phase":"build","agent":"loop-build","model":"opus","model_source":"derived","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s3d1","slug":"s3-dup","total_tokens":42000,"token_source":"transcribed"}'
+  printf '%s\n' '{"ts":4,"event":"recovered","invocation_id":"s3d1","slug":"s3-dup","total_tokens":42000,"token_source":"transcribed"}'
+} > "$S3DUPLEDGER"
+S3DUP_OUT="$(report "$S3DUPDIR" s3-dup)"
+expect "(S3-4) RD6: duplicated recovered line -- output identical to the single-line fixture" "" \
+  "$(diff <(printf '%s' "$S3DUP_OUT") <(printf '%s' "$S3AT_OUT"))"
+rm -rf "$S3DUPDIR"
+
+# (S3-5) RD8 guard: a recovery-free fixture -- report output byte-identical
+# to a frozen expected block. This slice must not change a single byte of
+# output when there is no `recovered` record in the ledger.
+S3RFDIR="$(mktemp -d)"
+mkdir -p "$S3RFDIR/.claude"
+S3RFLEDGER="$S3RFDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3rf1","slug":"s3-recovery-free","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3rf1","slug":"s3-recovery-free","phase":"build","agent":"loop-build","model":"claude-sonnet-4","model_source":"derived","status":"completed","total_tokens":5000}'
+} > "$S3RFLEDGER"
+S3RF_OUT="$(report "$S3RFDIR" s3-recovery-free)"
+read -r -d '' S3_FROZEN_RF <<'FROZEN'
+Coverage:
+  based on 1 of 1 invocations that carry a token figure (0 unpriced, not counted) -- 100 % coverage
+  0 invocation(s) started with no finish recorded yet -- in flight, not counted as unpriced.
+  per phase (priced/total invocations; in-flight and unpriced called out, never folded together):
+    spec   0/0 priced (0 unpriced)
+    slice  0/0 priced (0 unpriced)
+    build  1/1 priced (0 unpriced)
+    verify 0/0 priced (0 unpriced)
+  elapsed (wall-clock, first recorded start to last recorded finish; never summed across overlapping invocations): 1 second(s)
+
+Tokens (priced subset only -- never the unit's whole cost):
+  total priced tokens: 5000
+  based on 1 of 1 invocations that carry a token figure (0 unpriced, not counted) -- 100 % coverage
+  cache-read share: unavailable (cache_read_tokens absent from every priced record)
+
+Phases (priced invocations only; model per phase, model_source shown when derived):
+    spec   unavailable
+    slice  unavailable
+    build  claude-sonnet-4 (derived)
+    verify unavailable
+
+Rework:
+  This measures the cost of slices that were not right first time, at whole-invocation
+  granularity -- not the cost of retrying. An invocation needing even one refine pass has
+  its WHOLE token cost counted as rework, deliberately over-attributing rather than
+  estimating a per-pass split. This is not comparable to the requirements document's
+  <15% target (Sec.10), which was calibrated against a narrower, per-pass definition.
+  No pass/fail verdict against that target is printed here.
+  count: 0 of 1 invocation(s) marked rework
+  token share: unavailable (no priced invocations are marked rework)
+
+Slices (top by priced tokens, priced subset only):
+  no slice attributed to any priced invocation.
+  1 priced invocation(s), 5000 token(s) sit outside this ranking -- unattributed.
+
+Flags:
+  concentration could not be assessed -- 1 priced invocation(s) carry no slice attribution.
+
+Budget:
+  no threshold is set (LARAVEL_LOOP_BUDGET_WARN, LARAVEL_LOOP_BUDGET_HARD are both unset) -- nothing will gate.
+FROZEN
+expect "(S3-5) RD8: recovery-free fixture is byte-identical to a frozen expected block" "" \
+  "$(diff <(printf '%s' "$S3_FROZEN_RF") <(printf '%s' "$S3RF_OUT"))"
+rm -rf "$S3RFDIR"
+
+# (S3-6) RD11: PATH stripped of BOTH jq and python3 against a ledger holding
+# recovered records -- today's degraded-environment message still appears,
+# exit 0, no partial figure. Extends the existing (j) CO13 shape to a ledger
+# this slice's own code path touches.
+S3NPDIR="$(mktemp -d)"
+mkdir -p "$S3NPDIR/.claude"
+S3NPLEDGER="$S3NPDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3np1","slug":"s3-no-parser","phase":"build","agent":"loop-build","model":"opus","model_source":"derived"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3np1","slug":"s3-no-parser","phase":"build","agent":"loop-build","model":"opus","model_source":"derived","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s3np1","slug":"s3-no-parser","total_tokens":42000,"token_source":"transcribed"}'
+} > "$S3NPLEDGER"
+S3NOPARSER_BIN="$(mktemp -d)"
+for b in cat mkdir date sed bash grep; do
+  p="$(command -v "$b" 2>/dev/null)"
+  [ -n "$p" ] && ln -s "$p" "$S3NOPARSER_BIN/$b"
+done
+S3NOPARSER_OUT="$(PATH="$S3NOPARSER_BIN" report "$S3NPDIR" s3-no-parser)"
+S3NOPARSER_EXIT="$(PATH="$S3NOPARSER_BIN" report_exit "$S3NPDIR" s3-no-parser)"
+S3NOPARSER_SAID="$(printf '%s\n' "$S3NOPARSER_OUT" | grep -qi 'neither jq nor python3' && echo yes || echo no)"
+S3NOPARSER_PARTIAL="$(printf '%s\n' "$S3NOPARSER_OUT" | grep -q 'Coverage:' && echo yes || echo no)"
+expect "(S3-6) RD11: PATH stripped of jq+python3 on a ledger with recovered records -- exit 0, says so, no partial report" \
+  "0 yes no" "$S3NOPARSER_EXIT $S3NOPARSER_SAID $S3NOPARSER_PARTIAL"
+rm -rf "$S3NPDIR" "$S3NOPARSER_BIN"
+
+# ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
 # file. The harness's actual total is only known once every case above has
 # run, including any inside a loop that fires more than once per source
