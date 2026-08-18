@@ -4514,6 +4514,52 @@ expect "(S3-6) RD11: PATH stripped of jq+python3 on a ledger with recovered reco
 rm -rf "$S3NPDIR" "$S3NOPARSER_BIN"
 
 # ---------------------------------------------------------------------------
+echo "cost report: rework token share stops contradicting the count (S4, recovered-figure-drops-slice-and-model, spec.md OQ2)"
+
+# (S4-1/S4-2) transcribed-rework fixture: the rework-marked invocation's
+# ONLY figure is transcribed (finish is async_launched, no total_tokens; a
+# recovered line supplies the figure). Before this slice, rework_priced_n
+# and rework_tokens are incremented only in the host-observed branch, so a
+# rework invocation priced purely by a recovered record contradicts itself:
+# "count: 1 ... marked rework" next to "token share: unavailable (no priced
+# invocations are marked rework)" even though one plainly is.
+S4TRDIR="$(mktemp -d)"
+mkdir -p "$S4TRDIR/.claude"
+S4TRLEDGER="$S4TRDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s4tr1","slug":"s4-transcribed-rework","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s4tr1","slug":"s4-transcribed-rework","phase":"build","agent":"loop-build","status":"async_launched","phase_detail":"rework","refine_passes":2}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s4tr1","slug":"s4-transcribed-rework","total_tokens":6000,"token_source":"transcribed"}'
+  printf '%s\n' '{"ts":4,"event":"start","invocation_id":"s4tr2","slug":"s4-transcribed-rework","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":5,"event":"finish","invocation_id":"s4tr2","slug":"s4-transcribed-rework","phase":"build","agent":"loop-build","status":"completed","total_tokens":2000}'
+} > "$S4TRLEDGER"
+S4TR_OUT="$(report "$S4TRDIR" s4-transcribed-rework)"
+
+expect "(S4-1) transcribed-rework fixture: a real token share prints, labelled as a share" "yes" \
+  "$(printf '%s\n' "$S4TR_OUT" | grep -q 'token share: 75% of priced tokens (1 of 2 priced invocation(s) marked rework)' && echo yes || echo no)"
+
+expect "(S4-2) the contradiction is gone: 'no priced invocations are marked rework' does not appear while the rework count is non-zero" "yes 0" \
+  "$(printf '%s\n' "$S4TR_OUT" | grep -q 'count: 1 of 2 invocation(s) marked rework' && echo yes || echo no) $(printf '%s\n' "$S4TR_OUT" | grep -c 'no priced invocations are marked rework')"
+
+# (S4-3) the same fixture through the SECOND consumer, write-cost-log-section.sh
+# -- the committed docs/loop/<slug>/log.md carries the same figure, never the
+# false sentence, which is the reason OQ2 asked about this consumer at all.
+mkdir -p "$S4TRDIR/docs/loop/s4-transcribed-rework"
+S4TRLOG="$S4TRDIR/docs/loop/s4-transcribed-rework/log.md"
+printf '%s\n' '# Log — s4-transcribed-rework' > "$S4TRLOG"
+writelog "$S4TRDIR" s4-transcribed-rework
+S4TRLOG_OUT="$(cat "$S4TRLOG")"
+expect "(S4-3) write-cost-log-section.sh: the log section carries the same figure as the report, not the false sentence" "yes 0" \
+  "$(printf '%s\n' "$S4TRLOG_OUT" | grep -q 'token share: 75% of priced tokens' && echo yes || echo no) $(printf '%s\n' "$S4TRLOG_OUT" | grep -c 'no priced invocations are marked rework')"
+rm -rf "$S4TRDIR"
+
+# (S4-4) guard: the two states the existing CO5 cases already pin are kept
+# intact -- an all-unpriced rework fixture still reads token share:
+# unavailable, and a host-observed priced-rework fixture still reads 25%.
+expect "(S4-4) guard: all-unpriced rework (CO5) still unavailable, host-observed priced-rework (CO5) still 25%" "yes yes" \
+  "$(printf '%s\n' "$REWORKU_OUT" | grep -q 'token share: unavailable' && echo yes || echo no) $(printf '%s\n' "$REWORKP_OUT" | grep -q 'token share: 25% of priced tokens' && echo yes || echo no)"
+
+# ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
 # file. The harness's actual total is only known once every case above has
 # run, including any inside a loop that fires more than once per source
