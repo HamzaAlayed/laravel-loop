@@ -473,6 +473,17 @@ def phase_key:
            | (.byphase[$pk].priced += 1) | (.byphase[$pk].tokens += $e.value.transcribed_tokens)
            | (.byphase[$pk].models[(($e.value.model // "unavailable") + "::" + ($e.value.model_source // "unknown"))] = 1)
            | (.priced_transcribed += 1) | (.tokens_transcribed += $e.value.transcribed_tokens)
+           # S4 (OQ2): a rework-marked invocation priced ONLY by a recovered
+           # figure counts toward the rework token share, exactly as the
+           # host-observed branch above counts one -- with its transcribed
+           # figure, since that is the figure that priced it. Without this the
+           # report printed a non-zero rework count beside "token share:
+           # unavailable (no priced invocations are marked rework)" while one
+           # plainly was. cache_read is deliberately NOT extended here: that
+           # is a separate, named gap (spec.md non-goal).
+           | (if $e.value.phase_detail == "rework" then
+                (.rework_priced_n += 1) | (.rework_tokens += $e.value.transcribed_tokens)
+              else . end)
          else
            (.unpriced += 1) | (.byphase[$pk].unpriced += 1)
            | (($e.value.status // "")) as $st
@@ -679,6 +690,12 @@ for invid, e in inv.items():
             byphase[pk]["models"][mkey] = 1
             agg["priced_transcribed"] += 1
             agg["tokens_transcribed"] += e["transcribed_tokens"]
+            # S4 (OQ2): mirrors the host-observed branch above, with the
+            # transcribed figure -- the one that priced this invocation. See
+            # the jq program's comment; cache_read stays out by non-goal.
+            if e["phase_detail"] == "rework":
+                agg["rework_priced_n"] += 1
+                agg["rework_tokens"] += e["transcribed_tokens"]
         else:
             agg["unpriced"] += 1
             byphase[pk]["unpriced"] += 1
