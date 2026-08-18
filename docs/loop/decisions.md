@@ -270,3 +270,48 @@ Instead: six sequential reader-side slices, one held behind OQ3 (whether a resto
 its own per-row transcribed marking). Parser parity between the jq and python programs gets its
 own slice and lands early — the two have never been tested against each other, in the file this
 unit calls the most dangerous in the repository.
+
+## Second G1: the ledger promises convergence, and a later invocation is obliged to trim (2026-08-18)
+
+Decided after three read-only spikes, with `OQ1` held from G0 precisely so this could be decided on
+evidence rather than instinct.
+
+**The cap property is `E1`'s property 3 — eventual convergence — stated explicitly**, plus
+obligation **class 3**: a later invocation checks and trims on arrival unconditionally, regardless
+of what its own append needs. The failing case's assertion is replaced with S2's deterministic
+lock-hold construction.
+
+**Why, in one line each:**
+- `record-cost-event.sh`'s header already documented the accepted cost as *"a ledger that sits
+  slightly over cap for a moment"* — which **is** property 3. The test asserted property 2. The case
+  disagreed with the documented design, not with the code, and nobody had asked which of the three
+  readings of "cap" was meant.
+- S1 established property 2 is **not achievable** alongside `L7`: no invocation can tell from inside
+  its own event whether it is a run's last append — a run is only over in hindsight — so any
+  unconditional guarantee needs the returning invocation to wait on the lock, which is the literal
+  thing `L7` rules out.
+- Class 3 is the only obligation class S1 rated **fully `L7`-compatible at zero cost to any
+  appending invocation**, and it tightens convergence rather than merely redefining it.
+- S2 established a **local red is constructible** (5/5 against HEAD, and 5/5 against pre-S5 — so the
+  property never held and this was never S5's regression), which means the replacement assertion is
+  reproducible where the current one is not (case (f)'s own scenario: 0/N across 8 arms).
+
+This forecloses:
+- **Property 2 / a hard bound at rest.** The maintainer's own recorded instinct, tested by the spike
+  and declined on its evidence. It needs obligation class 1 or 2, both of which **give up `L7`**:
+  unbounded waiting on the appending path against a measured 148 ms baseline, and class 2 cascades
+  across concurrently spawned invocations. `L7`'s header rejects exactly this trade.
+- **Class 1** (the appender guarantees before returning) and **class 2** (a lock-loser retries) — the
+  two that could deliver property 2, both giving up `L7`.
+- **Class 4** (a sweep at the run's end) and **class 5** (a detached continuation) — property 3 at
+  best, and each carries an unestablished reliability question or a per-append process spawn.
+- **Leaving the assertion as it stands.** It asserts a property that is not achievable and that the
+  file's own header contradicts.
+- **Deleting or weakening the case without replacing it.** S2's construction means the guard can be
+  kept and made reproducible, so losing it is not the price of correctness.
+- **Amending `L7` itself.** If the never-block guarantee is the thing that should be questioned, that
+  is a spec-level question deserving its own unit at G0 — not a side effect of this decision.
+
+Instead: say which property the cap actually promises, oblige a later invocation to trim so
+convergence is not merely contingent on one happening to run, and replace an assertion nothing could
+reproduce locally with one that goes red 5/5 on demand.
