@@ -236,3 +236,37 @@ This forecloses:
 Instead: one line, one new case with a portable failing-`mv` trigger, falsified against today's HEAD
 so it cannot be a test that never could have failed — which is exactly how the regression got
 through a 426-case green suite in the first place.
+
+## G1: recovered-figure is fixed reader-side, and RD8 is read by purpose (2026-08-18)
+
+Decided: cut the fix reader-side — six slices in `cost-ledger-lib.sh` and `cost-report.sh`, with
+`record-recovered-cost.sh` and the record shape untouched. G0's OQ4 forces it: the 21 recovered
+records already in the ledger must benefit without being re-typed, and only a reader fix delivers
+that.
+
+**RD3 versus RD8 collide on one fixture class** — a recovery-free ledger holding a priced
+invocation with no `slice`. RD3 wants the count *and* the tokens in the ranking's own section; RD8
+wants recovery-free output byte-identical. **Read as: RD8's purpose is RC6** — that the
+transcription *feature* leaves no trace on a run that used none — not a freeze on the report.
+Making the report's honesty conditional on a `recovered` record being present is precisely the
+coupling this unit removes.
+
+This forecloses:
+- **A writer-side fix** — adding `slice` and `model` to the recovered record. It would overturn
+  `record-recovered-cost.sh`'s documented pin ("nothing about phase, status, model, duration, or
+  slice is ever copied forward… No other field, ever"), leave two record shapes in one ledger, and
+  strand the 21 existing records unless they were re-typed.
+- **A split writer/reader fix** — considered as a real third option at G0 and not taken, for the
+  same reason: OQ4's answer makes the reader path the only one that helps what is already recorded.
+- **RD8's letter over its purpose** — gating the new line on `COST_N_PRICED_TRANSCRIBED > 0`. It
+  freezes recovery-free output exactly, at the cost of making honesty depend on a record type.
+  Offered at the gate and declined.
+- **Fixing the resumed-invocation gap here** — out by G0's OQ5; it is a capture gap needing the
+  hook matcher RC7 forbids.
+- **Deciding S11** — automatic transcription wiring stays held. Automating over a record shape is
+  a different question from what the reader does with the shape it has.
+
+Instead: six sequential reader-side slices, one held behind OQ3 (whether a restored dimension needs
+its own per-row transcribed marking). Parser parity between the jq and python programs gets its
+own slice and lands early — the two have never been tested against each other, in the file this
+unit calls the most dangerous in the repository.
