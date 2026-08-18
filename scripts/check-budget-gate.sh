@@ -370,13 +370,26 @@ print_breach_message() {
   echo "" >&2
 
   cost_slice_rows "$LEDGER" "$SLUG" >/dev/null
+  # recovered-figure-drops-slice-and-model S1 (RD3/RD4): the ranking below can
+  # be incomplete two ways -- a priced invocation with no `slice` at all
+  # (COST_SLICE_UNKNOWN_PRICED), or one this pass never recognised as priced
+  # in the first place (pre-S5, transcribed-only). cost_slice_unranked()
+  # states both the same way, and a nonzero gap here means this message NEVER
+  # recommends re-slicing a top slice as "the largest share" -- top_line stays
+  # unset so the options section below falls through to its own generic
+  # recommendation.
+  cost_slice_unranked
+  local outside_n="${COST_SLICE_OUTSIDE_N:-0}" outside_tokens="${COST_SLICE_OUTSIDE_TOKENS:-0}"
+  local unreconciled="${COST_SLICE_OUTSIDE_UNRECONCILED:-0}"
   local top_line="" top_slice="" top_tokens=0 top_inv=0 top_rtokens=0 top_rinv=0
-  if [ "${COST_SLICE_UNKNOWN_PRICED:-0}" -gt 0 ] && [ -z "${COST_SLICE_ROWS:-}" ]; then
-    echo "Most expensive slice could not be identified -- every priced invocation for this unit carries no slice attribution." >&2
-  elif [ "${COST_SLICE_UNKNOWN_PRICED:-0}" -gt 0 ]; then
-    echo "Most expensive slice could not be reliably identified -- ${COST_SLICE_UNKNOWN_PRICED} priced invocation(s) carry no slice attribution and could outrank the ranking below." >&2
-  elif [ -z "${COST_SLICE_ROWS:-}" ]; then
-    echo "Most expensive slice could not be identified -- no priced invocation for this unit carries a slice attribution." >&2
+  if [ -z "${COST_SLICE_ROWS:-}" ]; then
+    if [ "$outside_n" -gt 0 ] || [ "$unreconciled" -eq 1 ]; then
+      echo "Most expensive slice could not be identified -- ${outside_n} priced invocation(s), ${outside_tokens} token(s) sit outside this ranking and could not be attributed to any slice." >&2
+    else
+      echo "Most expensive slice could not be identified -- no priced invocation for this unit carries a slice attribution." >&2
+    fi
+  elif [ "$outside_n" -gt 0 ] || [ "$unreconciled" -eq 1 ]; then
+    echo "Most expensive slice could not be reliably identified -- ${outside_n} priced invocation(s), ${outside_tokens} token(s) sit outside this ranking and could outrank it." >&2
   else
     top_line="$(printf '%s\n' "$COST_SLICE_ROWS" | head -1)"
     IFS=$'\t' read -r top_slice top_tokens top_inv top_rtokens top_rinv <<<"$top_line"

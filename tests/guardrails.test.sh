@@ -1569,23 +1569,27 @@ s4_share_check() {
 }
 expect "(S4-0) fixture: 1 of 2 invocations priced -> 50% coverage share" "ok" "$(s4_share_check)"
 
-# (S4-1) unset -> byte-identical to the pre-slice script on the identical
-# fixture. Diffed against the actual pre-slice scripts/cost-report.sh (git
-# HEAD, before this slice's own commit) run from a copy alongside the
-# untouched cost-ledger-lib.sh so its sourcing still resolves -- not trusted
-# from a paraphrase of "today's behaviour".
-S4OLDDIR="$(mktemp -d)"
-if git -C "$ROOT" show HEAD:scripts/cost-report.sh > "$S4OLDDIR/cost-report.sh" 2>/dev/null; then
-  cp "$SCRIPTS/cost-ledger-lib.sh" "$S4OLDDIR/cost-ledger-lib.sh"
-  chmod +x "$S4OLDDIR/cost-report.sh"
-  S4_OLD_OUT="$(CLAUDE_PROJECT_DIR="$S4FLOORDIR" bash "$S4OLDDIR/cost-report.sh" s4-floor-fixture)"
-  S4_NEW_UNSET_OUT="$(report "$S4FLOORDIR" s4-floor-fixture)"
-  expect "(S4-1) CL5: LARAVEL_LOOP_COST_MIN_COVERAGE unset -> byte-identical to the pre-slice script (same fixture)" "" \
-    "$(diff <(printf '%s' "$S4_OLD_OUT") <(printf '%s' "$S4_NEW_UNSET_OUT"))"
-else
-  expect "(S4-1) CL5: LARAVEL_LOOP_COST_MIN_COVERAGE unset -> byte-identical to the pre-slice script (same fixture)" "skip: no HEAD to diff against" "skip: no HEAD to diff against"
-fi
-rm -rf "$S4OLDDIR"
+# (S4-1) unset -> the floor feature's OWN suppression behaviour is absent:
+# the unit-level total still prints, and "cost read as not established"
+# (the floor's own message, asserted verbatim in S4-2 below) never appears.
+#
+# Was previously asserted by diffing the working tree's cost-report.sh
+# against `git show HEAD:scripts/cost-report.sh` on the theory that "unset"
+# should be byte-identical to "the script before this floor feature
+# existed". That mechanism silently assumed cost-report.sh would never be
+# touched again for any OTHER reason -- false the moment a later, unrelated
+# slice legitimately changes this script's output on this same fixture (as
+# recovered-figure-drops-slice-and-model S1 does: this exact fixture has a
+# priced invocation with no `slice`, which is precisely the class S1 adds an
+# unattributed-tokens line for). That is not a floor-feature regression, so
+# a byte-diff against a moving HEAD is the wrong instrument for what this
+# case actually needs to prove -- fixed here to assert the floor's own
+# opt-in property directly, the same way S4-2 through S4-5b already do,
+# rather than a global "nothing else in this file may ever change" claim.
+S4_NEW_UNSET_OUT="$(report "$S4FLOORDIR" s4-floor-fixture)"
+expect "(S4-1) CL5: LARAVEL_LOOP_COST_MIN_COVERAGE unset -> total priced tokens still prints, and 'cost read as not established' never appears" \
+  "total-prints yes, not-established no" \
+  "total-prints $(printf '%s\n' "$S4_NEW_UNSET_OUT" | grep -q 'total priced tokens' && echo yes || echo no), not-established $(printf '%s\n' "$S4_NEW_UNSET_OUT" | grep -qi 'not established' && echo yes || echo no)"
 
 # (S4-2) above coverage -> no unit-level total; cost read as not
 # established; the observed subset stays visible only in Coverage above,
@@ -4004,6 +4008,144 @@ expect "5: every ci.yml runs-on value appears in docs/loop/checks.md's claimed-p
 expect "6: claimed-platforms statement names each platform's evidence producer, the citation-is-not-proof limit, and the rolling-image caveat" \
   "ubuntu-producer yes, macos-producer yes, citation-not-proof yes, rolling-image yes" \
   "ubuntu-producer $(printf '%s' "$CHECKSMD_FLAT" | grep -qi 'ubuntu-latest is claimed' && printf '%s' "$CHECKSMD_FLAT" | grep -qi 'guardrails job.s own guardrail tests step' && echo yes || echo no), macos-producer $(printf '%s' "$CHECKSMD_FLAT" | grep -qi 'macos-latest is claimed' && printf '%s' "$CHECKSMD_FLAT" | grep -qi 'guardrails-macos job.s own guardrail tests (macos) step' && echo yes || echo no), citation-not-proof $(printf '%s' "$CHECKSMD_FLAT" | grep -qi 'citable image manifest is not proof' && echo yes || echo no), rolling-image $(printf '%s' "$CHECKSMD_FLAT" | grep -qi 'rolling image' && echo yes || echo no)"
+
+# ---------------------------------------------------------------------------
+echo "cost report + budget gate: incomplete slice ranking says so (S1, recovered-figure-drops-slice-and-model, spec.md RD3/RD4)"
+
+# Fixture 1 -- all-transcribed, real shape: a start+finish carrying model and
+# slice, the finish itself async_launched with no total_tokens, plus a
+# `recovered` line supplying the only figure this invocation has. Reproduces
+# the live `harness-fails-only-on-linux` shape at unit scale: cost_scan (and
+# so COST_N_PRICED/COST_TOKENS_PRICED) counts it priced, but cost_slice_rows
+# -- before S5 -- never recognises it as priced at all, so the ranking is
+# empty AND COST_SLICE_UNKNOWN_PRICED stays 0: the "pass never saw it" state,
+# distinct from the pre-existing "priced but no slice" state below.
+S1ATDIR="$(mktemp -d)"
+mkdir -p "$S1ATDIR/.claude"
+S1ATLEDGER="$S1ATDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s1at1","slug":"s1-all-transcribed","slice":"S1","phase":"build","agent":"loop-build","model":"opus","model_source":"derived"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s1at1","slug":"s1-all-transcribed","slice":"S1","phase":"build","agent":"loop-build","model":"opus","model_source":"derived","status":"async_launched"}'
+  printf '%s\n' '{"ts":3,"event":"recovered","invocation_id":"s1at1","slug":"s1-all-transcribed","total_tokens":42000,"token_source":"transcribed"}'
+} > "$S1ATLEDGER"
+S1AT_OUT="$(report "$S1ATDIR" s1-all-transcribed)"
+
+expect "(S1-1) RD4: all-transcribed unit -- '(no flags raised)' does NOT appear (today it does)" "no" \
+  "$(printf '%s\n' "$S1AT_OUT" | grep -qF '(no flags raised)' && echo yes || echo no)"
+
+s1at_check() {
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$S1ATLEDGER" "s1-all-transcribed"
+  printf '%s %s' "$COST_N_PRICED" "$COST_TOKENS_PRICED"
+}
+S1AT_NT="$(s1at_check)"
+S1AT_N="${S1AT_NT% *}"
+S1AT_T="${S1AT_NT#* }"
+expect "(S1-2) RD3: Slices section names the unattributed count and token total, equal to COST_N_PRICED/COST_TOKENS_PRICED" "yes" \
+  "$(printf '%s\n' "$S1AT_OUT" | grep -qF "${S1AT_N} priced invocation(s), ${S1AT_T} token(s) sit outside this ranking" && echo yes || echo no)"
+
+rm -rf "$S1ATDIR"
+
+# Fixture 2 -- mixed: one observed/ranked invocation (S1, 50000 tokens, the
+# LARGE one -- visible to cost_slice_rows today because it is genuinely
+# host-priced) and one transcribed-only invocation (S2, 10000 tokens --
+# invisible to cost_slice_rows today, same mechanism as fixture 1). Verified
+# live before writing any code: today this exact fixture makes
+# cost-report.sh print "S1 is 83% of this unit's priced total -- above the
+# 30% concentration threshold" from a ranking that never saw S2 at all, and
+# makes check-budget-gate.sh recommend re-slicing "S1" as "the largest share"
+# on the same incomplete population.
+S1MIXDIR="$(mktemp -d)"
+mkdir -p "$S1MIXDIR/.claude"
+S1MIXLEDGER="$S1MIXDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s1mix-big","slug":"s1-mixed-fixture","slice":"S1","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s1mix-big","slug":"s1-mixed-fixture","slice":"S1","phase":"build","agent":"loop-build","status":"completed","total_tokens":50000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s1mix-small","slug":"s1-mixed-fixture","slice":"S2","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s1mix-small","slug":"s1-mixed-fixture","slice":"S2","phase":"build","agent":"loop-build","status":"async_launched"}'
+  printf '%s\n' '{"ts":5,"event":"recovered","invocation_id":"s1mix-small","slug":"s1-mixed-fixture","total_tokens":10000,"token_source":"transcribed"}'
+} > "$S1MIXLEDGER"
+S1MIX_OUT="$(report "$S1MIXDIR" s1-mixed-fixture)"
+
+expect "(S1-3) RD4: mixed fixture -- no 'concentration threshold' string anywhere (today it prints 'S1 is 83%...')" "no" \
+  "$(printf '%s\n' "$S1MIX_OUT" | grep -qF 'concentration threshold' && echo yes || echo no)"
+
+# (S1-4) guard, CO7 unassessable shape (existing UNASSESS_OUT fixture: one
+# priced invocation with no slice at all, one properly sliced) -- the
+# pre-existing Flags sentence is kept byte-identical, wording and section.
+expect "(S1-4) guard: the (d) CO7 unassessable shape still prints the Flags sentence verbatim" "yes" \
+  "$(printf '%s\n' "$UNASSESS_OUT" | grep -qF 'could not be assessed -- 1 priced invocation(s) carry no slice attribution' && echo yes || echo no)"
+
+# (S1-5) RD8, guard: a recovery-free fixture where every priced invocation
+# DOES carry a slice (the existing (d) CO7 30%-fixture, CONC_OUT) is
+# byte-identical to a frozen expected block -- this slice must not change a
+# single byte of output when there is nothing outside the ranking.
+read -r -d '' S1_FROZEN_CONC <<'FROZEN'
+Coverage:
+  based on 2 of 2 invocations that carry a token figure (0 unpriced, not counted) -- 100 % coverage
+  0 invocation(s) started with no finish recorded yet -- in flight, not counted as unpriced.
+  per phase (priced/total invocations; in-flight and unpriced called out, never folded together):
+    spec   0/0 priced (0 unpriced)
+    slice  0/0 priced (0 unpriced)
+    build  2/2 priced (0 unpriced)
+    verify 0/0 priced (0 unpriced)
+  elapsed (wall-clock, first recorded start to last recorded finish; never summed across overlapping invocations): 3 second(s)
+
+Tokens (priced subset only -- never the unit's whole cost):
+  total priced tokens: 10000
+  based on 2 of 2 invocations that carry a token figure (0 unpriced, not counted) -- 100 % coverage
+  cache-read share: unavailable (cache_read_tokens absent from every priced record)
+
+Phases (priced invocations only; model per phase, model_source shown when derived):
+    spec   unavailable
+    slice  unavailable
+    build  unavailable
+    verify unavailable
+
+Rework:
+  This measures the cost of slices that were not right first time, at whole-invocation
+  granularity -- not the cost of retrying. An invocation needing even one refine pass has
+  its WHOLE token cost counted as rework, deliberately over-attributing rather than
+  estimating a per-pass split. This is not comparable to the requirements document's
+  <15% target (Sec.10), which was calibrated against a narrower, per-pass definition.
+  No pass/fail verdict against that target is printed here.
+  count: 0 of 2 invocation(s) marked rework
+  token share: unavailable (no priced invocations are marked rework)
+
+Slices (top by priced tokens, priced subset only):
+  S1                   8000 tokens (1 priced invocation(s), 0 reworked)
+  S2                   2000 tokens (1 priced invocation(s), 0 reworked)
+
+Flags:
+  S1 is 80% of this unit's priced total -- above the 30% concentration threshold.
+
+Budget:
+  no threshold is set (LARAVEL_LOOP_BUDGET_WARN, LARAVEL_LOOP_BUDGET_HARD are both unset) -- nothing will gate.
+FROZEN
+expect "(S1-5) RD8: recovery-free, fully-sliced fixture is byte-identical to a frozen expected block" "" \
+  "$(diff <(printf '%s' "$S1_FROZEN_CONC") <(printf '%s' "$CONC_OUT"))"
+
+# (S1-6) the gate's breach message on the mixed fixture: with a hard
+# threshold set, it must not recommend re-slicing "S1" as "the largest
+# share" while S2's transcribed tokens sit outside the ranking -- it must
+# say how many invocations and how many tokens instead.
+S1MIX_JSON="$(budget_payload s1-mixed-fixture)"
+S1MIX_GATE_ERR="$(CLAUDE_PROJECT_DIR="$S1MIXDIR" LARAVEL_LOOP_BUDGET_HARD=1000 gate_stderr "$S1MIX_JSON")"
+expect "(S1-6) RD4: gate breach message names no top slice as the largest share while priced tokens sit outside the ranking; states the count and tokens instead" \
+  "no-largest-share yes, states-outside yes" \
+  "no-largest-share $(printf '%s\n' "$S1MIX_GATE_ERR" | grep -qF "largest share of this unit's observed spend" && echo no || echo yes), states-outside $(printf '%s\n' "$S1MIX_GATE_ERR" | grep -qE '1 priced invocation\(s\), 10000 token\(s\) sit outside this ranking' && echo yes || echo no)"
+
+# (S1-7) RD10: the report and the gate state the SAME unattributed count for
+# the same fixture -- structurally guaranteed by both calling the one
+# cost_slice_unranked() helper, asserted here rather than only by
+# construction.
+S1MIX_REPORT_N="$(printf '%s\n' "$S1MIX_OUT" | grep -oE '^  [0-9]+ priced invocation\(s\), [0-9]+ token\(s\) sit outside this ranking' | grep -oE '^  [0-9]+' | tr -d ' ')"
+S1MIX_GATE_N="$(printf '%s\n' "$S1MIX_GATE_ERR" | grep -oE '[0-9]+ priced invocation\(s\), [0-9]+ token\(s\) sit outside this ranking' | grep -oE '^[0-9]+')"
+expect "(S1-7) RD10: report and gate state the same unattributed invocation count for one fixture" \
+  "1 1" "$S1MIX_REPORT_N $S1MIX_GATE_N"
+
+rm -rf "$S1MIXDIR"
 
 # ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
