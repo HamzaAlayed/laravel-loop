@@ -1,7 +1,11 @@
 # Log — harness-fails-only-on-linux
 
-**Status: OPEN at G2.** Verdict `CONCERNS`, 2026-08-17. The unit is not closed and must not be
-read as closed. Nothing has been pushed.
+**Closed 2026-08-18.** Verdict at the second G2: **PASS**, scoped to everything checkable without
+a push. A1, A2's resolved-tree half, and A4's cross-job comparison were held outside it and are
+recorded below against the real run.
+
+The first G2 pass returned **CONCERNS** — see *Phase 5* — and that is part of this unit's record,
+not something the close paves over.
 
 The unit that fixed the two Linux failures, added a second platform — and shipped one real
 regression doing it.
@@ -95,7 +99,10 @@ permanently-stuck-lock state where before there was one.
 
 ---
 
-## What is open, and what it is waiting for
+## What was open at the first G2 — superseded, kept for the record
+
+*This section records the state on 2026-08-17, when the verdict was CONCERNS. It is left in place
+because the sequence matters; see "What this unit did not close" at the end for the state at close.*
 
 - **The `mv`-failure non-convergence path.** The verifier's own recommendation is to file it as a
   follow-up slice before S5 is treated as closed. That is a **new slice**, so it is a G1 decision
@@ -111,7 +118,7 @@ permanently-stuck-lock state where before there was one.
   backgrounded and landed unpriced — the same blind spot again — and their figures are available in
   the session's own completion notifications for transcription at close.
 
-## The overnight account
+## The overnight account (2026-08-17 → 18)
 
 Slices S5–S8, all four merges, and G2 ran unattended at the maintainer's request, with the standing
 instruction to lead and be reviewed afterwards. What was done: the four approved envelopes built and
@@ -126,3 +133,82 @@ decision was overturned.
 One capture was made during a wait — `docs/loop/transcript-scraping-as-a-recovery-path/intent.md` —
 which is why an unrelated commit sits inside this unit's range. The verifier was told about it and
 correctly excluded it rather than reporting scope creep.
+
+**Continued 2026-08-18**, after the maintainer approved S9's one-line shape and authorised the close:
+S9 was built, merged, and re-verified, the unit was closed, and the push was made — all under the
+same standing instruction. The push happened only because the second verdict was a clean PASS; the
+first, being CONCERNS, had held it back overnight exactly as stated.
+
+---
+
+## Phase 5 — the first G2 said CONCERNS, and it was right
+
+The first verify pass over S5–S8 proved every criterion it owned and every `Do NOT` — then found
+that **S5 had shipped a real regression**. Its convergence fix replaced a fixed 5-attempt bound with
+`while :;` and left `mv -f ... || rm -f "$tmp"` without a break, so a persistently failing `mv`
+looped forever.
+
+Three things made this more than a nitpick:
+
+1. **It was reproduced, not argued.** 209 iterations under `chflags uchg` by the verifier, then 501
+   in an independent re-check. The pre-fix bounded loop always terminated, so the regression was
+   **new**.
+2. **It broke the script's own header contract**, which S5 left in place — *"Exits 0 on every path,
+   including its own internal errors: cost accounting must never block, delay, or alter a spawn."*
+   A stuck evictor never reaches `rmdir` or `return 0`.
+3. **It compounded** with the pre-existing stale-lock gap: two independent routes to a
+   permanently-stuck lock where before there was one.
+
+**How it got through.** A 426-case green suite, shellcheck clean, and a verify pass that proved
+every other criterion. Nothing in the repository exercised a failing `mv` inside that loop. The
+orchestrator had flagged the path as *theoretically* possible before merging and judged it narrow
+rather than establishing it — which is the process lesson, recorded in `conventions.md`.
+
+## Phase 6 — S9, and the second G2
+
+**Gate decision:** the one-line form, `mv -f "$tmp" "$OUT" 2>/dev/null || { rm -f "$tmp"; break; }`.
+Not a new design — it makes the fourth I/O failure behave like its three siblings, which the loop's
+own comment already prescribed. An attempt bound, an iteration counter, a no-progress guard, and
+fixing the stale lock alongside were all explicitly rejected and recorded in `decisions.md`.
+
+S9's envelope was cut by the orchestrator rather than `loop-slice`, and says so: the fix and its test
+were fully determined by the decision, and `loop-protocol` warns that a full slicing pass on a
+one-slice task is pure latency.
+
+**The hard part was the test, not the fix.** Two problems the builder had to solve rather than
+assume: the case must not hang the suite (bounded with bash job control per `run_bounded()`, never
+GNU `timeout`, absent on stock macOS), and it needed a privilege-free trigger for a persistently
+failing `mv` (`chflags` is macOS-only, `chattr +i` needs root) — solved with a `PATH`-stubbed `mv`.
+Falsified against `HEAD`: hung to the bound, killed at exit 143, lock left held; then returned in
+0.52s, exit 0, lock released.
+
+**Second G2 verdict: PASS.** The verifier built its own repro rather than trusting the builder's, and
+ran it against three script versions: pre-S5 terminates, pre-S9 hangs 3/3, post-S9 terminates 3/3.
+It confirmed convergence did not regress, and that the compounding is back down to one route — the
+evictor-killed-mid-loop path is unchanged and still pre-existing, deliberately out of bounds.
+
+Harness 404 → **427**.
+
+## What this unit did not close
+
+- **The evictor-killed-mid-loop stale lock.** Confirmed pre-existing, scoped out by decision, and
+  still open. If the evictor process dies mid-loop the lock directory persists and eviction stops
+  permanently thereafter. It deserves its own intent rather than a ride-along.
+- **The `mv`-failure fix was verified against one trigger mechanism** (a `PATH`-stubbed `mv`). The
+  EDR / SELinux / NFS-lock routes named in the first verdict were never reproduced — only that the
+  code path, once entered, now terminates.
+
+## Cost
+
+Coverage: based on 14 of 14 invocations that carry a token figure (0 unpriced, not counted) -- 100 % coverage; 14 of 14 priced figure(s) transcribed rather than host-observed (1650438 of 1650438 priced token(s), 100 %)
+
+Tokens: 1650438 (priced subset only, partial -- 0 unpriced invocation(s) not counted)
+
+Rework: this figure counts whole invocations that needed at least one refine pass, at
+whole-invocation granularity -- deliberately over-attributing rather than estimating a
+per-pass split, and NOT the cost of retrying. It is not comparable to the requirements
+document's <15% target (Sec.10), which was calibrated against a narrower, per-pass
+definition. No pass/fail verdict against that target is printed here.
+  count: 0 of 14 invocation(s) marked rework
+  token share: unavailable (no priced invocations are marked rework)
+
