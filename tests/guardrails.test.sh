@@ -434,35 +434,44 @@ expect "eviction under concurrency: ledger never observed at 0 lines while polli
   "$(grep -qx '0' "$POLL_LOG" && echo no || echo yes)"
 rm -f "$POLL_LOG"
 
-# -- (f) convergence gap (S5, spec.md H2-H5): a lock-loser never retries, and
-# the pre-fix winner gave up after a fixed number of attempts regardless of
-# whether the file was still over cap -- a real defect in
-# append_and_evict()'s convergence guarantee (spike-case-a.md H2), not a
-# platform-dialect one (H1, refuted 20/20). Ordinary concurrent pressure does
-# not reproduce it (spike-case-a.md #2, 20/20 trials settled at cap), so this
-# constructs the one dimension that does: a sustained, fast stream of new
-# lines landing throughout the winner's own eviction work -- far more than a
-# handful of checks could ever absorb. The stream writes directly (bypassing
-# the hook) but represents exactly what every concurrent appender's own
-# unconditional `>>` does (L7); the single real hook invocation below is what
-# exercises append_and_evict()'s own convergence loop under test.
+# -- (f) convergence gap (S5, spec.md H2-H5), REPLACED per decisions.md's
+# "Second G1: the ledger promises convergence, and a later invocation is
+# obliged to trim": the cap promises eventual convergence (E1 property 3),
+# not a bound at rest, and obligation class 3 says a LATER invocation --
+# appending or not -- is obliged to trim on arrival, unconditionally. A
+# lock-loser never retries on its own (OQ1's structural hole,
+# spike-oq5-local-red.md SS3: 5/5 red against HEAD and against pre-S5), so
+# this constructs that hole deterministically -- the identical primitive
+# case (g) already uses to simulate a held evict lock (`mkdir` the lock
+# directory) -- and releases it SYNCHRONOUSLY in this process, never via a
+# backgrounded `sleep N; rmdir`: spike-oq5-local-red.md SS3's own 0/5 control
+# at HOLD=0.02s shows a hold shorter than L7's poll budget flips the arm's
+# colour, so a timed hold on a loaded runner could go green for the wrong
+# reason. The over-cap-before token is what stops this being vacuous --
+# without it, an assertion that only checks convergence-after would pass
+# whether or not the hole was ever actually constructed.
 rm -f "$LEDGER"
 rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
 CONV_CAP=15
-CONV_WRITER_LINES=20000
-(
-  n=0
-  while [ "$n" -lt "$CONV_WRITER_LINES" ]; do
-    printf '{"raw":%d}\n' "$n" >> "$LEDGER"
-    n=$((n + 1))
-  done
-) &
-CONV_WRITER_PID=$!
+CONV_LOCK="$COSTDIR/.claude/loop-cost-evict.lock"
+mkdir -p "$COSTDIR/.claude"
+n=1; while [ "$n" -le "$CONV_CAP" ]; do printf '{"seed":%d}\n' "$n" >> "$LEDGER"; n=$((n + 1)); done
+
+mkdir "$CONV_LOCK"                                  # simulated concurrent evictor, held
 LARAVEL_LOOP_COST_MAX_LINES=$CONV_CAP \
-  cost "$(finish_json loop-build "toolu-conv-1" "d" "" "sess-conv" completed 1 1 "")" >/dev/null
-wait "$CONV_WRITER_PID" 2>/dev/null
-expect "eviction convergence: a sustained concurrent stream still settles at or under cap once it finishes" "yes" \
-  "$([ "$(wc -l < "$LEDGER" | tr -d ' ')" -le "$CONV_CAP" ] && echo yes || echo no)"
+  cost "$(finish_json loop-build "toolu-conv-last" "d" "" "sess-conv" completed 1 1 "")" >/dev/null
+CONV_OVER="$([ "$(wc -l < "$LEDGER" | tr -d ' ')" -gt "$CONV_CAP" ] && echo yes || echo no)"
+rmdir "$CONV_LOCK"                                  # synchronous release -- no sleep, no background job
+
+# One later arrival that appends nothing: a duplicate finish for an id
+# already recorded above, discarded on arrival and appending no line of its
+# own (S5's obligation class 3 -- discharged unconditionally on arrival).
+LARAVEL_LOOP_COST_MAX_LINES=$CONV_CAP \
+  cost "$(finish_json loop-build "toolu-conv-last" "d" "" "sess-conv" completed 1 1 "")" >/dev/null
+CONV_CONVERGED="$([ "$(wc -l < "$LEDGER" | tr -d ' ')" -le "$CONV_CAP" ] && echo yes || echo no)"
+
+expect "eviction convergence: a lock-losing last appender leaves the ledger over cap at rest, and it converges as soon as ANY later arrival appends nothing" "yes yes" \
+  "$CONV_OVER $CONV_CONVERGED"
 
 # -- (g) L7 regression guard (S5): with the evict lock held by another
 # process for far longer than any appender should ever wait, an append still
@@ -537,6 +546,68 @@ MVFAIL_LOCK="$COSTDIR/.claude/loop-cost-evict.lock"
 expect "mv failure: append_and_evict() returns within the bound, exits 0, and releases the evict lock" "yes 0 no" \
   "$MVFAIL_RETURNED $MVFAIL_EXIT $([ -d "$MVFAIL_LOCK" ] && echo yes || echo no)"
 rm -rf "$MVFAIL_BIN" "$MVFAIL_OUT" "$MVFAIL_OUT.pid" "$MVFAIL_OUT.exit"
+
+# -- (i) arrival trim never waits (S5, L6/E5): with the evict lock held by
+# another process, an arrival that appends nothing -- here, a duplicate
+# finish for an id already recorded -- returns fast (one mkdir attempt, no
+# poll, no retry, no sleep), exits 0, and leaves an over-cap ledger
+# untrimmed. Case (g)'s shape, for the NEW path: case (g)'s subject is an
+# appender, and this is the one case (g) cannot cover.
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
+NOWAIT_CAP=15
+NOWAIT_LOCK="$COSTDIR/.claude/loop-cost-evict.lock"
+mkdir -p "$COSTDIR/.claude"
+n=1; while [ "$n" -le $((NOWAIT_CAP + 5)) ]; do printf '{"seed":%d}\n' "$n" >> "$LEDGER"; n=$((n + 1)); done
+
+mkdir "$NOWAIT_LOCK"
+NOWAIT_HOLD_SECONDS=5
+( sleep "$NOWAIT_HOLD_SECONDS"; rmdir "$NOWAIT_LOCK" 2>/dev/null ) &
+NOWAIT_HOLDER_PID=$!
+
+# First delivery: a real finish, lock held -> appends as a lock loser (same
+# shape as case (f)'s setup), leaving the ledger over cap.
+LARAVEL_LOOP_COST_MAX_LINES=$NOWAIT_CAP \
+  cost "$(finish_json loop-build "toolu-nowait-1" "d" "" "sess-nowait" completed 1 1 "")" >/dev/null
+NOWAIT_OVER="$([ "$(wc -l < "$LEDGER" | tr -d ' ')" -gt "$NOWAIT_CAP" ] && echo yes || echo no)"
+
+# Second delivery, same id, lock STILL held: a duplicate-finish arrival that
+# appends nothing -- the timed one.
+SECONDS=0
+NOWAIT_EXIT="$(LARAVEL_LOOP_COST_MAX_LINES=$NOWAIT_CAP \
+  cost "$(finish_json loop-build "toolu-nowait-1" "d" "" "sess-nowait" completed 1 1 "")")"
+NOWAIT_ELAPSED="$SECONDS"
+NOWAIT_STILL_OVER="$([ "$(wc -l < "$LEDGER" | tr -d ' ')" -gt "$NOWAIT_CAP" ] && echo yes || echo no)"
+wait "$NOWAIT_HOLDER_PID" 2>/dev/null
+
+expect "arrival trim never waits: a duplicate-finish arrival with the lock held exits 0 well under the hold time, leaving the over-cap ledger untrimmed" "0 yes yes yes" \
+  "$NOWAIT_EXIT $NOWAIT_OVER $([ "$NOWAIT_ELAPSED" -lt "$NOWAIT_HOLD_SECONDS" ] && echo yes || echo no) $NOWAIT_STILL_OVER"
+
+# -- (j) boundary: arrival trim at/under cap is a no-op (S5, H3): with the
+# ledger already exactly at cap, an arrival that appends nothing changes
+# nothing at all -- byte-identical ledger, no leftover `.evict.` temp file,
+# exit 0.
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
+ATCAP_CAP=15
+mkdir -p "$COSTDIR/.claude"
+n=1; while [ "$n" -le $((ATCAP_CAP - 1)) ]; do printf '{"seed":%d}\n' "$n" >> "$LEDGER"; n=$((n + 1)); done
+LARAVEL_LOOP_COST_MAX_LINES=$ATCAP_CAP \
+  cost "$(finish_json loop-build "toolu-atcap-1" "d" "" "sess-atcap" completed 1 1 "")" >/dev/null
+ATCAP_COUNT_BEFORE="$(wc -l < "$LEDGER" | tr -d ' ')"
+ATCAP_SNAPSHOT="$(mktemp)"
+cp "$LEDGER" "$ATCAP_SNAPSHOT"
+
+# A duplicate finish for the same id: an arrival that appends nothing, with
+# the ledger already exactly at cap.
+ATCAP_EXIT="$(LARAVEL_LOOP_COST_MAX_LINES=$ATCAP_CAP \
+  cost "$(finish_json loop-build "toolu-atcap-1" "d" "" "sess-atcap" completed 1 1 "")")"
+ATCAP_IDENTICAL="$(cmp -s "$LEDGER" "$ATCAP_SNAPSHOT" && echo yes || echo no)"
+ATCAP_TMP_LEFTOVER="$(find "$COSTDIR/.claude" -maxdepth 1 -name '*.evict.*' 2>/dev/null | wc -l | tr -d ' ')"
+rm -f "$ATCAP_SNAPSHOT"
+
+expect "arrival trim boundary: ledger already at cap, an arrival that appends nothing is a byte-identical no-op" "$ATCAP_CAP yes 0 0" \
+  "$ATCAP_COUNT_BEFORE $ATCAP_IDENTICAL $ATCAP_TMP_LEFTOVER $ATCAP_EXIT"
 
 # -- (c) `.claude/loop-cost.jsonl` is git-ignored, and a fixture repo shows no
 # ledger (or its S3/S4 sidecar state) in `git status` after events (H4).
@@ -759,6 +830,25 @@ rcost "$(finish_json loop-build toolu-cwdb "Build cwdB" "$REWORK_PROMPT" "$SESSI
 
 expect "cwd narrows attribution to the matching-cwd invocation only" '"rework" MISSING' \
   "$(field_of "$RLEDGER" toolu-cwda finish phase_detail) $(field_of "$RLEDGER" toolu-cwdb finish phase_detail)"
+
+# -- arrival trim, the frequent real path (S5, spec.md OQ1, obligation
+# class 3): NOT a rework-attribution case -- placed here only because
+# bash_test_json() (needed to build a PostToolUse/Bash event) is defined in
+# this section, per S5's placement constraint. A passing test run is the
+# most frequent hook arrival in a real session and appends nothing of its
+# own; against a ledger seeded over cap it still trims to cap, unconditionally.
+BASHARR_DIR="$(mktemp -d)"
+BASHARR_LEDGER="$BASHARR_DIR/.claude/loop-cost.jsonl"
+mkdir -p "$BASHARR_DIR/.claude"
+BASHARR_CAP=15
+n=1; while [ "$n" -le $((BASHARR_CAP + 5)) ]; do printf '{"seed":%d}\n' "$n" >> "$BASHARR_LEDGER"; n=$((n + 1)); done
+BASHARR_EXIT="$(CLAUDE_PROJECT_DIR="$BASHARR_DIR" CLAUDE_PLUGIN_ROOT="$ROOT" LARAVEL_LOOP_COST_MAX_LINES=$BASHARR_CAP \
+  run_hook record-cost-event.sh "$(bash_test_json sess-basharr loop-build BashArrTest pass)")"
+BASHARR_COUNT="$(wc -l < "$BASHARR_LEDGER" | tr -d ' ')"
+BASHARR_APPENDED="$(grep -q BashArrTest "$BASHARR_LEDGER" && echo yes || echo no)"
+expect "arrival trim: a passing Bash event over cap trims to cap, appends no line of its own, exits 0" "$BASHARR_CAP no 0" \
+  "$BASHARR_COUNT $BASHARR_APPENDED $BASHARR_EXIT"
+rm -rf "$BASHARR_DIR"
 
 rm -rf "$REWORKDIR"
 

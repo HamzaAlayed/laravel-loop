@@ -88,6 +88,12 @@
 # parser shape as enforce-refine-cap.sh's CAP). Every invocation that appends
 # a line then checks whether the ledger is over cap and, if so, evicts the
 # oldest lines itself -- there is no separate long-running evictor process.
+# An invocation that arrives and appends nothing does the identical check and
+# trim, unconditionally, regardless of what its own event needed (S5,
+# obligation class 3) -- on the two arrival paths that end without appending:
+# the Bash rework branch below when it emits no cap_trip, and the
+# duplicate-finish discard. So convergence is never left contingent on the
+# next invocation happening to be an appender.
 #
 # No flock (absent on macOS by default; this repo is bash + coreutils only),
 # so eviction uses the same primitive as S3's dedup: a `mkdir`-based mutex
@@ -258,6 +264,33 @@ except Exception:
   fi
 }
 
+# --- the one trim loop (H2/H3, S5 "one trim loop, not two"): factored out of
+# append_and_evict() so an appending invocation and an arrival that appends
+# nothing share exactly this implementation -- never a second copy. The
+# caller must already hold $EVICT_LOCK. ------------------------------------
+converge_ledger() {
+  local count tmp
+  # Loop until genuinely converged (count <= MAX_LINES observed fresh), not
+  # a fixed attempt count. A bounded retry gives up while still over cap
+  # whenever concurrent appends land faster than a few checks can absorb
+  # (spike-case-a.md H2); every other break below is a real I/O condition,
+  # never an arbitrary attempt cap, and never a new configurable (A9) --
+  # this evictor is the sole lock holder, so looping here costs nothing to
+  # any other appender (L7: they never wait on this) or arrival (S5: it
+  # makes one mkdir attempt and gives up immediately if this is running).
+  while :; do
+    count="$(wc -l < "$OUT" 2>/dev/null | tr -d ' ')"
+    case "$count" in ''|*[!0-9]*) break ;; esac
+    [ "$count" -le "$MAX_LINES" ] && break
+    tmp="$(mktemp "$OUT.evict.XXXXXX" 2>/dev/null)" || break
+    if ! tail -n "$MAX_LINES" "$OUT" > "$tmp" 2>/dev/null || [ ! -s "$tmp" ]; then
+      rm -f "$tmp"
+      break
+    fi
+    mv -f "$tmp" "$OUT" 2>/dev/null || { rm -f "$tmp"; break; }
+  done
+}
+
 # --- append + bound (H2/H3): shared by every write path, including the
 # cap_trip terminal record (S5) below, so eviction behaves identically no
 # matter which record type triggered it. -----------------------------------
@@ -274,27 +307,27 @@ append_and_evict() {
   printf '%s\n' "$line" >> "$OUT" 2>/dev/null
 
   if mkdir "$EVICT_LOCK" 2>/dev/null; then
-    local count tmp
-    # Loop until genuinely converged (count <= MAX_LINES observed fresh), not
-    # a fixed attempt count. A bounded retry gives up while still over cap
-    # whenever concurrent appends land faster than a few checks can absorb
-    # (spike-case-a.md H2); every other break below is a real I/O condition,
-    # never an arbitrary attempt cap, and never a new configurable (A9) --
-    # this evictor is the sole lock holder, so looping here costs nothing to
-    # any other appender (L7: they never wait on this, see the poll above).
-    while :; do
-      count="$(wc -l < "$OUT" 2>/dev/null | tr -d ' ')"
-      case "$count" in ''|*[!0-9]*) break ;; esac
-      [ "$count" -le "$MAX_LINES" ] && break
-      tmp="$(mktemp "$OUT.evict.XXXXXX" 2>/dev/null)" || break
-      if ! tail -n "$MAX_LINES" "$OUT" > "$tmp" 2>/dev/null || [ ! -s "$tmp" ]; then
-        rm -f "$tmp"
-        break
-      fi
-      mv -f "$tmp" "$OUT" 2>/dev/null || { rm -f "$tmp"; break; }
-    done
+    converge_ledger
     rmdir "$EVICT_LOCK" 2>/dev/null
   fi
+  return 0
+}
+
+# --- arrival trim (S5, spec.md E1 property 3 / OQ1, obligation class 3): an
+# invocation that ends without appending anything still discharges the cap's
+# obligation, unconditionally, regardless of what its own event needed. Never
+# called from a path that appends -- append_and_evict() above already
+# converges for those (see "one trim per invocation, ever" in the header and
+# in decisions.md). NEVER WAITS: one mkdir attempt, no poll, no retry, no
+# sleep -- if the lock is held, some other invocation is already converging
+# (or about to be free to), so this returns 0 immediately rather than trading
+# L6 for a bound nobody asked for. This is the same primitive an appender
+# uses to acquire the lock for its own trim, just without the poll an
+# appender does beforehand for the *append* itself (this path never appends).
+trim_on_arrival() {
+  mkdir "$EVICT_LOCK" 2>/dev/null || return 0
+  converge_ledger
+  rmdir "$EVICT_LOCK" 2>/dev/null
   return 0
 }
 
@@ -450,6 +483,9 @@ PY
   fi
   [ -z "$line" ] && return 0
   append_and_evict "$line"
+  # This invocation appended (S5: "one trim per invocation, ever" -- an
+  # invocation that emits a cap_trip does not also arrival-trim below).
+  CAP_TRIP_EMITTED=1
 }
 
 # --- rework: PostToolUse/Bash observation (S5) -----------------------------
@@ -545,8 +581,17 @@ esac
 # never writes an Agent/Task-shaped ledger line for a Bash event -- it only
 # ever updates this script's own rework state, and possibly appends a
 # cap_trip terminal record -- so it always exits here regardless of outcome.
+#
+# Arrival trim (S5, obligation class 3): this is the most frequent hook
+# arrival in a real session (PostToolUse/Bash fires on every Bash tool call),
+# and most of those calls append nothing at all. If this invocation did not
+# emit a cap_trip -- so append_and_evict() never ran for it -- it still owes
+# the cap an unconditional check-and-trim on arrival, via the same never-
+# waiting primitive as the duplicate-finish path below.
 if [ "$TOOL_NAME" = "Bash" ]; then
+  CAP_TRIP_EMITTED=0
   handle_bash_rework_observation
+  [ "$CAP_TRIP_EMITTED" -eq 0 ] && trim_on_arrival
   exit 0
 fi
 
@@ -779,7 +824,10 @@ if [ "$EVENT_TYPE" = "finish" ]; then
     if ! mkdir "$FINISHED_DIR/$SAFE_ID" 2>/dev/null; then
       # A finish for this invocation was already recorded: duplicate
       # delivery, double registration, or a second host signal for one
-      # invocation (E4/L9). Discard silently.
+      # invocation (E4/L9). Discard silently -- but this invocation still
+      # arrived, appending nothing, so it still owes the cap an arrival trim
+      # (S5, obligation class 3) before it exits.
+      trim_on_arrival
       exit 0
     fi
   fi
