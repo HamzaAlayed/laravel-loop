@@ -212,3 +212,51 @@ definition. No pass/fail verdict against that target is printed here.
   count: 0 of 14 invocation(s) marked rework
   token share: unavailable (no priced invocations are marked rework)
 
+
+---
+
+## A1 — attempted, and FAILED. Recorded, not smoothed over.
+
+Run `32112900121`, commit `9f37a5b`, 2026-08-18T07:44Z. The push that this unit's close triggered.
+
+**What passed.** On **both** jobs: `shellcheck` ✓, `scripts are executable` ✓. The mode rule holds on
+Linux and macOS. And the two failures this unit was created to fix — case A at `:429` and case B at
+`:2520` — **do not appear on either job**. Both are genuinely resolved on the guarding machine.
+
+**What failed.** Exactly one case, identically on both platforms:
+
+```
+FAIL eviction convergence: a sustained concurrent stream still settles at or under cap
+     once it finishes (expected exit yes, got no)
+total: 426 passed, 1 failed
+```
+
+That is **S5's own new case** — the one it constructed to prove its convergence fix. It is 5/5 green
+on the maintainer's host and red on both CI platforms.
+
+**What this establishes, and it is the most valuable thing this unit produced.**
+`spike-case-a.md` left H2 open: *"the eviction loop's fixed bound has no convergence guarantee under
+a sufficiently high concurrent-append arrival rate, and the CI runner's specific resource profile
+produced that rate once, where this sandbox's Docker containers did not."* It named a repeated real
+run as what would settle it.
+
+**H2 is now confirmed, and the platform framing is refuted twice over.** The failure is not
+Linux-specific — the macOS job, whose bash and architecture exactly match the maintainer's host,
+fails identically. It is **contention-specific**. The second platform earned its keep on its very
+first run by proving the fault was never about the platform.
+
+**So S5's fix is insufficient, not wrong.** It closed the *bounded-retry* gap — a lock-loser is no
+longer abandoned and the evictor no longer gives up after five attempts — and that is why the
+original case A now passes. But appends that land after the final trim, once the evictor has
+released the lock, still leave the file over cap, and no later appender re-evicts. Reducing the
+window was not the same as closing it.
+
+**Not fixed here, deliberately.** The pinned contract for this unit says a case that fails only once
+the known ones are resolved needs its own recorded human decision (A3) and returns
+`needs-decision` rather than being fixed inside whichever slice found it. That applies to this,
+and the decision — reopen this unit, or capture a fresh intent — is the maintainer's.
+
+**A2's resolved-tree count** is therefore also not settled: the floor on the resolved tree is 1 on
+both platforms, but that is a count against a tree whose convergence case is still failing.
+**A4 is satisfied in the one direction the run could show:** both jobs reported the identical total,
+`426 passed, 1 failed`, so no case is silently absent on either platform.
