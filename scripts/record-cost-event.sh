@@ -97,6 +97,17 @@
 # regardless of whether it did, because cost accounting that can stall a
 # spawn is worse than a ledger that sits slightly over cap for a moment.
 #
+# What the cap actually promises, named explicitly (E1's property 3):
+# eventual convergence, not a bound at rest -- the ledger is at or under cap
+# once a later invocation has arrived and discharged the trim; it may sit
+# over cap until then. With L7 as written above, a bound at rest is NOT
+# achievable: no invocation can tell from inside its own event whether it
+# is a run's last append, so guaranteeing the file is compliant the instant
+# that invocation returns would need it to wait on the lock -- the literal
+# thing L7 rules out (spike-oq2-bound-at-rest.md SS2). This is the
+# strongest property available while L7 stands, and the limit ships with
+# the promise.
+#
 # Eviction itself never truncates the file to empty, not even transiently
 # (H3): the trimmed content is written to a fresh temp file first (`tail -n
 # $MAX_LINES`, always non-empty whenever eviction runs at all) and only then

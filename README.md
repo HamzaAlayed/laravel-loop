@@ -89,7 +89,7 @@ It records tokens and durations, never a dollar figure — it counts tokens and 
 
 Rework is attributed at whole-invocation granularity: if a slice needed even one refine pass, that build invocation's entire cost is tagged `phase_detail: "rework"`. This deliberately over-attributes — the figure measures the cost of slices that were not right first time, not the cost of retrying — so a v0.2 rework share is not directly comparable to a narrower, per-pass definition.
 
-Disable it entirely with `LARAVEL_LOOP_COST_LEDGER=0`. Bound it with `LARAVEL_LOOP_COST_MAX_LINES` (default 5,000; oldest lines evicted first). Delete `.claude/loop-cost.jsonl` at any time — the next event recreates it, and nothing else depends on its contents. It never leaves the machine: no network call, no account, nothing but a local file.
+Disable it entirely with `LARAVEL_LOOP_COST_LEDGER=0`. Bound it with `LARAVEL_LOOP_COST_MAX_LINES` (default 5,000; oldest lines evicted first — at or under cap once a later invocation has arrived and discharged the trim, not necessarily before then). Delete `.claude/loop-cost.jsonl` at any time — the next event recreates it, and nothing else depends on its contents. It never leaves the machine: no network call, no account, nothing but a local file.
 
 This is entirely separate from Laravel Guild's `.claude/agents-board.jsonl`, if that plugin is also installed — neither file reads the other, and both coexist without collision.
 
@@ -164,7 +164,7 @@ They answer different questions. Reach for the **Guild** when you want a named s
 ## Development
 
 ```bash
-bash tests/guardrails.test.sh   # 439 cases, zero dependencies
+bash tests/guardrails.test.sh   # 440 cases, zero dependencies
 shellcheck scripts/*.sh
 ```
 
