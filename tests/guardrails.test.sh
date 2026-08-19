@@ -1277,6 +1277,128 @@ expect "(m) commands/cost.md relays the report script's output verbatim" "0" \
 rm -rf "$MIXDIR"
 
 # ---------------------------------------------------------------------------
+# resumed-invocation-never-reaches-the-ledger S2 (spec.md RV2, RV3, RV6) --
+# pins what the ledger's output and documentation may never claim: no
+# completeness vocabulary (RV2, both the live output and the documentation
+# half), no figure moved or fabricated by a record class the reader does not
+# recognise (RV3, the rule half -- a real Arm A record shape is not written
+# here), and no resumed-shaped run read as a refine pass (RV6). RV2's two
+# cases are LOCKS over behaviour already true today: verified true by
+# mutation at build time (see this slice's return), not asserted here --
+# their value is that Stage 3 cannot introduce a completeness claim or an
+# invented figure without turning one of them red.
+echo "resumed-invocation-never-reaches-the-ledger S2 (spec.md RV2, RV3, RV6)"
+
+# RV2 (live output) -- docs/loop/checks.md:79's refusal ("Neither platform
+# above is described as covered, verified, guaranteed, or proven") applied to
+# a token total instead of a platform claim. A fully-priced (100% coverage)
+# fixture's whole report carries none of that vocabulary.
+RV2FULLDIR="$(mktemp -d)"
+mkdir -p "$RV2FULLDIR/.claude"
+RV2FULLLEDGER="$RV2FULLDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"rv2f1","slug":"rv2-full","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"rv2f1","slug":"rv2-full","phase":"build","agent":"loop-build","model":"claude-sonnet-4","model_source":"derived","status":"completed","total_tokens":5000}'
+} > "$RV2FULLLEDGER"
+RV2FULL_OUT="$(report "$RV2FULLDIR" rv2-full)"
+expect "RV2 (live output): a 100%-priced fixture's whole report carries no completeness vocabulary (docs/loop/checks.md:79 precedent)" "0" \
+  "$(printf '%s\n' "$RV2FULL_OUT" | grep -icE 'complete|full|verified|exhaustive|guaranteed|proven|all invocations|every invocation')"
+rm -rf "$RV2FULLDIR"
+
+# RV2 (documentation) -- scoped to lines that MENTION coverage, the way the
+# existing no-digit guards (X5/CL5) are scoped: a blanket grep for "full"
+# would match "fully standalone" elsewhere in README and fail for the wrong
+# reason, so this reads only the lines coverage already appears on.
+readme_coverage_no_completeness_check() {
+  local bad=0 readme="$ROOT/README.md" lines
+  lines="$(grep -i 'coverage' "$readme")"
+  [ -n "$lines" ] || bad=1
+  printf '%s\n' "$lines" | grep -iE 'complete|full|verified|exhaustive|guaranteed|proven' >/dev/null 2>&1 && bad=1
+  echo $bad
+}
+expect "RV2 (documentation): no README line mentioning coverage also carries completeness vocabulary" \
+  "0" "$(readme_coverage_no_completeness_check)"
+
+# RV3/RV6 shared fixture -- one recognised ledger (spec + rework-marked build
+# + backgrounded build), and the same ledger with one extra WELL-FORMED line
+# whose event the reader does not recognise. field evidence item 3: this
+# moves no figure and exits 0, and is reported as "malformed or truncated,
+# not JSON" -- that misclassification is Arm A's to fix (RS10), recorded and
+# explicitly NOT fixed here. The extra line's event name is deliberately not
+# a candidate name for Arm A's record shape.
+RV3DIR="$(mktemp -d)"
+mkdir -p "$RV3DIR/base/.claude" "$RV3DIR/unrec/.claude"
+RV3BASE="$RV3DIR/base/.claude/loop-cost.jsonl"
+RV3UNREC="$RV3DIR/unrec/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"rv3a","slug":"rv3-fixture","slice":"S1","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"rv3a","slug":"rv3-fixture","slice":"S1","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":1000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"rv3b","slug":"rv3-fixture","slice":"S2","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"rv3b","slug":"rv3-fixture","slice":"S2","phase":"build","agent":"loop-build","status":"completed","total_tokens":2000,"phase_detail":"rework","refine_passes":1}'
+  printf '%s\n' '{"ts":5,"event":"start","invocation_id":"rv3c","slug":"rv3-fixture","slice":"S3","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":6,"event":"finish","invocation_id":"rv3c","slug":"rv3-fixture","slice":"S3","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$RV3BASE"
+cp "$RV3BASE" "$RV3UNREC"
+# Not a candidate name for Arm A's record: this fixture only needs an event
+# the reader cannot classify, and this string was chosen for that alone.
+printf '%s\n' '{"ts":7,"event":"some_unrecognised_event","invocation_id":"rv3z","slug":"rv3-fixture","phase":"build","agent":"loop-build"}' >> "$RV3UNREC"
+
+# Direct-lib pattern (cl1_check's shape): source the library, call cost_scan
+# on each ledger in turn, and compare the counters and rows RV3 enumerates --
+# NOT a whole-output diff, because that diff is non-empty today (the skipped
+# line count) for a reason this slice does not own.
+rv3_figures_check() {
+  local bad=0
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$RV3BASE" "rv3-fixture"
+  local base_priced_tokens="$COST_TOKENS_PRICED"
+  local base_sentence; base_sentence="$(cost_coverage_sentence)"
+  local base_spec_p="$COST_N_PRICED_SPEC" base_spec_i="$COST_N_INVOCATIONS_SPEC"
+  local base_build_p="$COST_N_PRICED_BUILD" base_build_i="$COST_N_INVOCATIONS_BUILD"
+  cost_slice_rows "$RV3BASE" "rv3-fixture" >/dev/null
+  local base_rows="$COST_SLICE_ROWS"
+
+  cost_scan "$RV3UNREC" "rv3-fixture"
+  local u_priced_tokens="$COST_TOKENS_PRICED"
+  local u_sentence; u_sentence="$(cost_coverage_sentence)"
+  local u_spec_p="$COST_N_PRICED_SPEC" u_spec_i="$COST_N_INVOCATIONS_SPEC"
+  local u_build_p="$COST_N_PRICED_BUILD" u_build_i="$COST_N_INVOCATIONS_BUILD"
+  cost_slice_rows "$RV3UNREC" "rv3-fixture" >/dev/null
+  local u_rows="$COST_SLICE_ROWS"
+
+  [ "$base_priced_tokens" = "$u_priced_tokens" ] || bad=1
+  [ "$base_sentence" = "$u_sentence" ] || bad=1
+  [ "$base_spec_p" = "$u_spec_p" ] && [ "$base_spec_i" = "$u_spec_i" ] || bad=1
+  [ "$base_build_p" = "$u_build_p" ] && [ "$base_build_i" = "$u_build_i" ] || bad=1
+  [ "$base_rows" = "$u_rows" ] || bad=1
+  echo $bad
+}
+expect "RV3: priced total, coverage sentence (incl. coverage share), per-phase and per-slice figures are byte-identical whether or not an unrecognised-event line is present" \
+  "0" "$(rv3_figures_check)"
+
+expect "RV3: both the recognised-only and the unrecognised-line ledger exit 0 (RV7)" "0 0" \
+  "$(report_exit "$RV3DIR/base" rv3-fixture) $(report_exit "$RV3DIR/unrec" rv3-fixture)"
+
+# RV6 -- the unrecognised-event line is never read as a refine pass: the
+# rework count and rework token share do not move, and no per-pass token
+# figure appears anywhere in that fixture's own report output. The existing
+# "no per-pass token figure anywhere" assertion (record-cost-event.sh, above)
+# is re-run unmodified, not replaced -- this is additional coverage on the
+# reader's side, over a fixture holding a record class it does not know.
+RV3BASE_OUT="$(report "$RV3DIR/base" rv3-fixture)"
+RV3UNREC_OUT="$(report "$RV3DIR/unrec" rv3-fixture)"
+RV3BASE_REWORK="$(printf '%s\n' "$RV3BASE_OUT" | sed -n '/^Rework:/,/^$/p')"
+RV3UNREC_REWORK="$(printf '%s\n' "$RV3UNREC_OUT" | sed -n '/^Rework:/,/^$/p')"
+expect "RV6: rework count and rework token share are unchanged by an unrecognised-event line" "" \
+  "$(diff <(printf '%s' "$RV3BASE_REWORK") <(printf '%s' "$RV3UNREC_REWORK"))"
+
+expect "RV6: no per-pass token figure appears anywhere in the unrecognised-line fixture's report" "0" \
+  "$(printf '%s\n' "$RV3UNREC_OUT" | grep -icE 'pass [0-9]+.*token|refine pass [0-9]+:')"
+
+rm -rf "$RV3DIR"
+
+# ---------------------------------------------------------------------------
 # cost-ledger-blind-to-background-agents S1 (spec.md CL1, CL2, CL9) -- every
 # unpriced invocation is reported with the reason it is unpriced, taken only
 # from its finish record's own `status` field, and a launched-in-background
@@ -3611,6 +3733,46 @@ readme_recovery_not_closed_check() {
 expect "docs: README does not claim the background gap is closed -- S3's residue wording survives (CL3)" \
   "0" "$(readme_recovery_not_closed_check)"
 
+# S1 (resumed-invocation-never-reaches-the-ledger, spec.md RV1, RE11) -- README
+# documents, beside the background-launch and recovered-record paragraphs
+# already there, what a SendMessage-resumed run means to this ledger: it is
+# not an invocation, its tokens are in no total, and a killed attempt's own
+# tokens are recorded nowhere by anything. This is the only genuine
+# red-before-green case in that unit's RV group -- everything else there is a
+# lock over already-true behaviour.
+readme_resume_not_invocation_check() {
+  local bad=0 readme="$README_MD"
+  grep -qF 'is not recorded as an invocation at all' "$readme" || bad=1
+  grep -qF 'in no total' "$readme" || bad=1
+  grep -qF 'matches `Agent|Task`' "$readme" || bad=1
+  echo $bad
+}
+expect "docs: README states a SendMessage-resumed run is not an invocation, its tokens are in no total, and names hooks.json's Agent|Task matcher as the reason (RV1)" \
+  "0" "$(readme_resume_not_invocation_check)"
+
+readme_resume_killed_nowhere_check() {
+  local bad=0 readme="$README_MD"
+  grep -qF 'recorded nowhere, by anything' "$readme" || bad=1
+  echo $bad
+}
+expect "docs: README states a killed attempt's own tokens are recorded nowhere, by anything (RV1)" \
+  "0" "$(readme_resume_killed_nowhere_check)"
+
+# (negative) -- RE4 settles that no figure can ever arrive for a resumed or
+# killed run, so a reader must not be left waiting for one. Gated on the
+# paragraph's own existence, the same way CL3's residue check is above, so
+# this case fails now for the reason that matters (the paragraph is absent)
+# rather than trivially passing on an empty match.
+readme_resume_no_forthcoming_check() {
+  local bad=0 readme="$README_MD" line
+  line="$(grep -F 'is not recorded as an invocation at all' "$readme")"
+  [ -n "$line" ] || bad=1
+  printf '%s' "$line" | grep -qiE 'not yet|currently|until|will be|pending|planned' && bad=1
+  echo $bad
+}
+expect "docs: README's resumed-run paragraph exists and carries no forthcoming-figure vocabulary (RV1)" \
+  "0" "$(readme_resume_no_forthcoming_check)"
+
 # decisions.md carries the second-G1 entry while S6's spike entry and the
 # 4%-coverage rejection stand verbatim -- fingerprints unique to each.
 decisions_second_g1_check() {
@@ -4507,6 +4669,137 @@ rm -rf "$LOGDIR2"
 # -- executable bit + shellcheck (X1) --
 expect "write-cost-log-section.sh is executable" "yes" \
   "$([ -x "$SCRIPTS/write-cost-log-section.sh" ] && echo yes || echo no)"
+
+# ---------------------------------------------------------------------------
+# resumed-invocation-never-reaches-the-ledger S3 (spec.md RV9, RV4) -- LOCKS
+# the coverage sentence's prefix as a PREFIX (position, not mere presence --
+# BG3 already proves presence), and freezes the two surfaces RV4 names that
+# no existing frozen block covers: the budget gate's own output, and
+# log.md's '## Cost' section. The report itself is already frozen three
+# times (S4_FROZEN_UNSET, S1_FROZEN_CONC, S3_FROZEN_RF above) and gets no
+# fourth block here. ONE fixture, three surfaces, ONE cost_scan per surface
+# -- never a second fixture, or the identity claim below is about two
+# ledgers rather than one (CV7/CV8). This slice adds no wording to
+# cost_coverage_sentence(); it makes wording added later (whichever Stage 3
+# arm ships) provable rather than silent.
+echo "resumed-invocation-never-reaches-the-ledger S3 (spec.md RV9, RV4)"
+
+S3LDIR="$(mktemp -d)"
+mkdir -p "$S3LDIR/.claude" "$S3LDIR/docs/loop/s3-lock-fixture"
+S3LLEDGER="$S3LDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3l1","slug":"s3-lock-fixture","slice":"A","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3l1","slug":"s3-lock-fixture","slice":"A","phase":"build","agent":"loop-build","status":"completed","total_tokens":100000}'
+} > "$S3LLEDGER"
+S3LLOG="$S3LDIR/docs/loop/s3-lock-fixture/log.md"
+{
+  printf '%s\n' '# Log — s3-lock-fixture'
+  printf '\n'
+  printf '%s\n' '## G0 — Spec'
+  printf '%s\n' 'notes'
+} > "$S3LLOG"
+
+S3L_PREFIX='based on 1 of 1 invocations that carry a token figure (0 unpriced, not counted)'
+
+# Surface 1: cost-report.sh (already frozen elsewhere -- read only for the
+# prefix and identity checks, never a fourth frozen block).
+S3L_REPORT_OUT="$(report "$S3LDIR" s3-lock-fixture)"
+S3L_REPORT_LINE="$(printf '%s\n' "$S3L_REPORT_OUT" | grep -m1 'invocations that carry a token figure' | sed -E 's/^[[:space:]]+//')"
+
+# Surface 2: check-budget-gate.sh's own PreToolUse breach message -- a
+# hard threshold of 1 guarantees the breach fires regardless of the
+# fixture's exact token count.
+S3L_GATE_JSON="$(budget_payload s3-lock-fixture)"
+S3L_GATE_ERR="$(CLAUDE_PROJECT_DIR="$S3LDIR" LARAVEL_LOOP_BUDGET_HARD=1 gate_stderr "$S3L_GATE_JSON")"
+S3L_GATE_LINE="$(printf '%s\n' "$S3L_GATE_ERR" | grep -m1 'invocations that carry a token figure' | sed -E 's/^[[:space:]]+//')"
+
+# Surface 3: write-cost-log-section.sh's '## Cost' section.
+writelog "$S3LDIR" s3-lock-fixture
+S3L_LOG_SECTION="$(extract_cost_section "$S3LLOG")"
+S3L_LOG_LINE="$(printf '%s\n' "$S3L_LOG_SECTION" | grep -m1 'invocations that carry a token figure' | sed -E 's/^Coverage: //; s/^[[:space:]]+//')"
+
+# (1) RV9: the prefix BEGINS each consumer's own sentence -- a case-glob
+# match against the literal prefix (with this fixture's actual p/n/u
+# numbers), never a bare substring search, so a future rewrite that moves
+# the words later in the line cannot pass by accident.
+prefix_is_prefix() { # $1 line $2 prefix
+  case "$1" in
+    "$2"*) echo yes ;;
+    *) echo no ;;
+  esac
+}
+expect "(1) RV9: the coverage sentence's prefix begins the sentence in all three consumers, for one resume-free fixture" \
+  "yes yes yes" \
+  "$(prefix_is_prefix "$S3L_REPORT_LINE" "$S3L_PREFIX") $(prefix_is_prefix "$S3L_GATE_LINE" "$S3L_PREFIX") $(prefix_is_prefix "$S3L_LOG_LINE" "$S3L_PREFIX")"
+
+# (2) RV4: the budget gate's own breach output, frozen. LOCK, not a
+# description -- a later stage that changes this output must update this
+# block deliberately; a stage that changes it without noticing has a bug.
+# Generated from a real run on this lane's own machine with jq present, and
+# separately confirmed (recorded in this slice's return, not asserted here)
+# that cost-report.sh's and write-cost-log-section.sh's output for this same
+# fixture is unchanged with PATH stripped to the python3 arm.
+# IFS= (not the house `read -r -d ''` alone): this surface's own first byte
+# is a blank stderr line (check-budget-gate.sh's print_breach_message()
+# leads with `echo "" >&2`), and default IFS strips leading blank lines from
+# a `read` capture -- the house form is kept for the other two blocks below,
+# which do not begin with one.
+IFS= read -r -d '' S3L_FROZEN_GATE <<'FROZEN'
+
+BUDGET HARD LIMIT REACHED for unit "s3-lock-fixture".
+
+based on 1 of 1 invocations that carry a token figure (0 unpriced, not counted) -- 100 % coverage
+Priced total: 100000 token(s) -- at or above the hard threshold of 1 token(s).
+
+Most expensive slice: A -- 100000 token(s), rework share: unavailable (no priced rework in this slice)
+
+This is a gate, not a kill: any slice already in flight completes; nothing is interrupted. This only pauses the NEXT spawn.
+
+Choose one:
+  1. (recommended) Re-slice "A" -- it is the largest share of this unit's observed spend.
+  2. Raise the hard cap for this unit only. Does not persist beyond it.
+  3. Stop here and review manually before continuing.
+
+This returns immediately and waits for no further input -- an unattended run stops here and keeps its artifacts rather than continuing or hanging.
+FROZEN
+# IFS= preserves the heredoc's own trailing newline too (unlike the house
+# `read -r -d ''` form, which discards it along with leading whitespace) --
+# stripped here to match gate_stderr's command-substitution capture, which
+# always strips a trailing newline the same way every other case in this
+# suite already relies on.
+S3L_FROZEN_GATE="${S3L_FROZEN_GATE%$'\n'}"
+expect "(2) RV4: the budget gate's own breach output is byte-identical to a frozen block, for one resume-free fixture" "" \
+  "$(diff <(printf '%s' "$S3L_FROZEN_GATE") <(printf '%s' "$S3L_GATE_ERR"))"
+
+# (3) RV4: log.md's '## Cost' section, frozen. Same LOCK discipline as (2).
+read -r -d '' S3L_FROZEN_LOG <<'FROZEN'
+## Cost
+
+Coverage: based on 1 of 1 invocations that carry a token figure (0 unpriced, not counted) -- 100 % coverage
+
+Tokens: 100000 (priced subset only, partial -- 0 unpriced invocation(s) not counted)
+
+Rework: this figure counts whole invocations that needed at least one refine pass, at
+whole-invocation granularity -- deliberately over-attributing rather than estimating a
+per-pass split, and NOT the cost of retrying. It is not comparable to the requirements
+document's <15% target (Sec.10), which was calibrated against a narrower, per-pass
+definition. No pass/fail verdict against that target is printed here.
+  count: 0 of 1 invocation(s) marked rework
+  token share: unavailable (no priced invocations are marked rework)
+
+FROZEN
+expect "(3) RV4: log.md's '## Cost' section is byte-identical to a frozen block, for one resume-free fixture" "" \
+  "$(diff <(printf '%s' "$S3L_FROZEN_LOG") <(printf '%s' "$S3L_LOG_SECTION"))"
+
+# (4) CV7/CV8, extended to a third consumer: all three surfaces print
+# identical numbers and identical sentence text for this one fixture -- the
+# same identity BG3/CV8 already prove for two consumers, now covering all
+# three named by RV4.
+expect "(4) CV7/CV8: report, gate, and log.md print the identical coverage sentence and priced total for this one fixture" \
+  "yes yes yes" \
+  "$([ "$S3L_REPORT_LINE" = "$S3L_GATE_LINE" ] && echo yes || echo no) $([ "$S3L_GATE_LINE" = "$S3L_LOG_LINE" ] && echo yes || echo no) $(printf '%s\n' "$S3L_REPORT_OUT" | grep -q 'total priced tokens: 100000' && printf '%s\n' "$S3L_GATE_ERR" | grep -q 'Priced total: 100000 token' && printf '%s\n' "$S3L_LOG_SECTION" | grep -q 'Tokens: 100000' && echo yes || echo no)"
+
+rm -rf "$S3LDIR"
 
 # ---------------------------------------------------------------------------
 echo
@@ -5726,6 +6019,47 @@ expect "(S7-3) two different CLAUDE_PROJECT_DIRs (different ledgers) derive two 
   "$([ "$S7_HOOK_PATH1" != "$S7_HOOK_PATH3" ] && echo yes || echo no) $([ "$S7_RECOV_PATH1" != "$S7_RECOV_PATH3" ] && echo yes || echo no)"
 
 rm -rf "$S7_DIR_A" "$S7_DIR_B" "$S7_DIR_C"
+
+# ---------------------------------------------------------------------------
+# resumed-invocation-never-reaches-the-ledger S4 (spec.md RV8) -- decisions.md
+# records that this unit cannot raise pricing coverage and therefore does not
+# satisfy the dropped routing item's revisit condition, while the routing
+# bullet itself stands byte-identical -- the :3380/:3776-style pattern:
+# presence of the new entry's fingerprints, plus a diff proving the
+# neighbouring text it must not disturb.
+echo "resumed-invocation-never-reaches-the-ledger S4 (spec.md RV8)"
+
+s4_riv_decisions_entry_check() {
+  local bad=0 dec="$ROOT/docs/loop/decisions.md"
+  grep -qF '## resumed-invocation-never-reaches-the-ledger S4: cannot raise pricing coverage (2026-08-19)' "$dec" || bad=1
+  grep -qi 'yields a record, never a number' "$dec" || bad=1
+  grep -qi 'does not satisfy the routing item' "$dec" || bad=1
+  grep -qi '20 of 20 joinable' "$dec" || bad=1
+  grep -qi 'stay unattachable' "$dec" || bad=1
+  echo $bad
+}
+expect "(1) decisions.md: the new entry exists, is dated, and names a record-never-a-number plus the routing condition it does not satisfy (RV8)" \
+  "0" "$(s4_riv_decisions_entry_check)"
+
+# (2) the routing bullet ("Routing to a cheaper model") stands byte-identical
+# -- extracted from its own start line up to (not including) the next
+# bullet, diffed against a frozen copy of today's exact text, never edited,
+# annotated, or marked superseded/revisited by this slice.
+s4_riv_routing_bullet_extract() {
+  sed -n '/^- \*\*Routing to a cheaper model/,/^- \*\*Autonomous triggering/{/^- \*\*Autonomous triggering/!p;}' \
+    "$ROOT/docs/loop/decisions.md"
+}
+read -r -d '' S4_RIV_FROZEN_ROUTING <<'FROZEN'
+- **Routing to a cheaper model (cost `R3.1`/`R3.2`).** Dropped. Its own safety detector is rework
+  rate, and this file already establishes that the rework token share is not derivable while
+  `loop-build` is structurally unpriced. Shipping the largest quality-affecting change in the plan
+  with its detector provably blind is the exact trade the cost doc itself forbids: *"never silently
+  switch to a cheaper model … that trades a visible cost for an invisible quality loss."* Revisit
+  only if background pricing coverage rises materially.
+FROZEN
+S4_RIV_ROUTING_LIVE="$(s4_riv_routing_bullet_extract)"
+expect "(2) decisions.md: the routing bullet stands byte-identical, no superseded/revisited marker attached (RV8)" "" \
+  "$(diff <(printf '%s' "$S4_RIV_FROZEN_ROUTING") <(printf '%s' "$S4_RIV_ROUTING_LIVE"))"
 
 # ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the

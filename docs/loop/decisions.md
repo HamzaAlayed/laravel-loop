@@ -697,3 +697,22 @@ before `2026-08-22T15:30:39Z` per that file's own validity window.
 **The Handoff stays unopened.** The append-versus-trim loss window (a line landing between a
 trimmer's `tail` and its `mv`) is a different fault, with a different mechanism, unreproduced, and
 this build did not touch it.
+
+## resumed-invocation-never-reaches-the-ledger S4: cannot raise pricing coverage (2026-08-19)
+
+- **Capturing a resumed run yields a record, never a number.** `RE4`, independently corroborated:
+  20 of 20 joinable `SendMessage` results carried no token field of any kind (`totalTokens`,
+  `input_tokens`, `output_tokens`, `usage`, `totalDurationMs`, `cache_*` — none present), and the
+  sample was re-parsed independently and corrected downward from an earlier claim of 24 to the
+  corroborated 20. There is no channel by which a hook could observe a resumed run's cost; the
+  figure, if it exists at all, arrives only in the run's own completion notification, reachable
+  only by a human typing it in.
+- **This unit therefore does not satisfy the routing item's revisit condition.** The bullet below
+  ("Routing to a cheaper model") is dropped pending "background pricing coverage rises
+  materially" — this unit cannot raise that coverage, by the fact above, and its completion must
+  not be read as progress toward that condition. The routing decision itself stands unedited;
+  nothing here supersedes, revisits, or annotates it.
+- **The resumes already in this repository's history stay unattachable.** No ledger record
+  written before this unit carries an agent id (`RE6`) — only `agentId` on a `tool_response`
+  does — and there is no backfill of that field into existing lines (`OQ-R4`). Whatever this
+  unit's Stage 3 ships, past resumes remain outside anything it can attach.
