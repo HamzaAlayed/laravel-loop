@@ -4059,6 +4059,87 @@ expect "(S2-6) ok scan: all four new variables stay empty (PF10), and /cost's ok
   "ok    " "$S2_OK_STATE $S2_OK_PARSER $S2_OK_STATUS $S2_OK_ROUTE $S2_OK_STDERR$S2_REPORT_DIFF"
 rm -rf "$S2_PARITY_DIR"
 
+# ---------------------------------------------------------------------------
+# cost-log-section-parse-error-on-macos-ci S3 -- both reader surfaces name
+# the route (PF2), a degraded write says so on stderr (PF3), and the `*)`
+# arm stops borrowing scan-error's sentence. Reuses S2's
+# new_stub_parser_path() and this section's own mixed cost-log-fixture.
+
+# (S3-1) degraded body: the section names the parser (jq), its exit status
+# and the route -- and never the stub's own stderr text (DL7/H1). [PF1, PF2, PF8]
+S3_C1_BODY='#!/usr/bin/env bash
+printf "s3-stub-stderr-sentinel-should-never-appear-in-log\n" >&2
+exit 5'
+S3_C1_PATH="$(new_stub_parser_path jq "$S3_C1_BODY")"
+PATH="$S3_C1_PATH" writelog "$LOGDIR" cost-log-fixture
+S3_C1_OUT="$(cat "$LOGFILE")"
+expect "(S3-1) degraded body names the parser, its exit status and the route, never the stub's own stderr text" \
+  "yes yes yes no" \
+  "$(printf '%s' "$S3_C1_OUT" | grep -q 'Parser: jq, exit status 5' && echo yes || echo no) $(printf '%s' "$S3_C1_OUT" | grep -qi 'route: parser-failed' && echo yes || echo no) $(printf '%s' "$S3_C1_OUT" | grep -q 'Could not read the cost ledger (parse error)' && echo yes || echo no) $(printf '%s' "$S3_C1_OUT" | grep -q 's3-stub-stderr-sentinel' && echo yes || echo no)"
+
+# (S3-2) PF3, degraded: writelog_stderr on that same run names the slug and
+# the route, and the write still exits 0. [PF3]
+S3_C2_ERR="$(PATH="$S3_C1_PATH" writelog_stderr "$LOGDIR" cost-log-fixture)"
+S3_C2_EXIT="$(PATH="$S3_C1_PATH" writelog_exit "$LOGDIR" cost-log-fixture)"
+expect "(S3-2) PF3 degraded: stderr names the slug and the route, exit still 0" \
+  "yes yes 0" \
+  "$(printf '%s' "$S3_C2_ERR" | grep -q 'cost-log-fixture' && echo yes || echo no) $(printf '%s' "$S3_C2_ERR" | grep -q 'parser-failed' && echo yes || echo no) $S3_C2_EXIT"
+rm -rf "$S3_C1_PATH"
+
+# (S3-3) PF3/PF10, ok: writelog_stderr is EMPTY, exit is 0, and the ok
+# section is byte-identical to the pre-change script's rendering of the
+# same fixture (git show, not asserted from memory). [PF3, PF10]
+S3_PRECHANGE_DIR="$(mktemp -d)"
+mkdir -p "$S3_PRECHANGE_DIR/scripts"
+git -C "$ROOT" show HEAD:scripts/write-cost-log-section.sh > "$S3_PRECHANGE_DIR/scripts/write-cost-log-section.sh"
+cp "$SCRIPTS/cost-ledger-lib.sh" "$S3_PRECHANGE_DIR/scripts/cost-ledger-lib.sh"
+CLAUDE_PROJECT_DIR="$LOGDIR" bash "$S3_PRECHANGE_DIR/scripts/write-cost-log-section.sh" cost-log-fixture >/dev/null 2>&1
+S3_PRECHANGE_OK="$(cat "$LOGFILE")"
+rm -rf "$S3_PRECHANGE_DIR"
+writelog "$LOGDIR" cost-log-fixture
+S3_POSTCHANGE_OK="$(cat "$LOGFILE")"
+S3_OK_ERR="$(writelog_stderr "$LOGDIR" cost-log-fixture)"
+S3_OK_EXIT="$(writelog_exit "$LOGDIR" cost-log-fixture)"
+expect "(S3-3) ok write: silent stderr, exit 0, section byte-identical to the pre-change script's rendering" \
+  "yes 0 " \
+  "$([ -z "$S3_OK_ERR" ] && echo yes || echo no) $S3_OK_EXIT $(diff <(printf '%s' "$S3_PRECHANGE_OK") <(printf '%s' "$S3_POSTCHANGE_OK"))"
+
+# (S3-4) the `*)` arm: a stripped copy that still borrows scan-error's own
+# sentence is caught by this check (proves it can fail), and the real
+# file's `*)` arm calls a DIFFERENT body function -- read, not forced: no
+# input can produce an unrecognised state while the library and this
+# script agree. [PF2]
+s3_arm_calls_scan_error() { # $1 file -> "yes" if the *) arm's body matches scan-error's arm verbatim
+  local f="$1" scan_line arm_line
+  scan_line="$(grep -E '^ *scan-error\)' "$f" | sed -E 's/^ *scan-error\) *//')"
+  arm_line="$(grep -E '^ *\*\)' "$f" | sed -E 's/^ *\*\) *//')"
+  [ -n "$scan_line" ] && [ "$scan_line" = "$arm_line" ] && echo yes || echo no
+}
+S3_STRIPPED="$(mktemp)"
+sed 's/print_unrecognised_state_body ;;/print_scan_error_body ;;/' "$SCRIPTS/write-cost-log-section.sh" > "$S3_STRIPPED"
+expect "(S3-4) stripped copy (still borrowing scan-error's sentence) is caught, and the real file's *) arm calls a DIFFERENT body function" \
+  "yes no" "$(s3_arm_calls_scan_error "$S3_STRIPPED") $(s3_arm_calls_scan_error "$SCRIPTS/write-cost-log-section.sh")"
+rm -f "$S3_STRIPPED"
+
+# (S3-5) /cost's degraded read names the route, in the same clause shape,
+# and its ok output for the fixture is byte-identical to the pre-change
+# script's (git show, not asserted from memory). [PF2, PF10]
+S3_C5_BODY='#!/usr/bin/env bash
+printf "s3-cost-report-stub-stderr\n" >&2
+exit 4'
+S3_C5_PATH="$(new_stub_parser_path jq "$S3_C5_BODY")"
+S3_C5_DEGRADED_OUT="$(CLAUDE_PROJECT_DIR="$LOGDIR" PATH="$S3_C5_PATH" bash "$SCRIPTS/cost-report.sh" cost-log-fixture)"
+S3_PRECHANGE_REPORT_DIR="$(mktemp -d)"
+mkdir -p "$S3_PRECHANGE_REPORT_DIR/scripts"
+git -C "$ROOT" show HEAD:scripts/cost-report.sh > "$S3_PRECHANGE_REPORT_DIR/scripts/cost-report.sh"
+cp "$SCRIPTS/cost-ledger-lib.sh" "$S3_PRECHANGE_REPORT_DIR/scripts/cost-ledger-lib.sh"
+S3_PRECHANGE_REPORT_OK="$(CLAUDE_PROJECT_DIR="$LOGDIR" bash "$S3_PRECHANGE_REPORT_DIR/scripts/cost-report.sh" cost-log-fixture)"
+S3_POSTCHANGE_REPORT_OK="$(CLAUDE_PROJECT_DIR="$LOGDIR" bash "$SCRIPTS/cost-report.sh" cost-log-fixture)"
+rm -rf "$S3_C5_PATH" "$S3_PRECHANGE_REPORT_DIR"
+expect "(S3-5) /cost's degraded read names the route, and its ok output for the fixture is byte-identical to the pre-change script's" \
+  "yes " \
+  "$(printf '%s' "$S3_C5_DEGRADED_OUT" | grep -q 'route: parser-failed' && echo yes || echo no) $(diff <(printf '%s' "$S3_PRECHANGE_REPORT_OK") <(printf '%s' "$S3_POSTCHANGE_REPORT_OK"))"
+
 rm -rf "$LOGDIR" "$NOSLUGDIR"
 
 # (g) commands/loop.md step 5 names the script -- prove-it-can-fail run
