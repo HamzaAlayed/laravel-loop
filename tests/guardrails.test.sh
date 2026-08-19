@@ -2790,6 +2790,31 @@ new_jq_absent_path() {
   printf '%s' "$dir"
 }
 
+# cost-log-section-parse-error-on-macos-ci S1 -- makes grep genuinely absent
+# while leaving every other tool cost_scan reaches for (bash, awk, mktemp,
+# mv, tr, jq-or-python3) resolvable, following new_jq_absent_path()'s shape
+# exactly (PF12-PF15's pinned PATH-fixture contract): a curated allow-list
+# is not enough, per the same 2026-08-18 finding this file already records
+# above -- a sparser PATH missing grep made the library report a parse
+# error, which is the exact defect this slice closes. Symlinking every
+# resolvable entry of the standard bin directories, skipping only grep's
+# own name, is what forces the route without also forcing something else.
+new_grep_absent_path() {
+  local dir bindir f base
+  dir="$(mktemp -d)"
+  for bindir in /usr/bin /bin /usr/sbin /sbin /opt/homebrew/bin /usr/local/bin; do
+    [ -d "$bindir" ] || continue
+    for f in "$bindir"/*; do
+      [ -e "$f" ] || continue
+      base="$(basename "$f")"
+      [ "$base" = "grep" ] && continue
+      [ -e "$dir/$base" ] && continue
+      ln -s "$f" "$dir/$base" 2>/dev/null
+    done
+  done
+  printf '%s' "$dir"
+}
+
 SHIP1="$(new_ship_fixture)"
 ship_run "$SHIP1"
 GATE_LINES="$(printf '%s\n' "$SHIP_OUT" | grep -cE '^gate [0-9]: ')"
@@ -3797,6 +3822,92 @@ rm -rf "$ABSENTLOGDIR"
 # fixture's output above.
 expect "(f) no 'within budget'/'under budget'/checkmark anywhere in the Cost section (BG6)" "1" \
   "$(printf '%s\n%s\n%s\n' "$LOG_OUT1" "$LOG_OUT2" "$NOSLUG_OUT" | grep -iE 'within budget|under budget|✓' >/dev/null 2>&1; echo $?)"
+
+# ---------------------------------------------------------------------------
+# cost-log-section-parse-error-on-macos-ci S1 -- neither of cost_scan's two
+# grep sites (scripts/cost-ledger-lib.sh:976/:990) may depend on an external
+# tool being resolvable (PF12-PF15). Reuses this section's own mixed
+# cost-log-fixture ($LOGDIR/$LOGFILE, its ledger still on disk) rather than
+# building a new one, per the slice's own instruction.
+GREP_ABSENT_PATH="$(new_grep_absent_path)"
+
+# (S1-1) fixture self-check: new_grep_absent_path resolves everything
+# cost_scan's degraded-and-ok paths need -- bash, awk, mktemp, mv, tr (the
+# out-of-bounds dependency at :310 that cost_coverage_sentence needs for an
+# ok body) and a parser -- and does NOT resolve grep. A PATH fixture that
+# silently resolved grep would make S1-2..S1-5 pass for the wrong reason.
+# Each check runs in its own subshell/process (`bash -c`) rather than as a
+# builtin in this long-lived harness shell: this shell has already resolved
+# and hashed "grep" hundreds of times over, and bash's command hash table
+# is consulted ahead of a merely-temporary PATH override on `command -v`,
+# so checking in-process here would report a false "yes" for exactly the
+# tool this fixture must prove absent -- a fresh process starts unhashed,
+# which also matches how cost_scan actually runs (a freshly exec'd bash).
+s1_resolves() { # $1 PATH-dir $2 tool -> "yes"/"no", asked of a clean process
+  PATH="$1" bash -c 'command -v "$0" >/dev/null 2>&1 && echo yes || echo no' "$2"
+}
+expect "(S1-1) new_grep_absent_path resolves bash/awk/mktemp/mv/tr/a-parser and does NOT resolve grep" \
+  "bash yes, awk yes, mktemp yes, mv yes, tr yes, parser yes, grep no" \
+  "bash $(s1_resolves "$GREP_ABSENT_PATH" bash), awk $(s1_resolves "$GREP_ABSENT_PATH" awk), mktemp $(s1_resolves "$GREP_ABSENT_PATH" mktemp), mv $(s1_resolves "$GREP_ABSENT_PATH" mv), tr $(s1_resolves "$GREP_ABSENT_PATH" tr), parser $(PATH="$GREP_ABSENT_PATH" bash -c 'command -v jq >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1' && echo yes || echo no), grep $(s1_resolves "$GREP_ABSENT_PATH" grep)"
+
+PATH="$GREP_ABSENT_PATH" writelog "$LOGDIR" cost-log-fixture
+GREPLESS_OUT="$(cat "$LOGFILE")"
+
+# (S1-2) PF14's RED-BEFORE-GREEN (reproduced separately against the
+# pre-change library and recorded in this slice's return, not shipped as a
+# red case): under a PATH that resolves the parser but not grep, the
+# cost-log-fixture writes the SAME ok body it writes with grep on PATH --
+# the coverage sentence, the priced-subset partial total, and the rework
+# count -- and never the parse-error sentence. [PF12, PF14]
+expect "(S1-2) grep-less PATH: cost-log-fixture still writes the ok body (coverage, partial total, rework count), never the parse-error sentence" \
+  "yes yes yes no" \
+  "$(printf '%s' "$GREPLESS_OUT" | grep -q 'unpriced, not counted' && echo yes || echo no) $(printf '%s' "$GREPLESS_OUT" | grep -q '60787 (priced subset only, partial -- 1 unpriced' && echo yes || echo no) $(printf '%s' "$GREPLESS_OUT" | grep -q 'count: 1 of 2 invocation(s) marked rework' && echo yes || echo no) $(printf '%s' "$GREPLESS_OUT" | grep -qi 'parse error' && echo yes || echo no)"
+
+# (S1-3) PF13's DISCRIMINATOR (also reproduced separately against a
+# :976-only patch and recorded in this slice's return): the same run does
+# NOT write the "No records for this unit" body, and the slug-filtered
+# figure is present -- proving the slug the fixture actually holds was
+# recognised as present rather than the failure having relocated from
+# :976 to :990. [PF13]
+expect "(S1-3) grep-less PATH: the present slug is never reported no-slug, and its own figure is present" \
+  "no yes" \
+  "$(printf '%s' "$GREPLESS_OUT" | grep -qi 'No records for this unit' && echo yes || echo no) $(printf '%s' "$GREPLESS_OUT" | grep -q '60787 (priced subset only, partial -- 1 unpriced' && echo yes || echo no)"
+
+# (S1-4) the slug test still discriminates -- three tokens in one expect,
+# all under the same grep-less PATH: a slug genuinely absent from the
+# ledger; a slug that is a strict substring (prefix) of the present slug
+# "cost-log-fixture"; and a slug containing a glob metacharacter. All three
+# must be no-slug -- grep -qxF's exact-line, fixed-string semantics,
+# preserved without grep. A hand-rolled match that widened this would make
+# no-slug unreachable for a real caller, invisible to S1-2/S1-3 above. [PF13, DL5]
+cost_scan_state_for_slug() { # $1 ledger $2 slug (PATH set by the caller)
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$1" "$2"
+  printf '%s' "$COST_SCAN_STATE"
+}
+S1_SLUG_LEDGER="$LOGDIR/.claude/loop-cost.jsonl"
+S1_ABSENT_STATE="$(PATH="$GREP_ABSENT_PATH" cost_scan_state_for_slug "$S1_SLUG_LEDGER" "not-a-real-slug")"
+S1_SUBSTRING_STATE="$(PATH="$GREP_ABSENT_PATH" cost_scan_state_for_slug "$S1_SLUG_LEDGER" "cost-log-fix")"
+S1_GLOB_STATE="$(PATH="$GREP_ABSENT_PATH" cost_scan_state_for_slug "$S1_SLUG_LEDGER" "cost-log-*")"
+expect "(S1-4) grep-less PATH: an absent slug, a strict-substring slug, and a slug containing a glob metacharacter are ALL no-slug" \
+  "no-slug no-slug no-slug" "$S1_ABSENT_STATE $S1_SUBSTRING_STATE $S1_GLOB_STATE"
+
+# (S1-5) the marker test can still fail: a stub jq that exits non-zero with
+# no output, on a PATH shaped the same way (grep also unresolvable), still
+# yields scan-error -- the section is still written and the write still
+# exits 0. Proves :976's replacement has not become unconditionally true. [PF12, PF8/DL5]
+S1_STUBDIR="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nexit 7\n' > "$S1_STUBDIR/jq"
+chmod +x "$S1_STUBDIR/jq"
+S1_STUB_PATH="$S1_STUBDIR:$GREP_ABSENT_PATH"
+PATH="$S1_STUB_PATH" writelog "$LOGDIR" cost-log-fixture
+S1_STUBBED_OUT="$(cat "$LOGFILE")"
+S1_STUBBED_EXIT="$(PATH="$S1_STUB_PATH" writelog_exit "$LOGDIR" cost-log-fixture)"
+expect "(S1-5) a broken parser under a grep-less PATH still yields the parse-error body, and the write still exits 0" \
+  "yes 0" \
+  "$(printf '%s' "$S1_STUBBED_OUT" | grep -qi 'Could not read the cost ledger (parse error)' && echo yes || echo no) $S1_STUBBED_EXIT"
+rm -rf "$S1_STUBDIR" "$GREP_ABSENT_PATH"
 
 rm -rf "$LOGDIR" "$NOSLUGDIR"
 
