@@ -99,6 +99,8 @@ That real figure can still reach the ledger, but only by hand. `scripts/record-r
 
 A recovered record carries exactly one dimension: the token figure. Everything else the report shows for that invocation — its phase, its model, its slice — comes from the invocation's own `start` and `finish` records, the ones the hook already wrote; a recovered record neither carries those fields nor invents them, which is what lets a transcribed figure appear in the per-phase breakdown, the per-phase model line and the per-slice ranking at all. Where an invocation's own records named nothing, nothing is guessed: a priced invocation whose records carry no `slice` is reported as **unattributed** — counted, with its tokens, outside the ranking, so the ranking states what it cannot place instead of quietly ranking a smaller population — and a recovered record for an invocation with no `start` or `finish` anywhere is left out of the ranking and out of the priced population alike, rather than being handed a label or a place in either.
 
+A run resumed with `SendMessage` is not recorded as an invocation at all — `hooks.json`'s matcher matches `Agent|Task`, and a `SendMessage` is neither — so its tokens are in no total this ledger produces, and a killed attempt's own tokens are recorded nowhere, by anything.
+
 ## Cost reporting and the budget gate
 
 `/cost [slug]` reads **only** `.claude/loop-cost.jsonl` — no network call, no account, and no reading of Laravel Guild's `.claude/agents-board.jsonl` even when that file happens to sit right next to it and see more. Coverage is printed **before any total, always**: how many invocations the ledger holds for the unit, how many carry a token figure, how many do not, per phase. A total built from only the priced subset is labelled as covering that subset, never presented as the unit's whole cost, and where nothing for a unit is priced no token table is printed at all — the report says plainly that nothing about that unit's cost is observable, and why. No currency figure is ever produced: tokens, counts, and durations, never a dollar figure, never a rate card.
@@ -166,7 +168,7 @@ They answer different questions. Reach for the **Guild** when you want a named s
 ## Development
 
 ```bash
-bash tests/guardrails.test.sh   # 498 cases, zero dependencies
+bash tests/guardrails.test.sh   # 501 cases, zero dependencies
 shellcheck scripts/*.sh
 ```
 

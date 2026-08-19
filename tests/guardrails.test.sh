@@ -3611,6 +3611,46 @@ readme_recovery_not_closed_check() {
 expect "docs: README does not claim the background gap is closed -- S3's residue wording survives (CL3)" \
   "0" "$(readme_recovery_not_closed_check)"
 
+# S1 (resumed-invocation-never-reaches-the-ledger, spec.md RV1, RE11) -- README
+# documents, beside the background-launch and recovered-record paragraphs
+# already there, what a SendMessage-resumed run means to this ledger: it is
+# not an invocation, its tokens are in no total, and a killed attempt's own
+# tokens are recorded nowhere by anything. This is the only genuine
+# red-before-green case in that unit's RV group -- everything else there is a
+# lock over already-true behaviour.
+readme_resume_not_invocation_check() {
+  local bad=0 readme="$README_MD"
+  grep -qF 'is not recorded as an invocation at all' "$readme" || bad=1
+  grep -qF 'in no total' "$readme" || bad=1
+  grep -qF 'matches `Agent|Task`' "$readme" || bad=1
+  echo $bad
+}
+expect "docs: README states a SendMessage-resumed run is not an invocation, its tokens are in no total, and names hooks.json's Agent|Task matcher as the reason (RV1)" \
+  "0" "$(readme_resume_not_invocation_check)"
+
+readme_resume_killed_nowhere_check() {
+  local bad=0 readme="$README_MD"
+  grep -qF 'recorded nowhere, by anything' "$readme" || bad=1
+  echo $bad
+}
+expect "docs: README states a killed attempt's own tokens are recorded nowhere, by anything (RV1)" \
+  "0" "$(readme_resume_killed_nowhere_check)"
+
+# (negative) -- RE4 settles that no figure can ever arrive for a resumed or
+# killed run, so a reader must not be left waiting for one. Gated on the
+# paragraph's own existence, the same way CL3's residue check is above, so
+# this case fails now for the reason that matters (the paragraph is absent)
+# rather than trivially passing on an empty match.
+readme_resume_no_forthcoming_check() {
+  local bad=0 readme="$README_MD" line
+  line="$(grep -F 'is not recorded as an invocation at all' "$readme")"
+  [ -n "$line" ] || bad=1
+  printf '%s' "$line" | grep -qiE 'not yet|currently|until|will be|pending|planned' && bad=1
+  echo $bad
+}
+expect "docs: README's resumed-run paragraph exists and carries no forthcoming-figure vocabulary (RV1)" \
+  "0" "$(readme_resume_no_forthcoming_check)"
+
 # decisions.md carries the second-G1 entry while S6's spike entry and the
 # 4%-coverage rejection stand verbatim -- fingerprints unique to each.
 decisions_second_g1_check() {
