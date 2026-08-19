@@ -5674,6 +5674,60 @@ rmdir "$S6_LOCK" 2>/dev/null
 rm -rf "$S6DIR"
 
 # ---------------------------------------------------------------------------
+# S7 (stale-evict-lock-permanently-defeats-the-cap, spec.md SL12 -- narrowed
+# at G1 from three derivations to the two writers, since S5's relocation was
+# dropped on S4's evidence and there is no third deriver). A divergence
+# between the two writers' lock-path derivations is red, proven by mutation.
+# Each writer's path is COMPUTED the way that writer itself computes it --
+# its own ROOT/DIR/EVICT_LOCK assignment lines, extracted from the script
+# and evaluated -- never a hand-written second copy of the formula and never
+# a hard-coded expected literal (spec.md's own words: a case that merely
+# asserts a hard-coded expected path does not satisfy this).
+extract_evict_lock_path() { # $1 script path  $2 CLAUDE_PROJECT_DIR (optional)  $3 cwd (optional)
+  local script="$1" projdir="${2:-}" cwd="${3:-}"
+  (
+    if [ -n "$projdir" ]; then
+      export CLAUDE_PROJECT_DIR="$projdir"
+    else
+      unset CLAUDE_PROJECT_DIR 2>/dev/null || true
+    fi
+    [ -n "$cwd" ] && cd "$cwd" 2>/dev/null
+    eval "$(grep -E '^(ROOT|DIR|EVICT_LOCK)=' "$script")"
+    printf '%s' "$EVICT_LOCK"
+  )
+}
+
+S7_DIR_A="$(mktemp -d)"
+S7_DIR_B="$(mktemp -d)"
+S7_DIR_C="$(mktemp -d)"
+
+# (S7-1) usable branch: an explicit CLAUDE_PROJECT_DIR -- both writers,
+# evaluated under identical inputs, produce the identical path.
+S7_HOOK_PATH1="$(extract_evict_lock_path "$SCRIPTS/record-cost-event.sh" "$S7_DIR_A")"
+S7_RECOV_PATH1="$(extract_evict_lock_path "$SCRIPTS/record-recovered-cost.sh" "$S7_DIR_A")"
+expect "(S7-1) explicit CLAUDE_PROJECT_DIR: both writers derive the identical lock path" \
+  "yes" "$([ -n "$S7_HOOK_PATH1" ] && [ "$S7_HOOK_PATH1" = "$S7_RECOV_PATH1" ] && echo yes || echo no)"
+
+# (S7-2) the rule's other branch: CLAUDE_PROJECT_DIR UNSET, falling back to
+# $PWD -- both writers still agree with each other under that branch too.
+S7_HOOK_PATH2="$(extract_evict_lock_path "$SCRIPTS/record-cost-event.sh" "" "$S7_DIR_B")"
+S7_RECOV_PATH2="$(extract_evict_lock_path "$SCRIPTS/record-recovered-cost.sh" "" "$S7_DIR_B")"
+expect "(S7-2) CLAUDE_PROJECT_DIR unset, falls back to \$PWD: both writers still derive the identical lock path" \
+  "yes" "$([ -n "$S7_HOOK_PATH2" ] && [ "$S7_HOOK_PATH2" = "$S7_RECOV_PATH2" ] && echo yes || echo no)"
+
+# (S7-3) the collision direction: two DIFFERENT ledgers (two different
+# CLAUDE_PROJECT_DIRs) derive two DIFFERENT locks, in BOTH writers -- the
+# invariant is "the lock is a function of the ledger it guards", never "one
+# lock per machine".
+S7_HOOK_PATH3="$(extract_evict_lock_path "$SCRIPTS/record-cost-event.sh" "$S7_DIR_C")"
+S7_RECOV_PATH3="$(extract_evict_lock_path "$SCRIPTS/record-recovered-cost.sh" "$S7_DIR_C")"
+expect "(S7-3) two different CLAUDE_PROJECT_DIRs (different ledgers) derive two different locks, in both writers" \
+  "yes yes" \
+  "$([ "$S7_HOOK_PATH1" != "$S7_HOOK_PATH3" ] && echo yes || echo no) $([ "$S7_RECOV_PATH1" != "$S7_RECOV_PATH3" ] && echo yes || echo no)"
+
+rm -rf "$S7_DIR_A" "$S7_DIR_B" "$S7_DIR_C"
+
+# ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
 # file. The harness's actual total is only known once every case above has
 # run, including any inside a loop that fires more than once per source
