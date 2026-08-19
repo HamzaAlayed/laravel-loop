@@ -33,6 +33,17 @@ expect() {
   fi
 }
 
+# cost-log-section-parse-error-on-macos-ci S4, OQ6 -- one line, identical in
+# SHAPE on every platform (labelled fields; the values differ freely), so a
+# job log names its own parser environment without anyone re-running
+# anything to find out. An echo, never a case: it adds no PASS/FAIL and
+# does not touch either job's case total (A4).
+printf 'environment: bash %s, uname %s, jq %s, python3 %s, grep %s\n' \
+  "${BASH_VERSION:-unknown}" "$(uname -s -m 2>/dev/null || echo unknown)" \
+  "$(command -v jq >/dev/null 2>&1 && echo yes || echo no)" \
+  "$(command -v python3 >/dev/null 2>&1 && echo yes || echo no)" \
+  "$(command -v grep >/dev/null 2>&1 && echo yes || echo no)"
+
 # ---------------------------------------------------------------------------
 echo "enforce-refine-cap.sh (inner-loop refine cap)"
 CAPDIR="$(mktemp -d)"
@@ -2815,6 +2826,35 @@ new_grep_absent_path() {
   printf '%s' "$dir"
 }
 
+# cost-log-section-parse-error-on-macos-ci S2 -- follows new_jq_absent_path()
+# and new_grep_absent_path()'s shape exactly (PF1/PF2's pinned PATH-fixture
+# contract), but this one is parametrised: it skips BOTH real jq and real
+# python3 during the symlink pass (never just the one named), then plants a
+# STUB at the requested name only. That means the other parser is genuinely
+# ABSENT from this PATH -- never symlinked, never stubbed -- so a case can
+# force the real python3 fallback to run against a chosen jq behaviour (or
+# vice versa) without the untouched parser's real binary interfering.
+# Reused by S3 and S4 rather than redefined (slices.md's "one helper,
+# defined once").
+new_stub_parser_path() { # $1 parser to stub (jq|python3) $2 stub script body
+  local parser="$1" body="$2"
+  local dir bindir f base
+  dir="$(mktemp -d)"
+  for bindir in /usr/bin /bin /usr/sbin /sbin /opt/homebrew/bin /usr/local/bin; do
+    [ -d "$bindir" ] || continue
+    for f in "$bindir"/*; do
+      [ -e "$f" ] || continue
+      base="$(basename "$f")"
+      case "$base" in jq|python3) continue ;; esac
+      [ -e "$dir/$base" ] && continue
+      ln -s "$f" "$dir/$base" 2>/dev/null
+    done
+  done
+  printf '%s\n' "$body" > "$dir/$parser"
+  chmod +x "$dir/$parser"
+  printf '%s' "$dir"
+}
+
 SHIP1="$(new_ship_fixture)"
 ship_run "$SHIP1"
 GATE_LINES="$(printf '%s\n' "$SHIP_OUT" | grep -cE '^gate [0-9]: ')"
@@ -3696,15 +3736,28 @@ PY
 echo
 echo "cost in log.md (scripts/write-cost-log-section.sh, S7)"
 
+# cost-log-section-parse-error-on-macos-ci S4 -- writelog()/writelog_exit()
+# used to discard stderr entirely (>/dev/null 2>&1), which is what threw
+# away the only evidence a degraded run left behind before any assertion
+# could read it. One real invocation, one place stderr and the exit status
+# land (WRITELOG_LAST_STDERR/WRITELOG_LAST_EXIT); every existing call site's
+# own return value is unchanged -- writelog_exit still echoes the exit
+# code, writelog_stderr still prints the stderr text -- so no existing
+# case's expected value moves.
+writelog_run() { # $1 CLAUDE_PROJECT_DIR $2 slug
+  WRITELOG_LAST_STDERR="$(CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/write-cost-log-section.sh" "$2" 2>&1 1>/dev/null)"
+  WRITELOG_LAST_EXIT=$?
+}
 writelog() { # $1 CLAUDE_PROJECT_DIR $2 slug
-  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/write-cost-log-section.sh" "$2" >/dev/null 2>&1
+  writelog_run "$1" "$2"
 }
 writelog_exit() { # $1 CLAUDE_PROJECT_DIR $2 slug
-  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/write-cost-log-section.sh" "$2" >/dev/null 2>&1
-  echo $?
+  writelog_run "$1" "$2"
+  echo "$WRITELOG_LAST_EXIT"
 }
 writelog_stderr() { # $1 CLAUDE_PROJECT_DIR $2 slug
-  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/write-cost-log-section.sh" "$2" 2>&1 1>/dev/null
+  writelog_run "$1" "$2"
+  printf '%s' "$WRITELOG_LAST_STDERR"
 }
 
 # Fixture: a log.md shaped like a real one -- pre-existing headings plus a
@@ -3739,6 +3792,8 @@ LOGFILE="$LOGDIR/docs/loop/cost-log-fixture/log.md"
 expect "(a) write-cost-log-section.sh exits 0 on the mixed fixture" "0" "$(writelog_exit "$LOGDIR" cost-log-fixture)"
 writelog "$LOGDIR" cost-log-fixture
 LOG_OUT1="$(cat "$LOGFILE")"
+S4_RUN1_STDERR="$WRITELOG_LAST_STDERR"
+S4_RUN1_EXIT="$WRITELOG_LAST_EXIT"
 
 expect "(a) a '## Cost' heading is written" "1" "$(grep -cx '## Cost' "$LOGFILE")"
 expect "(a) the section carries the coverage sentence (DL1, DL2, CV1)" "yes" \
@@ -3756,9 +3811,42 @@ expect "(a) the rework figure carries D3's definition alongside it, not just the
 expect "(b) exactly one '## Cost' heading after the first run" "1" "$(grep -cx '## Cost' "$LOGFILE")"
 writelog "$LOGDIR" cost-log-fixture
 LOG_OUT2="$(cat "$LOGFILE")"
+S4_RUN2_STDERR="$WRITELOG_LAST_STDERR"
+S4_RUN2_EXIT="$WRITELOG_LAST_EXIT"
 expect "(b) exactly one '## Cost' heading after a second run (DL4)" "1" "$(grep -cx '## Cost' "$LOGFILE")"
-expect "(b) the file is byte-identical across the second run (DL4, CV7)" "" \
-  "$(diff <(printf '%s' "$LOG_OUT1") <(printf '%s' "$LOG_OUT2"))"
+
+# cost-log-section-parse-error-on-macos-ci S4 (PF5): when either of case
+# (b)'s own comparisons below fails, print the evidence a job log would
+# need to diagnose it -- each run's exit status, its own stderr (S4's
+# writelog_run capture, no longer discarded), and the body it actually
+# wrote -- rather than only the byte-diff this case already produced.
+# Printed ONLY on failure (PF5's own boundary); a green run gains nothing
+# here beyond OQ6's one line at suite start.
+s4_case_b_evidence() {
+  printf 'CASE (b) EVIDENCE -- run 1: exit=%s stderr=%s\n' "$S4_RUN1_EXIT" "${S4_RUN1_STDERR:-<empty>}"
+  printf 'CASE (b) EVIDENCE -- run 1 body:\n%s\n' "$LOG_OUT1"
+  printf 'CASE (b) EVIDENCE -- run 2: exit=%s stderr=%s\n' "$S4_RUN2_EXIT" "${S4_RUN2_STDERR:-<empty>}"
+  printf 'CASE (b) EVIDENCE -- run 2 body:\n%s\n' "$LOG_OUT2"
+}
+
+# (S4-1) OQ4/PF9: case (b) is STRENGTHENED, not replaced -- it keeps every
+# existing assertion (the byte-identity diff below stays) and GAINS a
+# direct assertion of run 2's OWN body, so "run 2 degraded" is detectable
+# as itself and not only as a diff against run 1.
+S4_RUN2_OK="$(printf '%s' "$LOG_OUT2" | grep -q 'unpriced, not counted' && echo yes || echo no)"
+S4_RUN2_PARTIAL="$(printf '%s' "$LOG_OUT2" | grep -q '60787 (priced subset only, partial -- 1 unpriced' && echo yes || echo no)"
+S4_RUN2_REWORK="$(printf '%s' "$LOG_OUT2" | grep -q 'count: 1 of 2 invocation(s) marked rework' && echo yes || echo no)"
+if [ "$S4_RUN2_OK $S4_RUN2_PARTIAL $S4_RUN2_REWORK" != "yes yes yes" ]; then
+  s4_case_b_evidence
+fi
+expect "(S4-1) case (b) strengthened: run 2's own body carries the coverage sentence, the partial total, and the rework count directly (OQ4, PF9)" \
+  "yes yes yes" "$S4_RUN2_OK $S4_RUN2_PARTIAL $S4_RUN2_REWORK"
+
+S4_DIFF_B="$(diff <(printf '%s' "$LOG_OUT1") <(printf '%s' "$LOG_OUT2"))"
+if [ -n "$S4_DIFF_B" ]; then
+  s4_case_b_evidence
+fi
+expect "(b) the file is byte-identical across the second run (DL4, CV7)" "" "$S4_DIFF_B"
 expect "(b) '## Budget events' and every pre-existing heading survive untouched (DL4)" "yes" \
   "$(printf '%s\n' "$LOG_OUT2" | grep -qx '## Budget events' \
      && printf '%s\n' "$LOG_OUT2" | grep -q 'warn crossed at 100000' \
@@ -3908,6 +3996,290 @@ expect "(S1-5) a broken parser under a grep-less PATH still yields the parse-err
   "yes 0" \
   "$(printf '%s' "$S1_STUBBED_OUT" | grep -qi 'Could not read the cost ledger (parse error)' && echo yes || echo no) $S1_STUBBED_EXIT"
 rm -rf "$S1_STUBDIR" "$GREP_ABSENT_PATH"
+
+# ---------------------------------------------------------------------------
+# cost-log-section-parse-error-on-macos-ci S2 -- a degraded cost_scan now
+# PUBLISHES which parser ran, its exit status, a bounded capture of its own
+# stderr, and one of three route values (PF1, PF2), instead of discarding
+# all three. Reuses this section's own mixed cost-log-fixture ($LOGDIR,
+# S1_SLUG_LEDGER) rather than building a new one. None of these re-assert
+# S1's fix (S1 owns that).
+cost_scan_fields_for_slug() { # $1 ledger $2 slug (PATH set by caller) ->
+  # "STATE<US>PARSER<US>STATUS<US>ROUTE<US>STDERR" (US = \x1f, so a stderr
+  # capture containing an ordinary space never misaligns the split below)
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$1" "$2"
+  printf '%s\x1f%s\x1f%s\x1f%s\x1f%s' \
+    "$COST_SCAN_STATE" "$COST_SCAN_PARSER" "$COST_SCAN_PARSER_STATUS" \
+    "$COST_SCAN_ROUTE" "$COST_SCAN_PARSER_STDERR"
+}
+
+# (S2-1) fixture self-check: new_stub_parser_path() plants the STUB at the
+# requested name (never the real binary -- both real jq and real python3 are
+# excluded from this PATH's symlink pass, so there is no real one for the
+# stub to compete with), and still resolves everything else cost_scan's
+# degraded-and-ok paths need. A PATH fixture that silently resolved the real
+# parser instead of the stub would make S2-2..S2-5 pass for the wrong
+# reason. [OQ5's discipline]
+S2_SELFCHECK_BODY='#!/usr/bin/env bash
+exit 0'
+S2_SELFCHECK_PATH="$(new_stub_parser_path jq "$S2_SELFCHECK_BODY")"
+S2_JQ_RESOLVED="$(PATH="$S2_SELFCHECK_PATH" bash -c 'command -v jq' 2>/dev/null)"
+expect "(S2-1) new_stub_parser_path resolves the STUB jq (not the real one), python3 stays absent, and bash/awk/mktemp/tr/grep still resolve" \
+  "yes no bash yes, awk yes, mktemp yes, tr yes, grep yes" \
+  "$([ "$S2_JQ_RESOLVED" = "$S2_SELFCHECK_PATH/jq" ] && echo yes || echo no) $(s1_resolves "$S2_SELFCHECK_PATH" python3) bash $(s1_resolves "$S2_SELFCHECK_PATH" bash), awk $(s1_resolves "$S2_SELFCHECK_PATH" awk), mktemp $(s1_resolves "$S2_SELFCHECK_PATH" mktemp), tr $(s1_resolves "$S2_SELFCHECK_PATH" tr), grep $(s1_resolves "$S2_SELFCHECK_PATH" grep)"
+rm -rf "$S2_SELFCHECK_PATH"
+
+# (S2-2) jq stub exits non-zero and writes to stderr -> PARSER=jq,
+# STATUS=<that status>, ROUTE=parser-failed, and the stderr text is present
+# in COST_SCAN_PARSER_STDERR. [PF1, PF2]
+S2_C2_BODY='#!/usr/bin/env bash
+printf "jq-stub-stderr-sentinel: unexpected token near line 4\n" >&2
+exit 3'
+S2_C2_PATH="$(new_stub_parser_path jq "$S2_C2_BODY")"
+S2_C2_FIELDS="$(PATH="$S2_C2_PATH" cost_scan_fields_for_slug "$S1_SLUG_LEDGER" "")"
+IFS=$'\x1f' read -r S2_C2_STATE S2_C2_PARSER S2_C2_STATUS S2_C2_ROUTE S2_C2_STDERR <<< "$S2_C2_FIELDS"
+expect "(S2-2) jq stub exits 3 with stderr -> scan-error/jq/3/parser-failed, stderr captured" \
+  "scan-error jq 3 parser-failed yes" \
+  "$S2_C2_STATE $S2_C2_PARSER $S2_C2_STATUS $S2_C2_ROUTE $(printf '%s' "$S2_C2_STDERR" | grep -q 'jq-stub-stderr-sentinel' && echo yes || echo no)"
+rm -rf "$S2_C2_PATH"
+
+# (S2-3) jq absent (new_stub_parser_path excludes it unconditionally),
+# python3 stub exits 0 with output lacking the marker -> PARSER=python3,
+# STATUS=0, ROUTE=parser-output-unrecognised, captured stderr empty. This is
+# the pairwise row proving parser identity is READ, not assumed to be jq.
+# [PF1, PF2]
+S2_C3_BODY='#!/usr/bin/env bash
+printf "not-the-marker-anyone-is-looking-for\n"
+exit 0'
+S2_C3_PATH="$(new_stub_parser_path python3 "$S2_C3_BODY")"
+S2_C3_FIELDS="$(PATH="$S2_C3_PATH" cost_scan_fields_for_slug "$S1_SLUG_LEDGER" "")"
+IFS=$'\x1f' read -r S2_C3_STATE S2_C3_PARSER S2_C3_STATUS S2_C3_ROUTE S2_C3_STDERR <<< "$S2_C3_FIELDS"
+expect "(S2-3) jq absent, python3 stub exits 0 with unrecognised output -> scan-error/python3/0/parser-output-unrecognised, stderr empty" \
+  "scan-error python3 0 parser-output-unrecognised " \
+  "$S2_C3_STATE $S2_C3_PARSER $S2_C3_STATUS $S2_C3_ROUTE $S2_C3_STDERR"
+rm -rf "$S2_C3_PATH"
+
+# (S2-4) jq stub produces nothing at all on EITHER stream (killed by a
+# signal before it can print anything) -> ROUTE=parser-no-output, with the
+# signal's own (non-zero) status still recorded -- distinguishable from
+# (S2-2)'s parser-failed, whose stderr is non-empty. [PF2]
+S2_C4_BODY='#!/usr/bin/env bash
+kill -KILL $$'
+S2_C4_PATH="$(new_stub_parser_path jq "$S2_C4_BODY")"
+S2_C4_FIELDS="$(PATH="$S2_C4_PATH" cost_scan_fields_for_slug "$S1_SLUG_LEDGER" "")"
+IFS=$'\x1f' read -r S2_C4_STATE S2_C4_PARSER S2_C4_STATUS S2_C4_ROUTE S2_C4_STDERR <<< "$S2_C4_FIELDS"
+expect "(S2-4) jq stub killed by a signal, nothing on either stream -> scan-error/jq/parser-no-output, a non-zero status still recorded, stderr empty" \
+  "scan-error jq parser-no-output yes " \
+  "$S2_C4_STATE $S2_C4_PARSER $S2_C4_ROUTE $([ "$S2_C4_STATUS" != "0" ] && [ -n "$S2_C4_STATUS" ] && echo yes || echo no) $S2_C4_STDERR"
+rm -rf "$S2_C4_PATH"
+
+# (S2-5) boundary, the bound: a stub writing far more than 200 characters to
+# stderr -> COST_SCAN_PARSER_STDERR is ONE LINE (newlines collapsed to
+# spaces) of AT MOST 200 characters, and it is the FIRST 200 -- a truncation
+# that kept the tail would discard the parser's actual error and would show
+# a "chunk59" token here instead of "chunk00". [PF1]
+S2_C5_BODY='#!/usr/bin/env bash
+i=0
+while [ $i -lt 60 ]; do
+  printf "chunk%02d-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n" "$i" >&2
+  i=$((i + 1))
+done
+exit 9'
+S2_C5_PATH="$(new_stub_parser_path jq "$S2_C5_BODY")"
+S2_C5_FIELDS="$(PATH="$S2_C5_PATH" cost_scan_fields_for_slug "$S1_SLUG_LEDGER" "")"
+IFS=$'\x1f' read -r S2_C5_STATE S2_C5_PARSER S2_C5_STATUS S2_C5_ROUTE S2_C5_STDERR <<< "$S2_C5_FIELDS"
+S2_C5_LEN="${#S2_C5_STDERR}"
+case "$S2_C5_STDERR" in *$'\n'*) S2_C5_HAS_NL="yes" ;; *) S2_C5_HAS_NL="no" ;; esac
+case "$S2_C5_STDERR" in chunk00-*) S2_C5_STARTS_FIRST="yes" ;; *) S2_C5_STARTS_FIRST="no" ;; esac
+case "$S2_C5_STDERR" in *chunk59*) S2_C5_HAS_LAST="yes" ;; *) S2_C5_HAS_LAST="no" ;; esac
+expect "(S2-5) state/parser/status/route still reported correctly, and stderr longer than the bound is one line, at most 200 chars, holding the FIRST chunk and never the last" \
+  "scan-error jq 9 parser-failed 200 no yes no" \
+  "$S2_C5_STATE $S2_C5_PARSER $S2_C5_STATUS $S2_C5_ROUTE $S2_C5_LEN $S2_C5_HAS_NL $S2_C5_STARTS_FIRST $S2_C5_HAS_LAST"
+rm -rf "$S2_C5_PATH"
+
+# (S2-6) boundary, the ok path: with the real parser on PATH, an ok scan of
+# the cost-log-fixture publishes all four new variables as EMPTY (PF10), and
+# /cost's own output for that unit is byte-identical to the pre-change
+# library's -- captured via `git show`, not asserted from memory, per this
+# repository's standing discipline. [PF10, PF8]
+S2_OK_FIELDS="$(cost_scan_fields_for_slug "$S1_SLUG_LEDGER" "cost-log-fixture")"
+IFS=$'\x1f' read -r S2_OK_STATE S2_OK_PARSER S2_OK_STATUS S2_OK_ROUTE S2_OK_STDERR <<< "$S2_OK_FIELDS"
+
+S2_PARITY_DIR="$(mktemp -d)"
+mkdir -p "$S2_PARITY_DIR/scripts"
+git -C "$ROOT" show HEAD:scripts/cost-ledger-lib.sh > "$S2_PARITY_DIR/scripts/cost-ledger-lib.sh"
+cp "$SCRIPTS/cost-report.sh" "$S2_PARITY_DIR/scripts/cost-report.sh"
+S2_PRECHANGE_REPORT="$(CLAUDE_PROJECT_DIR="$LOGDIR" bash "$S2_PARITY_DIR/scripts/cost-report.sh" cost-log-fixture)"
+S2_POSTCHANGE_REPORT="$(CLAUDE_PROJECT_DIR="$LOGDIR" bash "$SCRIPTS/cost-report.sh" cost-log-fixture)"
+S2_REPORT_DIFF="$(diff <(printf '%s' "$S2_PRECHANGE_REPORT") <(printf '%s' "$S2_POSTCHANGE_REPORT"))"
+expect "(S2-6) ok scan: all four new variables stay empty (PF10), and /cost's ok output is byte-identical to the pre-change library's for the same fixture (PF10, PF8)" \
+  "ok    " "$S2_OK_STATE $S2_OK_PARSER $S2_OK_STATUS $S2_OK_ROUTE $S2_OK_STDERR$S2_REPORT_DIFF"
+rm -rf "$S2_PARITY_DIR"
+
+# ---------------------------------------------------------------------------
+# cost-log-section-parse-error-on-macos-ci S3 -- both reader surfaces name
+# the route (PF2), a degraded write says so on stderr (PF3), and the `*)`
+# arm stops borrowing scan-error's sentence. Reuses S2's
+# new_stub_parser_path() and this section's own mixed cost-log-fixture.
+
+# (S3-1) degraded body: the section names the parser (jq), its exit status
+# and the route -- and never the stub's own stderr text (DL7/H1). [PF1, PF2, PF8]
+S3_C1_BODY='#!/usr/bin/env bash
+printf "s3-stub-stderr-sentinel-should-never-appear-in-log\n" >&2
+exit 5'
+S3_C1_PATH="$(new_stub_parser_path jq "$S3_C1_BODY")"
+PATH="$S3_C1_PATH" writelog "$LOGDIR" cost-log-fixture
+S3_C1_OUT="$(cat "$LOGFILE")"
+expect "(S3-1) degraded body names the parser, its exit status and the route, never the stub's own stderr text" \
+  "yes yes yes no" \
+  "$(printf '%s' "$S3_C1_OUT" | grep -q 'Parser: jq, exit status 5' && echo yes || echo no) $(printf '%s' "$S3_C1_OUT" | grep -qi 'route: parser-failed' && echo yes || echo no) $(printf '%s' "$S3_C1_OUT" | grep -q 'Could not read the cost ledger (parse error)' && echo yes || echo no) $(printf '%s' "$S3_C1_OUT" | grep -q 's3-stub-stderr-sentinel' && echo yes || echo no)"
+
+# (S3-2) PF3, degraded: writelog_stderr on that same run names the slug and
+# the route, and the write still exits 0. [PF3]
+S3_C2_ERR="$(PATH="$S3_C1_PATH" writelog_stderr "$LOGDIR" cost-log-fixture)"
+S3_C2_EXIT="$(PATH="$S3_C1_PATH" writelog_exit "$LOGDIR" cost-log-fixture)"
+expect "(S3-2) PF3 degraded: stderr names the slug and the route, exit still 0" \
+  "yes yes 0" \
+  "$(printf '%s' "$S3_C2_ERR" | grep -q 'cost-log-fixture' && echo yes || echo no) $(printf '%s' "$S3_C2_ERR" | grep -q 'parser-failed' && echo yes || echo no) $S3_C2_EXIT"
+rm -rf "$S3_C1_PATH"
+
+# (S3-3) PF3/PF10, ok: writelog_stderr is EMPTY, exit is 0, and the ok
+# section is byte-identical to the pre-change script's rendering of the
+# same fixture (git show, not asserted from memory). [PF3, PF10]
+S3_PRECHANGE_DIR="$(mktemp -d)"
+mkdir -p "$S3_PRECHANGE_DIR/scripts"
+git -C "$ROOT" show HEAD:scripts/write-cost-log-section.sh > "$S3_PRECHANGE_DIR/scripts/write-cost-log-section.sh"
+cp "$SCRIPTS/cost-ledger-lib.sh" "$S3_PRECHANGE_DIR/scripts/cost-ledger-lib.sh"
+CLAUDE_PROJECT_DIR="$LOGDIR" bash "$S3_PRECHANGE_DIR/scripts/write-cost-log-section.sh" cost-log-fixture >/dev/null 2>&1
+S3_PRECHANGE_OK="$(cat "$LOGFILE")"
+rm -rf "$S3_PRECHANGE_DIR"
+writelog "$LOGDIR" cost-log-fixture
+S3_POSTCHANGE_OK="$(cat "$LOGFILE")"
+S3_OK_ERR="$(writelog_stderr "$LOGDIR" cost-log-fixture)"
+S3_OK_EXIT="$(writelog_exit "$LOGDIR" cost-log-fixture)"
+expect "(S3-3) ok write: silent stderr, exit 0, section byte-identical to the pre-change script's rendering" \
+  "yes 0 " \
+  "$([ -z "$S3_OK_ERR" ] && echo yes || echo no) $S3_OK_EXIT $(diff <(printf '%s' "$S3_PRECHANGE_OK") <(printf '%s' "$S3_POSTCHANGE_OK"))"
+
+# (S3-4) the `*)` arm: a stripped copy that still borrows scan-error's own
+# sentence is caught by this check (proves it can fail), and the real
+# file's `*)` arm calls a DIFFERENT body function -- read, not forced: no
+# input can produce an unrecognised state while the library and this
+# script agree. [PF2]
+s3_arm_calls_scan_error() { # $1 file -> "yes" if the *) arm's body matches scan-error's arm verbatim
+  local f="$1" scan_line arm_line
+  scan_line="$(grep -E '^ *scan-error\)' "$f" | sed -E 's/^ *scan-error\) *//')"
+  arm_line="$(grep -E '^ *\*\)' "$f" | sed -E 's/^ *\*\) *//')"
+  [ -n "$scan_line" ] && [ "$scan_line" = "$arm_line" ] && echo yes || echo no
+}
+S3_STRIPPED="$(mktemp)"
+sed 's/print_unrecognised_state_body ;;/print_scan_error_body ;;/' "$SCRIPTS/write-cost-log-section.sh" > "$S3_STRIPPED"
+expect "(S3-4) stripped copy (still borrowing scan-error's sentence) is caught, and the real file's *) arm calls a DIFFERENT body function" \
+  "yes no" "$(s3_arm_calls_scan_error "$S3_STRIPPED") $(s3_arm_calls_scan_error "$SCRIPTS/write-cost-log-section.sh")"
+rm -f "$S3_STRIPPED"
+
+# (S3-5) /cost's degraded read names the route, in the same clause shape,
+# and its ok output for the fixture is byte-identical to the pre-change
+# script's (git show, not asserted from memory). [PF2, PF10]
+S3_C5_BODY='#!/usr/bin/env bash
+printf "s3-cost-report-stub-stderr\n" >&2
+exit 4'
+S3_C5_PATH="$(new_stub_parser_path jq "$S3_C5_BODY")"
+S3_C5_DEGRADED_OUT="$(CLAUDE_PROJECT_DIR="$LOGDIR" PATH="$S3_C5_PATH" bash "$SCRIPTS/cost-report.sh" cost-log-fixture)"
+S3_PRECHANGE_REPORT_DIR="$(mktemp -d)"
+mkdir -p "$S3_PRECHANGE_REPORT_DIR/scripts"
+git -C "$ROOT" show HEAD:scripts/cost-report.sh > "$S3_PRECHANGE_REPORT_DIR/scripts/cost-report.sh"
+cp "$SCRIPTS/cost-ledger-lib.sh" "$S3_PRECHANGE_REPORT_DIR/scripts/cost-ledger-lib.sh"
+S3_PRECHANGE_REPORT_OK="$(CLAUDE_PROJECT_DIR="$LOGDIR" bash "$S3_PRECHANGE_REPORT_DIR/scripts/cost-report.sh" cost-log-fixture)"
+S3_POSTCHANGE_REPORT_OK="$(CLAUDE_PROJECT_DIR="$LOGDIR" bash "$SCRIPTS/cost-report.sh" cost-log-fixture)"
+rm -rf "$S3_C5_PATH" "$S3_PRECHANGE_REPORT_DIR"
+expect "(S3-5) /cost's degraded read names the route, and its ok output for the fixture is byte-identical to the pre-change script's" \
+  "yes " \
+  "$(printf '%s' "$S3_C5_DEGRADED_OUT" | grep -q 'route: parser-failed' && echo yes || echo no) $(diff <(printf '%s' "$S3_PRECHANGE_REPORT_OK") <(printf '%s' "$S3_POSTCHANGE_REPORT_OK"))"
+
+# ---------------------------------------------------------------------------
+# cost-log-section-parse-error-on-macos-ci S4 -- the harness can now tell
+# degraded-correctly from degraded-wrongly (PF4), and a forced degraded
+# write's evidence answers PF6's three questions from the run's own output
+# (PF5, PF6). Reuses S2's new_stub_parser_path() and cost_scan_fields_for_slug().
+
+# (S4-2) PF4, degraded-correctly, unforced-route branch (OQ5): READ FIRST
+# (scripts/cost-ledger-lib.sh's jq/python3 programs, both confirmed above)
+# -- unrecognised lines are COUNTED (COST_N_SKIPPED), never failed on, so
+# no portable ledger content makes both parsers exit non-zero. No
+# input-unparseable route is forced here; the honest alternative is
+# asserted instead: a ledger of nothing but unrecognised lines still reads
+# ok, with a skipped count and no fabricated total, section still written,
+# exit still 0.
+s4_skipped_count() { # $1 ledger $2 slug (PATH set by caller)
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$1" "$2"
+  printf '%s' "$COST_N_SKIPPED"
+}
+S4_GARBAGE_DIR="$(mktemp -d)"
+mkdir -p "$S4_GARBAGE_DIR/.claude" "$S4_GARBAGE_DIR/docs/loop/s4-garbage"
+printf '# Log — s4-garbage\n\n## G0 — Spec\nnotes\n' > "$S4_GARBAGE_DIR/docs/loop/s4-garbage/log.md"
+{
+  printf '%s\n' 'this is not json at all'
+  printf '%s\n' '{"not":"a recognised shape"}'
+  printf '%s\n' '{"event":"something_else","slug":"s4-garbage"}'
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"g1","slug":"s4-garbage","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"g1","slug":"s4-garbage","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$S4_GARBAGE_DIR/.claude/loop-cost.jsonl"
+S4_GARBAGE_LEDGER="$S4_GARBAGE_DIR/.claude/loop-cost.jsonl"
+S4_GARBAGE_FIELDS="$(cost_scan_fields_for_slug "$S4_GARBAGE_LEDGER" "s4-garbage")"
+IFS=$'\x1f' read -r S4_G_STATE S4_G_PARSER S4_G_STATUS S4_G_ROUTE S4_G_STDERR <<< "$S4_GARBAGE_FIELDS"
+S4_G_SKIPPED="$(s4_skipped_count "$S4_GARBAGE_LEDGER" "s4-garbage")"
+S4_G_EXIT="$(writelog_exit "$S4_GARBAGE_DIR" s4-garbage)"
+S4_G_SECTION="$(grep -cx '## Cost' "$S4_GARBAGE_DIR/docs/loop/s4-garbage/log.md")"
+S4_G_NO_TOTAL="$(grep -q "nothing about this unit's token cost is observable" "$S4_GARBAGE_DIR/docs/loop/s4-garbage/log.md" && echo yes || echo no)"
+expect "(S4-2) PF4/OQ5: three unrecognised lines are counted as skipped (not failed on), the recognised record still reads ok with the four route variables empty (PF10), no fabricated total, section still written, exit 0" \
+  "ok     3 1 0 yes" \
+  "$S4_G_STATE $S4_G_PARSER $S4_G_STATUS $S4_G_ROUTE $S4_G_STDERR $S4_G_SKIPPED $S4_G_SECTION $S4_G_EXIT $S4_G_NO_TOTAL"
+rm -rf "$S4_GARBAGE_DIR"
+
+# (S4-3) PF4, degraded-wrongly is detectable: over the valid mixed fixture,
+# neither run's output contains the degraded sentence -- this is the case
+# that would have caught the c32daf0 sighting as a degradation rather than
+# as a bare byte-diff.
+expect "(S4-3) PF4: over the valid mixed fixture, neither run's output contains the degraded sentence" \
+  "no no" \
+  "$(printf '%s' "$LOG_OUT1" | grep -qi 'parse error' && echo yes || echo no) $(printf '%s' "$LOG_OUT2" | grep -qi 'parse error' && echo yes || echo no)"
+
+# (S4-4) PF5/PF6: for a forced degraded write, the harness's captured
+# stderr TOGETHER WITH the run's own body (both now readable -- S4's
+# writelog_run capture, S3's body sentence) answer all three of PF6's
+# questions: which parser ran, what it returned, which route produced the
+# state -- from the run's own output alone, no re-run and no machine access.
+S4_EVID_BODY='#!/usr/bin/env bash
+printf "s4-evidence-stub-stderr\n" >&2
+exit 6'
+S4_EVID_PATH="$(new_stub_parser_path jq "$S4_EVID_BODY")"
+PATH="$S4_EVID_PATH" writelog "$LOGDIR" cost-log-fixture
+S4_EVID_COMBINED="$WRITELOG_LAST_STDERR
+$(cat "$LOGFILE")"
+expect "(S4-4) PF5/PF6: captured stderr plus the run's own body together name the parser, its exit status, and the route" \
+  "yes yes yes" \
+  "$(printf '%s' "$S4_EVID_COMBINED" | grep -q 'Parser: jq' && echo yes || echo no) $(printf '%s' "$S4_EVID_COMBINED" | grep -q 'exit status 6' && echo yes || echo no) $(printf '%s' "$S4_EVID_COMBINED" | grep -q 'parser-failed' && echo yes || echo no)"
+rm -rf "$S4_EVID_PATH"
+
+# (S4-5) reading 1 / DL7-H1 under instrumentation: a stub parser whose
+# stderr carries a unique token produces a degraded section, and that
+# token is found NOWHERE under this fixture's docs/loop -- the case that
+# stops a future instrumentation change quietly breaking DL7/H1.
+S4_C5_BODY='#!/usr/bin/env bash
+printf "s4-unique-ledger-content-token-9f8e7d\n" >&2
+exit 8'
+S4_C5_PATH="$(new_stub_parser_path jq "$S4_C5_BODY")"
+PATH="$S4_C5_PATH" writelog "$LOGDIR" cost-log-fixture
+S4_C5_SECTION="$(grep -cx '## Cost' "$LOGFILE")"
+S4_C5_FOUND="$(grep -rl 's4-unique-ledger-content-token-9f8e7d' "$LOGDIR/docs/loop" 2>/dev/null | wc -l | tr -d ' ')"
+expect "(S4-5) PF1/PF8: a stub's unique stderr token produces a degraded section but is found nowhere under docs/loop (DL7/H1)" \
+  "1 0" "$S4_C5_SECTION $S4_C5_FOUND"
+rm -rf "$S4_C5_PATH"
 
 rm -rf "$LOGDIR" "$NOSLUGDIR"
 

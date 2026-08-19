@@ -113,6 +113,30 @@ print_no_parser_body() {
 print_scan_error_body() {
   printf 'Could not read the cost ledger (parse error). Nothing recorded for this unit -- not\n'
   printf 'evidence it was free.\n'
+  # cost-log-section-parse-error-on-macos-ci S3 (PF1, PF2): names which
+  # parser was selected, its exit status, and the route that produced this
+  # state -- the three facts S2 publishes. NEVER the parser's own captured
+  # stderr text (reading 1): jq and python3 both quote the offending input
+  # in their own error messages, and DL7/H1 forbid ledger content anywhere
+  # under docs/loop/. That text exists only in COST_SCAN_PARSER_STDERR,
+  # which this function never reads.
+  printf 'Parser: %s, exit status %s, route: %s. The parser wrote more to its own stderr on\n' \
+    "${COST_SCAN_PARSER:-unavailable}" "${COST_SCAN_PARSER_STATUS:-unavailable}" "${COST_SCAN_ROUTE:-unavailable}"
+  printf 'this run -- never repeated here, and never written under docs/loop/.\n'
+}
+
+# S3's own body for a state neither this script nor a person recognises --
+# no longer print_scan_error_body's sentence verbatim (today's `*)` arm),
+# which made "the scan genuinely failed" and "the caller does not
+# understand its own answer" indistinguishable to every reader. Named
+# unreachable by construction (the library and this script agree on every
+# value COST_SCAN_STATE can hold), so this exists purely so a future
+# divergence between the two says what it is rather than lying as a parse
+# error.
+print_unrecognised_state_body() {
+  printf 'The cost scan returned a state this script does not recognise ("%s"). Nothing recorded\n' \
+    "${COST_SCAN_STATE:-<unset>}"
+  printf 'for this unit -- not evidence it was free, and not the same thing as a parse error.\n'
 }
 
 build_section_body() {
@@ -123,7 +147,7 @@ build_section_body() {
     no-parser) print_no_parser_body ;;
     scan-error) print_scan_error_body ;;
     ok) print_ok_body ;;
-    *) print_scan_error_body ;;
+    *) print_unrecognised_state_body ;;
   esac
 }
 
@@ -175,5 +199,22 @@ awk -v newfile="$NEWSECTION" '
     }
   }
 ' "$LOG" > "$TMP_OUT" && mv "$TMP_OUT" "$LOG"
+
+# cost-log-section-parse-error-on-macos-ci S3 (PF3): a degraded write says
+# so on stderr, naming the slug and (when the scan has one to name) the
+# route -- the moment nobody was told about before this slice (spec.md's
+# Problem, item 1). An "ok" write stays completely silent here: no byte,
+# not even a "wrote section" line (PF10). The route is only ever non-empty
+# for scan-error (S2's three-way split); for the other four degraded
+# states the state name IS the whole story, so it stands in for the route.
+if [ "$COST_SCAN_STATE" != "ok" ]; then
+  if [ -n "${COST_SCAN_ROUTE:-}" ]; then
+    printf 'Cost section for "%s" degraded while writing -- state: %s, route: %s. See docs/loop/%s/log.md.\n' \
+      "$SLUG" "$COST_SCAN_STATE" "$COST_SCAN_ROUTE" "$SLUG" >&2
+  else
+    printf 'Cost section for "%s" degraded while writing -- state: %s. See docs/loop/%s/log.md.\n' \
+      "$SLUG" "$COST_SCAN_STATE" "$SLUG" >&2
+  fi
+fi
 
 exit 0

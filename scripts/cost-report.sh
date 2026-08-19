@@ -493,7 +493,7 @@ case "$COST_SCAN_STATE" in
   empty) print_empty ;;
   no-slug) print_no_slug "$SLUG" ;;
   no-parser) printf 'Cannot read the cost ledger: neither jq nor python3 is on PATH. Install either one to use /cost.\n' ;;
-  scan-error) printf 'Could not read the cost ledger (parse error). Nothing is reported, rather than a partial or wrong total.\n' ;;
+  scan-error) printf 'Could not read the cost ledger (parse error -- parser: %s, exit status: %s, route: %s). Nothing is reported, rather than a partial or wrong total.\n' "${COST_SCAN_PARSER:-unavailable}" "${COST_SCAN_PARSER_STATUS:-unavailable}" "${COST_SCAN_ROUTE:-unavailable}" ;;
   ok)
     print_coverage_and_tokens
     printf '\n'
