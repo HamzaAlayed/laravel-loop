@@ -76,12 +76,19 @@
 # oldest-first eviction via a `mkdir`-based mutex (no flock -- absent on
 # macOS by default, and this repo is bash + coreutils only).
 #
-# A Ctrl-C at this prompt before this loop's own rmdir runs leaves
-# .claude/loop-cost-evict.lock behind exactly as it would in
-# record-cost-event.sh, and from then on the cap is not enforced again in
-# either writer for as long as that directory exists -- the remedy today is
-# a human removing .claude/loop-cost-evict.lock by hand, once no run is
-# active.
+# A holder killed by a CATCHABLE signal -- INT (a Ctrl-C at this prompt),
+# TERM, or HUP -- releases the lock itself before dying (S3): it traps
+# those three, checks that it is the one that created
+# .claude/loop-cost-evict.lock, and rmdir's it before exiting 0, the same
+# hygiene as record-cost-event.sh's. A holder that dies by an UNCATCHABLE
+# route instead -- KILL, an OOM kill, a power loss, or the machine-sleep
+# class this repository has actually recorded (docs/loop/conventions.md)
+# and has not established to be in the catchable class -- still leaves the
+# lock behind exactly as it would in record-cost-event.sh, and from then on
+# the cap is not enforced again in either writer for as long as that
+# directory exists. This is not fixed, only narrowed to the kill classes a
+# signal handler cannot see: the remedy today is still a human removing
+# .claude/loop-cost-evict.lock by hand, once no run is active.
 #
 # Zero new dependency: jq -> python3 -> a safe no-op (no parser -> refuse,
 # nothing written). Exits 0 on every path, including its own internal
@@ -104,6 +111,28 @@ OUT="$DIR/loop-cost.jsonl"
 FINISHED_DIR="$DIR/loop-cost-finished"
 RECOVERED_DIR="$FINISHED_DIR/_recovered"
 EVICT_LOCK="$DIR/loop-cost-evict.lock"
+
+# Ownership flag + catchable-signal release (S3, spec.md SL3/SL5/SL8) --
+# identical in shape to record-cost-event.sh's, kept independent on purpose
+# (see the no-shared-helper note above): set the instant THIS process's own
+# mkdir "$EVICT_LOCK" succeeds, cleared the instant this process's own
+# rmdir runs, so the handler is a no-op in any process that never became
+# the lock's holder -- including one still polling for it to clear, or one
+# that lost the race to mkdir it. No identity is ever written INSIDE the
+# lock directory (rmdir fails on a non-empty directory, which would break
+# every release below) -- this flag lives only in this process's own
+# memory. No EXIT trap: an unconditional release on exit could rmdir a
+# lock a DIFFERENT process acquired in the window after this one already
+# released its own.
+_evict_lock_owned=0
+_release_evict_lock_on_signal() {
+  if [ "$_evict_lock_owned" -eq 1 ]; then
+    rmdir "$EVICT_LOCK" 2>/dev/null
+    _evict_lock_owned=0
+  fi
+  exit 0
+}
+trap _release_evict_lock_on_signal INT TERM HUP
 
 # Bound parser (same shape as record-cost-event.sh's and
 # enforce-refine-cap.sh's CAP parser): default 5000, non-numeric falls back
@@ -235,6 +264,7 @@ append_and_evict() {
   printf '%s\n' "$line" >> "$OUT" 2>/dev/null
 
   if mkdir "$EVICT_LOCK" 2>/dev/null; then
+    _evict_lock_owned=1
     local attempt=0 count tmp
     while [ "$attempt" -lt 5 ]; do
       attempt=$((attempt + 1))
@@ -249,6 +279,7 @@ append_and_evict() {
       mv -f "$tmp" "$OUT" 2>/dev/null || rm -f "$tmp"
     done
     rmdir "$EVICT_LOCK" 2>/dev/null
+    _evict_lock_owned=0
   fi
   return 0
 }

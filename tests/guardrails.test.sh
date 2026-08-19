@@ -620,6 +620,178 @@ rm -f "$ATCAP_SNAPSHOT"
 expect "arrival trim boundary: ledger already at cap, an arrival that appends nothing is a byte-identical no-op" "$ATCAP_CAP yes 0 0" \
   "$ATCAP_COUNT_BEFORE $ATCAP_IDENTICAL $ATCAP_TMP_LEFTOVER $ATCAP_EXIT"
 
+# -- (k), (l), (m): trap hygiene (S3, spec.md SL3/SL5/SL8). All three
+# deliver the signal via a PLAIN, non-negative `kill -TERM "$TPID"` where
+# $TPID is `$!` of a pipeline BACKGROUNDED DIRECTLY (never wrapped in an
+# extra `bash -c` or function-call layer, and never addressed by a
+# negative/group pid) -- the only construction found that (a) reliably
+# lands the signal ON the target `bash record-cost-event.sh` process
+# itself rather than an orphaning wrapper, and (b) leaves the true target
+# as the exact process `wait` reports on, so its own real exit status is
+# observable. TERM stands in for the signal class here rather than INT:
+# this sandboxed, tty-less harness cannot reliably deliver SIGINT to a
+# freshly-exec'd bash script (a documented bash/POSIX startup quirk -- a
+# non-interactive shell with no controlling terminal decides for itself
+# that it is "backgrounded" and ignores SIGINT/SIGQUIT, regardless of what
+# disposition its job-control parent already arranged, and that ignore
+# cannot be undone by `trap` from inside a non-interactive shell either).
+# TERM is not subject to that quirk and drives the IDENTICAL handler
+# function both writers install for INT, TERM, and HUP together -- there
+# is no per-signal branch, so this exercises the same code INT/HUP would.
+
+# -- (k) hook writer, killed mid-trim by TERM: a stub `mv` on PATH sleeps
+# 3s before calling the real one, holding converge_ledger() inside the
+# lock long enough to poll for its appearance and terminate the exact
+# process holding it.
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
+S3K_CAP=15
+mkdir -p "$COSTDIR/.claude"
+n=1; while [ "$n" -le $((S3K_CAP + 10)) ]; do printf '{"seed":%d}\n' "$n" >> "$LEDGER"; n=$((n + 1)); done
+S3K_LOCK="$COSTDIR/.claude/loop-cost-evict.lock"
+S3K_BIN="$(mktemp -d)"
+S3K_REALMV="$(command -v mv)"
+cat > "$S3K_BIN/mv" <<EOF
+#!/bin/sh
+sleep 3
+exec "$S3K_REALMV" "\$@"
+EOF
+chmod +x "$S3K_BIN/mv"
+S3K_JSON="$(finish_json loop-build "toolu-s3k-1" "d" "" "sess-s3k-1" completed 1 1 "")"
+S3K_OUT="$(mktemp)"
+set -m
+printf '%s' "$S3K_JSON" | \
+  PATH="$S3K_BIN:$PATH" CLAUDE_PROJECT_DIR="$COSTDIR" CLAUDE_PLUGIN_ROOT="$ROOT" LARAVEL_LOOP_COST_MAX_LINES=$S3K_CAP \
+  bash "$SCRIPTS/record-cost-event.sh" >"$S3K_OUT" 2>&1 &
+S3K_TPID=$!
+S3K_BOUND=5
+S3K_START="$SECONDS"
+S3K_LOCK_SEEN=no
+while [ $((SECONDS - S3K_START)) -lt "$S3K_BOUND" ]; do
+  if [ -d "$S3K_LOCK" ]; then
+    S3K_LOCK_SEEN=yes
+    break
+  fi
+  sleep 0.02
+done
+kill -TERM "$S3K_TPID" 2>/dev/null
+S3K_START2="$SECONDS"
+while kill -0 "$S3K_TPID" 2>/dev/null; do
+  if [ $((SECONDS - S3K_START2)) -ge "$S3K_BOUND" ]; then
+    kill -KILL "$S3K_TPID" 2>/dev/null
+    break
+  fi
+  sleep 0.05
+done
+wait "$S3K_TPID" 2>/dev/null
+S3K_EXIT=$?
+set +m
+S3K_LOCK_GONE=$([ -d "$S3K_LOCK" ] && echo no || echo yes)
+expect "S3 (k): hook writer killed mid-trim by TERM releases the lock; the ledger stays complete, parseable, and the runner exits 0" \
+  "yes yes yes 0" \
+  "$S3K_LOCK_SEEN $S3K_LOCK_GONE $(valid_jsonl_lines "$LEDGER") $S3K_EXIT"
+rm -rf "$S3K_BIN" "$S3K_OUT"
+
+# -- (l) record-recovered-cost.sh, killed mid-trim by TERM: the interruption
+# class this CLI actually lives in is a human at a prompt (INT), and this is
+# the one case (h)-style construction can never reach through the hook
+# writer -- driven through the CLI's own arguments, with the same
+# stub-`mv` shape, asserting the same three things.
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
+S3L_CAP=15
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3l-1","slug":"s3l-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3l-1","slug":"s3l-fixture","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$LEDGER"
+n=1; while [ "$n" -le $((S3L_CAP + 10)) ]; do printf '{"seed":%d}\n' "$n" >> "$LEDGER"; n=$((n + 1)); done
+S3L_LOCK="$COSTDIR/.claude/loop-cost-evict.lock"
+S3L_BIN="$(mktemp -d)"
+S3L_REALMV="$(command -v mv)"
+cat > "$S3L_BIN/mv" <<EOF
+#!/bin/sh
+sleep 3
+exec "$S3L_REALMV" "\$@"
+EOF
+chmod +x "$S3L_BIN/mv"
+S3L_OUT="$(mktemp)"
+set -m
+PATH="$S3L_BIN:$PATH" CLAUDE_PROJECT_DIR="$COSTDIR" LARAVEL_LOOP_COST_MAX_LINES=$S3L_CAP \
+  bash "$SCRIPTS/record-recovered-cost.sh" --invocation-id s3l-1 --total-tokens 123 >"$S3L_OUT" 2>&1 &
+S3L_TPID=$!
+S3L_BOUND=5
+S3L_START="$SECONDS"
+S3L_LOCK_SEEN=no
+while [ $((SECONDS - S3L_START)) -lt "$S3L_BOUND" ]; do
+  if [ -d "$S3L_LOCK" ]; then
+    S3L_LOCK_SEEN=yes
+    break
+  fi
+  sleep 0.02
+done
+kill -TERM "$S3L_TPID" 2>/dev/null
+S3L_START2="$SECONDS"
+while kill -0 "$S3L_TPID" 2>/dev/null; do
+  if [ $((SECONDS - S3L_START2)) -ge "$S3L_BOUND" ]; then
+    kill -KILL "$S3L_TPID" 2>/dev/null
+    break
+  fi
+  sleep 0.05
+done
+wait "$S3L_TPID" 2>/dev/null
+S3L_EXIT=$?
+set +m
+S3L_LOCK_GONE=$([ -d "$S3L_LOCK" ] && echo no || echo yes)
+expect "S3 (l): record-recovered-cost.sh killed mid-trim by TERM (the same handler INT -- a Ctrl-C at its own prompt -- would trigger) releases the lock; the ledger stays complete, parseable, and the runner exits 0" \
+  "yes yes yes 0" \
+  "$S3L_LOCK_SEEN $S3L_LOCK_GONE $(valid_jsonl_lines "$LEDGER") $S3L_EXIT"
+rm -rf "$S3L_BIN" "$S3L_OUT"
+
+# -- (m) a handler in a process that never acquired the lock releases
+# NOTHING: with the lock already held by another party, TERM a real hook
+# invocation while it is polling/appending. Passes today trivially -- there
+# is no handler yet to fire wrongly -- and is kept as the regression guard
+# for (k) and (l): a handler that `rmdir`s unconditionally, rather than
+# consulting the ownership flag, would fail this case once it exists. A
+# stub `sleep` on PATH turns L7's fixed 5x0.02s poll into ~5s (test-only;
+# the script's own poll count and interval are unchanged), giving a
+# deterministic window to land the signal mid-poll instead of racing a
+# 100ms one.
+rm -f "$LEDGER"
+rm -rf "${COSTDIR:?}/.claude/loop-cost-finished" "${COSTDIR:?}/.claude/loop-cost-evict.lock"
+S3M_LOCK="$COSTDIR/.claude/loop-cost-evict.lock"
+mkdir -p "$COSTDIR/.claude"
+mkdir "$S3M_LOCK"
+S3M_BIN="$(mktemp -d)"
+cat > "$S3M_BIN/sleep" <<'EOF'
+#!/bin/sh
+exec /bin/sleep 1
+EOF
+chmod +x "$S3M_BIN/sleep"
+S3M_JSON="$(finish_json loop-build "toolu-s3m-1" "d" "" "sess-s3m-1" completed 1 1 "")"
+S3M_OUT="$(mktemp)"
+set -m
+printf '%s' "$S3M_JSON" | \
+  PATH="$S3M_BIN:$PATH" CLAUDE_PROJECT_DIR="$COSTDIR" CLAUDE_PLUGIN_ROOT="$ROOT" \
+  bash "$SCRIPTS/record-cost-event.sh" >"$S3M_OUT" 2>&1 &
+S3M_TPID=$!
+sleep 0.3
+kill -TERM "$S3M_TPID" 2>/dev/null
+S3M_START="$SECONDS"
+while kill -0 "$S3M_TPID" 2>/dev/null; do
+  if [ $((SECONDS - S3M_START)) -ge 5 ]; then
+    kill -KILL "$S3M_TPID" 2>/dev/null
+    break
+  fi
+  sleep 0.05
+done
+wait "$S3M_TPID" 2>/dev/null
+set +m
+expect "S3 (m): a process that never acquired the lock, killed the same way, releases nothing -- another holder's lock survives untouched" \
+  "yes" "$([ -d "$S3M_LOCK" ] && echo yes || echo no)"
+rmdir "$S3M_LOCK" 2>/dev/null
+rm -rf "$S3M_BIN" "$S3M_OUT"
+
 # -- (c) `.claude/loop-cost.jsonl` is git-ignored, and a fixture repo shows no
 # ledger (or its S3/S4 sidecar state) in `git status` after events (H4).
 GITFIX="$(mktemp -d)"
