@@ -114,6 +114,15 @@
 # strongest property available while L7 stands, and the limit ships with
 # the promise.
 #
+# An interrupted holder leaves this exposed, because nothing above releases
+# the lock on its own: if the invocation currently trimming the file never
+# reaches its own rmdir, .claude/loop-cost-evict.lock is left behind and
+# nothing in this script ever removes it. Every later invocation then polls
+# the lock, gives up when it is still held, and appends anyway (L7) without
+# ever converging -- so the cap is not enforced again for as long as that
+# directory exists. The remedy today is a human removing
+# .claude/loop-cost-evict.lock by hand, once no run is active.
+#
 # Eviction itself never truncates the file to empty, not even transiently
 # (H3): the trimmed content is written to a fresh temp file first (`tail -n
 # $MAX_LINES`, always non-empty whenever eviction runs at all) and only then
