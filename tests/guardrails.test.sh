@@ -4893,35 +4893,64 @@ expect "S1: an orphaned lock's effect on the cap, the remedy, and the lock's pat
 
 # S1 (spec.md SL1) -- the claim-word guard: no SENTENCE anywhere in the
 # pinned surfaces below names the lock (or "orphan"/"stale lock") and also
-# calls this leak fixed, closed, resolved, or prevented. Sentence-scoped
-# (flatten each file, split on '. '), never file-scoped, because a
-# file-wide grep for "fixed" matches half the repository and would be red
-# for the wrong reason. A sentence naming all four words together is this
-# unit's own definition of the guard (spec.md/slices.md say the rule in
-# those exact words) and is not itself a claim, so it is excluded; a
-# sentence built out of a negation ("never", "nothing", "not", "no",
-# "cannot", "must not") is a denial rather than an assertion and is
-# excluded too -- what remains is a bare, unhedged claim, which is the
-# thing this case exists to catch.
+# makes a bare, ungoverned claim that this leak is fixed, closed, resolved,
+# or prevented. Sentence-scoped (flatten each file, split on '. '), never
+# file-scoped, because a file-wide grep for "fixed" matches half the
+# repository and would be red for the wrong reason.
+#
+# Two exclusions, both narrow on purpose, replacing an earlier design that
+# was too broad in both directions (caught in review before this landed):
+#   - spec.md and slices.md are excluded BY PATH, not by content. Both
+#     files define this very rule in the words it forbids ("...also
+#     contains fixed / closed / resolved / prevented"), which is a property
+#     of those two documents, not a property of sentences that happen to
+#     name all four words -- a count-based exemption keyed on "all four
+#     present" is an exemption an author controls, which is the wrong
+#     shape for a guard.
+#   - A negation EXEMPTS A CLAIM WORD ONLY WHEN IT GOVERNS THAT WORD --
+#     within 3 tokens immediately before it ("not fixed", "never closed",
+#     "no longer prevented", "cannot be resolved"). A negation anywhere
+#     else in the same sentence does not exempt: "fixed, so no further
+#     action is required" is a bare claim with an unrelated, later
+#     negation, and it is the single most likely way a real overclaim gets
+#     written -- a sentence-wide negation check would let it through.
+is_negation_token() {
+  case "$1" in
+    never|not|no|cannot|isn|doesn|wasn|hasn|won|aren|weren|cant|nor) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 claim_word_guard_check() {
-  local bad=0 f flat sentence norm padded hits
+  local bad=0 f base flat sentence norm i n w
   local files="$ROOT/scripts/record-cost-event.sh $ROOT/scripts/record-recovered-cost.sh $ROOT/scripts/cost-report.sh $ROOT/README.md $ROOT/docs/loop/decisions.md"
   for f in $files "$ROOT"/docs/loop/stale-evict-lock-permanently-defeats-the-cap/*.md; do
     [ -f "$f" ] || continue
+    base="$(basename "$f")"
+    case "$base" in
+      spec.md|slices.md) continue ;;
+    esac
     flat="$(tr '\n' ' ' < "$f" | tr -s ' ')"
     while IFS= read -r sentence; do
       [ -z "$sentence" ] && continue
       if printf '%s' "$sentence" | grep -qiE 'loop-cost-evict\.lock|orphan|stale lock'; then
         norm="$(printf '%s' "$sentence" | tr 'A-Z' 'a-z' | tr -s '.,;:!?()"'"'"'\`*_/-' ' ' | tr -s ' ')"
-        padded=" $norm "
-        hits=0
-        case "$padded" in *' fixed '*) hits=$((hits + 1)) ;; esac
-        case "$padded" in *' closed '*) hits=$((hits + 1)) ;; esac
-        case "$padded" in *' resolved '*) hits=$((hits + 1)) ;; esac
-        case "$padded" in *' prevented '*) hits=$((hits + 1)) ;; esac
-        if [ "$hits" -gt 0 ] && [ "$hits" -lt 4 ]; then
-          printf '%s' "$padded" | grep -qE ' (never|nothing|no|not|cannot|isn t|doesn t|must not) ' || bad=1
-        fi
+        # shellcheck disable=SC2206
+        local wordsarr=($norm)
+        n=${#wordsarr[@]}
+        for ((i = 0; i < n; i++)); do
+          w="${wordsarr[$i]}"
+          case "$w" in
+            fixed|closed|resolved|prevented)
+              local governed=0 j back
+              for j in 1 2 3; do
+                back=$((i - j))
+                [ "$back" -lt 0 ] && break
+                is_negation_token "${wordsarr[$back]}" && { governed=1; break; }
+              done
+              [ "$governed" -eq 0 ] && bad=1
+              ;;
+          esac
+        done
       fi
     done <<SENTENCES
 $(printf '%s' "$flat" | awk 'BEGIN{RS="\\. "}{print}')
@@ -4929,7 +4958,7 @@ SENTENCES
   done
   echo "$bad"
 }
-expect "S1: no sentence anywhere in the pinned surfaces names the lock/orphan and also calls the leak fixed, closed, resolved, or prevented" \
+expect "S1: no sentence anywhere in the pinned surfaces names the lock/orphan and makes a bare, ungoverned claim that the leak is fixed, closed, resolved, or prevented" \
   "0" "$(claim_word_guard_check)"
 
 # ---------------------------------------------------------------------------
