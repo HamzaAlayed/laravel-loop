@@ -76,6 +76,13 @@
 # oldest-first eviction via a `mkdir`-based mutex (no flock -- absent on
 # macOS by default, and this repo is bash + coreutils only).
 #
+# A Ctrl-C at this prompt before this loop's own rmdir runs leaves
+# .claude/loop-cost-evict.lock behind exactly as it would in
+# record-cost-event.sh, and from then on the cap is not enforced again in
+# either writer for as long as that directory exists -- the remedy today is
+# a human removing .claude/loop-cost-evict.lock by hand, once no run is
+# active.
+#
 # Zero new dependency: jq -> python3 -> a safe no-op (no parser -> refuse,
 # nothing written). Exits 0 on every path, including its own internal
 # errors: a broken recovery attempt must never look like a failed command.
