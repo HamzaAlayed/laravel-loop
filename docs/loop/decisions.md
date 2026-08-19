@@ -531,3 +531,76 @@ next several units are cut inside.
   two backlog units also touch. Understanding it first avoids building on an unexplained fault. The
   other two captured intents (`stale-evict-lock-permanently-defeats-the-cap`,
   `resumed-invocation-never-reaches-the-ledger`) queue behind it, in that order.
+
+## Staleness answer, on the record: no steal, ever (2026-08-19)
+
+`stale-evict-lock-permanently-defeats-the-cap`, `OQ1` at G0 (`SL2`). The question of whether a lock
+can be declared stale has now been asked in three units' records — this one, the eviction
+convergence entries above, and `harness-fails-only-on-linux`'s second G2 verdict — and this is the
+entry that answers it, so it stops being re-derived from scratch each time it comes up.
+
+**The decision: no steal, ever.** A lock cannot be declared stale with the signals this repository
+has available. Not by a pid, not by `kill -0` on a recorded pid, not by any age inference this
+project's own code performs, and nothing is ever written inside the lock directory to make one
+possible later. Staleness can only be inferred here, never proved, and every inference this project
+could reach for either fails unsafely or needs a threshold nobody is entitled to choose.
+
+**Every candidate weighed, by name, with the reason it was taken or declined:**
+
+- **Identity in the lock (a pid, or a pid plus a timestamp) written inside the directory, read back
+  with `kill -0`.** Declined outright. `rmdir` fails on a non-empty directory
+  (`record-cost-event.sh:320`, `record-cost-event.sh:339`, `record-recovered-cost.sh:251`), so
+  anything written inside the lock breaks all three release sites at once and converts a leak that
+  needs a kill to trigger into a leak on every ordinary invocation — this, not `kill -0`'s own
+  weakness, is the reason the whole design is rejected. `kill -0` also fails unsafely in the
+  direction that matters on its own terms: a pid observed across a namespace boundary or by a second
+  uid can read a live holder as dead, and `mkdir` plus writing an identity into what it created
+  cannot be one atomic act, so an observer can always catch the lock carrying no identity yet —
+  which must be read as live-or-unknown, never as stale.
+- **Age-based expiry.** Declined, and wrong in principle rather than merely untuned. `converge_ledger()`
+  is `while :;` (`record-cost-event.sh:290`), with breaks only on real I/O conditions, deliberately —
+  so legitimate hold time is unbounded by design. No finite age threshold can therefore be correct for
+  every real workload, and shipping one would be a sixth tunable whose correctness the design leans
+  on, against the standing decision (this file, `2026-08-19`) that all five existing threshold
+  variables stay unset with no defaults shipped.
+- **Two-phase claim / heartbeat (liveness read as observed progress).** Declined. It needs a path
+  licensed to wait, and none exists: an appending invocation may not (`L7`), and the arrival trim
+  explicitly may not (case (i)). Only a human-invoked path could host one, and it would still need
+  the identity write the first candidate above already rules out.
+- **Detect and report only.** Taken, in part. It leaves the cap unenforced until a human acts, so it
+  is not the whole answer by itself, but it is honest about what it does not do, and it is what a
+  discoverable route is built from.
+- **Release on catchable signals (a trap while the lock is held).** Taken, in part. It covers
+  `INT`/`TERM`/`HUP`; it does not cover `KILL`, an OOM kill, or a power loss, and it narrows the
+  window a leak can start in without closing it.
+- **Bound the leak by uptime (relocate the lock to a per-boot location).** Taken, in part — the only
+  candidate in this table that attacks the permanence directly, with no staleness criterion and no
+  new threshold of its own.
+- **Write the limit down and do nothing else.** The cheapest honest option on the table. Not taken
+  alone, but kept as part of the answer: naming the limit is owed regardless of which of the above
+  also ships.
+
+**Why nothing is ever written inside the lock, said once on its own because it is the sharpest reason
+here and the one most likely to be re-proposed by someone who has not read this entry.** Release is
+`rmdir`, at three sites — `record-cost-event.sh:320` (the append path), `record-cost-event.sh:339`
+(the arrival trim), and `record-recovered-cost.sh:251` — and `rmdir` fails on a non-empty directory.
+A pid file, a timestamp, a heartbeat, or a note left for a human, dropped inside the lock directory,
+breaks every one of those three releases at once, turning a kill-only leak into a leak that happens
+on every ordinary run. That is why identity-in-the-lock is rejected as a design, not as a detail of
+one particular shape of it.
+
+**Both writers are in scope, and here is why the earlier rejection does not transfer (`SL8`).**
+`record-cost-event.sh:214` and `record-recovered-cost.sh:106` derive the identical `EVICT_LOCK` path
+independently, so a lock orphaned by either writer permanently defeats the other's cap. The
+"Build-out of that decision" entry above declined extending the *arrival-trim obligation* to
+`record-recovered-cost.sh`, on the grounds that it is a deliberate, human-typed CLI with no
+contention — and that rejection stands, for what it was about. It does not transfer to lock hygiene:
+a leak needs an interruption, not contention, and a human sitting at that CLI's own prompt with
+`Ctrl-C` in hand is precisely where interruptions happen. Nothing about the earlier reasoning was
+wrong; it was answering a different question.
+
+**What this unit's answer is not.** The orphaned-lock leak is not fixed by any of this decision, not
+closed, not resolved, and not prevented -- only made discoverable, and nothing recorded here claims
+otherwise. A kill class this repository cannot catch remains, and the one kill it has actually
+recorded -- a machine sleep, named in `docs/loop/conventions.md`'s "A resumed invocation is a
+different invocation to the ledger" entry -- is not established to be in the catchable class.

@@ -114,14 +114,21 @@
 # strongest property available while L7 stands, and the limit ships with
 # the promise.
 #
-# An interrupted holder leaves this exposed, because nothing above releases
-# the lock on its own: if the invocation currently trimming the file never
-# reaches its own rmdir, .claude/loop-cost-evict.lock is left behind and
-# nothing in this script ever removes it. Every later invocation then polls
-# the lock, gives up when it is still held, and appends anyway (L7) without
-# ever converging -- so the cap is not enforced again for as long as that
-# directory exists. The remedy today is a human removing
-# .claude/loop-cost-evict.lock by hand, once no run is active.
+# A holder killed by a CATCHABLE signal -- INT, TERM, or HUP -- releases the
+# lock itself before dying (S3): it traps those three, checks that it is the
+# one that created .claude/loop-cost-evict.lock, and rmdir's it before
+# exiting 0. Nothing above releases the lock for an UNCATCHABLE route --
+# KILL, an OOM kill, a power loss, or the machine-sleep class this
+# repository has actually recorded (docs/loop/conventions.md) and has not
+# established to be in the catchable class: if the invocation currently
+# trimming the file dies that way, .claude/loop-cost-evict.lock is left
+# behind and nothing in this script ever removes it. Every later invocation
+# then polls the lock, gives up when it is still held, and appends anyway
+# (L7) without ever converging -- so the cap is not enforced again for as
+# long as that directory exists. This is not fixed, only narrowed to the
+# kill classes a signal handler cannot see: the remedy for an orphaned lock
+# today is still a human removing .claude/loop-cost-evict.lock by hand,
+# once no run is active.
 #
 # Eviction itself never truncates the file to empty, not even transiently
 # (H3): the trimmed content is written to a fresh temp file first (`tail -n
@@ -212,6 +219,27 @@ DIR="$ROOT/.claude"
 OUT="$DIR/loop-cost.jsonl"
 FINISHED_DIR="$DIR/loop-cost-finished"
 EVICT_LOCK="$DIR/loop-cost-evict.lock"
+
+# Ownership flag + catchable-signal release (S3, spec.md SL3/SL5). Set the
+# instant THIS process's own mkdir "$EVICT_LOCK" succeeds, cleared the
+# instant this process's own rmdir runs -- so the handler below is a no-op
+# in any process that never became the lock's holder, including one merely
+# polling for it to clear (L7's poll) or one that lost the race to mkdir
+# it. No identity is ever written INSIDE the lock directory (rmdir fails on
+# a non-empty directory, which would break every release below) -- this
+# flag lives only in this process's own memory. No EXIT trap: an
+# unconditional release on exit could rmdir a lock a DIFFERENT process
+# acquired in the window after this one already released its own, which is
+# the concurrent-trim record loss this design refuses to risk.
+_evict_lock_owned=0
+_release_evict_lock_on_signal() {
+  if [ "$_evict_lock_owned" -eq 1 ]; then
+    rmdir "$EVICT_LOCK" 2>/dev/null
+    _evict_lock_owned=0
+  fi
+  exit 0
+}
+trap _release_evict_lock_on_signal INT TERM HUP
 
 # Rework state (S5). Nested under FINISHED_DIR deliberately: this repo's
 # .gitignore already covers the whole "loop-cost-finished/" subtree, and this
@@ -316,8 +344,10 @@ append_and_evict() {
   printf '%s\n' "$line" >> "$OUT" 2>/dev/null
 
   if mkdir "$EVICT_LOCK" 2>/dev/null; then
+    _evict_lock_owned=1
     converge_ledger
     rmdir "$EVICT_LOCK" 2>/dev/null
+    _evict_lock_owned=0
   fi
   return 0
 }
@@ -335,8 +365,10 @@ append_and_evict() {
 # appender does beforehand for the *append* itself (this path never appends).
 trim_on_arrival() {
   mkdir "$EVICT_LOCK" 2>/dev/null || return 0
+  _evict_lock_owned=1
   converge_ledger
   rmdir "$EVICT_LOCK" 2>/dev/null
+  _evict_lock_owned=0
   return 0
 }
 
