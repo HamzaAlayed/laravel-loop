@@ -92,3 +92,16 @@ alternative and its rejection are recorded:
 Normal entry at G0 — run `/loop` on this intent. This file carries **no acceptance
 criteria, no non-goals, and no slices**; nothing builds from it directly. Note that its first
 G0 question is a consent question, not a technical one.
+
+---
+
+## Status — DECLINED at G0, 2026-08-19
+
+Answered `no` rather than left open. A plugin reading files outside the repository it is installed in
+is a different trust posture from anything shipped so far, and the same figures are already reachable
+through `scripts/record-recovered-cost.sh`, a human-invoked CLI. The consent question this intent
+names is the reason: it is not a technical trade, and it was decided as a consent question.
+
+This file stays as the record of the question and the reasoning, not as pending work. See
+`docs/loop/decisions.md`, *"Backlog gate: one queue, four drops, and six questions closed"*. Nothing
+here is scheduled; reopening it means overturning that entry with new argument.

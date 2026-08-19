@@ -291,3 +291,26 @@ definition. No pass/fail verdict against that target is printed here.
   count: 0 of 6 invocation(s) marked rework
   token share: unavailable (no priced invocations are marked rework)
 
+
+---
+
+## The open items above are closed (2026-08-19)
+
+Recorded here so this log does not read as a unit with loose ends, and so the answers sit next to the
+questions rather than only in `decisions.md`.
+
+- **`OQ3` — answered: once-per-report marking suffices.** `S7` is **dropped**, not deferred. `RC2`'s
+  "never indistinguishable" is satisfied by the coverage sentence eight lines above any ranking, both
+  real units are wholly transcribed, and no mixed unit exists to use per-row precision. `SLICEROW`
+  therefore stays at 5 columns, both consumers keep their positional reads, and the most dangerous
+  file in this repository is not reopened for a distinction nothing can currently consume.
+- **`S11` — cancelled.** Automating transcription is a different question from what the reader does
+  with a transcribed record, and the human-typed CLI is part of what keeps the label honest:
+  automation removes the person who vouches for each figure.
+- **Transcript scraping — declined permanently**, on the consent question its own intent names, not
+  on a technical trade.
+
+**With those three answered, this unit is closed complete.** Every criterion is met with the case
+that proves it, both fixable findings were fixed and mutation-tested rather than filed, the third is
+a G1 defect on record with its lesson, and the fourth is accepted with a reason. Nothing about this
+unit is waiting on anyone.

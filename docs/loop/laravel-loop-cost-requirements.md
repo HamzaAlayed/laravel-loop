@@ -1,6 +1,15 @@
 # laravel-loop — Cost Optimization Requirements
 
 **Target:** laravel-loop v0.2 → v0.4
+
+> **Sequencing retired 2026-08-19.** §9's release table no longer schedules anything — see
+> `docs/loop/decisions.md`, *"Backlog gate: one queue, four drops, and six questions closed"*. The
+> requirements below remain a **backlog**, each entering `G0` on its own merits. **Dropped by that
+> gate:** `R3.1` and `R3.2` (routing to a cheaper model — its own safety detector is not derivable
+> while `loop-build` is unpriced), `R6`'s artifact-size criterion, and `R1.3`'s per-pass granularity
+> (satisfied by substitution). §10's success targets are **withdrawn**: none is computable, and any
+> future target must name the figure that computes it.
+
 **Author:** Hamza Alayed · **Date:** 12 August 2026
 **Source:** *Best AI Agent Cost Optimization Tools* — https://fast.io/resources/best-ai-agent-cost-optimization-tools/
 

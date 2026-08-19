@@ -256,3 +256,24 @@ definition. No pass/fail verdict against that target is printed here.
   count: 0 of 8 invocation(s) marked rework
   token share: unavailable (no priced invocations are marked rework)
 
+
+---
+
+## The open items above, at the backlog gate (2026-08-19)
+
+- **`L7` stands, and it is now settled rather than merely unexamined.** The never-block guarantee is
+  the reason cost accounting never delays a real tool return, and this unit tightened convergence
+  without touching it — which is the strongest evidence available that the guarantee and a useful cap
+  are compatible. Recorded so it stops being re-litigated at every eviction gate; new evidence can
+  still reopen it.
+- **`OQ4`, the stale evict lock, is captured as its own intent** —
+  `docs/loop/stale-evict-lock-permanently-defeats-the-cap/` — after being declined by three units in
+  a row. It is queued **second** at `G0`, behind the macOS parse-error observation. It is no longer an
+  aside in this unit's records, and this unit is not waiting on it: the fix here is complete on its own
+  terms, and a stale lock defeats it by a different route that was always out of scope.
+- **`E8`'s comparison limitation stays as recorded.** The instrument is now written down in
+  `measure-e8-after.md` §6, so the next append measurement is like-for-like; the earlier baseline's
+  instrument cannot be recovered, and no figure here pretends otherwise.
+
+**This unit is closed.** Its verdict stays CONCERNS — the two findings are recorded, not resolved
+away — and `E2` is met on a real pushed commit, one sample per platform.

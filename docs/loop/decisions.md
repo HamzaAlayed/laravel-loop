@@ -440,3 +440,94 @@ and still able to go red; the now-complete mixed shape is asserted in `S5`'s own
 Each fixture comment says it is a re-point and why. The lesson for the next cut: when one slice's
 guards assert the absence of a symptom a later slice is required to produce, the cut owes a migration
 step, not a pin forbidding one.
+
+## Backlog gate: one queue, four drops, and six questions closed (2026-08-19)
+
+Taken in one sitting after a full inventory of open items. Twelve decisions, recorded together
+because several only make sense against each other. Nothing here is a slice; this is the frame the
+next several units are cut inside.
+
+### The frame
+
+- **One merged, evidence-ordered queue. Both sequencing tables are retired.**
+  `laravel-loop-cost-requirements.md` §9 and `laravel-loop-agentic-levels-requirements.md` §8 no
+  longer schedule anything. The requirements themselves survive as a **backlog**, and each item
+  enters `G0` on its own merits. Reason: the cost doc's target band (v0.2 → v0.4) is spent with its
+  v0.4 row unshipped, the agentic doc was already a release behind its own table at 0 of 12 built,
+  and the last four units all came from `/observe` intents rather than from either document. Version
+  numbers should stop implying a plan nobody is following.
+- **The planning checkers come before the eval harness**, inverting the agentic doc's stated order.
+  `spec-check.sh` and `slice-check.sh` first; the eval harness then scores **against them** instead
+  of re-implementing the same G0/G1 rules a second time. Reason: two implementations of one rule can
+  only promise agreement — the failure `cost-ledger-lib.sh` exists to prevent, and the one this
+  repository has already been bitten by in `_cost_scan_*` vs `_cost_slice_*`. The checkers also
+  deliver value alone if the harness slips.
+- **`spec-check.sh` is structural only — no quality judgement.** It checks presence and shape:
+  acceptance criteria exist, non-goals are present, each criterion names what would check it, open
+  questions are marked. No vague-adjective greps, no minimum counts, no taste encoded as a rule. It
+  stays `L0`: no model call, deterministic, and nothing gameable that was not already required.
+  Its own open question — whether a checker can be strict without being gameable — is answered by
+  keeping it structural rather than by tuning heuristics.
+
+### Four things dropped, not deferred
+
+- **Routing to a cheaper model (cost `R3.1`/`R3.2`).** Dropped. Its own safety detector is rework
+  rate, and this file already establishes that the rework token share is not derivable while
+  `loop-build` is structurally unpriced. Shipping the largest quality-affecting change in the plan
+  with its detector provably blind is the exact trade the cost doc itself forbids: *"never silently
+  switch to a cheaper model … that trades a visible cost for an invisible quality loss."* Revisit
+  only if background pricing coverage rises materially.
+- **Autonomous triggering (agentic `R4.2`).** Cancelled, taking the branch its own `R4.3` offers
+  rather than carrying it indefinitely as "later". Coverage is a small fraction by hook and only
+  reaches complete where a human types figures in by hand. `R4.1` — persistent, session-independent
+  state — survives: state without triggering is useful and safe.
+- **Artifact-size reporting (cost `R6`'s third criterion).** Dropped. A byte count for a handful of
+  markdown files that nobody would act on, at the price of a second writer in the close step — the
+  most collision-prone path in the repo — and a new figure in `cost-ledger-lib.sh`. `R6`'s
+  stale-worktree half stays in the backlog.
+- **Per-pass rework granularity (cost `R1.3`).** Dropped as satisfied by substitution.
+  Whole-invocation attribution is deliberate, documented in `README.md`, and *asserted* by the
+  harness ("no per-pass token figure anywhere"). Reopening it needs a token channel the `OQ2` spike
+  established does not exist.
+
+### Six questions closed
+
+- **`OQ3` (per-row transcribed marking) — once per report suffices. `S7` is dropped, and
+  `recovered-figure-drops-slice-and-model` is closed complete.** `RC2`'s "never indistinguishable"
+  is satisfied by the coverage sentence; `S7` would have grown `SLICEROW` from 5 to 7 columns in both
+  parser programs, required both consumers' positional reads to change in the same commit or corrupt
+  the gate's rework share, and reopened the most dangerous file in the repository — for precision only
+  a mixed unit can use, and no mixed unit exists.
+- **`S11` (automatic transcription wiring) — cancelled.** Automating over a record shape is a
+  different question from what the reader does with the shape it has, and the deliberate human-typed
+  CLI is part of what keeps a transcribed figure honestly labelled: automation removes the person who
+  currently vouches for each figure. It stops being a coupling named in two units' records.
+- **Transcript scraping — declined permanently.** `docs/loop/transcript-scraping-as-a-recovery-path/`
+  stays as a record of the question, marked declined. A plugin reading files outside the repository it
+  is installed in is a different trust posture from anything shipped so far, and the same figures are
+  already reachable through a human-invoked CLI. The consent question its own intent names is
+  answered *no* rather than left open.
+- **`L7` stands. Settled, not merely unexamined.** The never-block guarantee is why cost accounting
+  never delays a real tool return, and the arrival trim tightened convergence without touching it.
+  Recorded so it stops being re-litigated at every eviction gate; new evidence can still reopen it.
+- **All five threshold variables stay unset**, and none ships a default. At the current unpriced
+  share a budget gate would fire against a fraction of real spend — this file already calls it an
+  instrument, not a control. Setting a number now would gate on a figure that misses most of what a
+  unit costs.
+- **The cost doc's success targets are withdrawn** — rework share, cache-read share, and tokens per
+  unit. None is computable today. A target nobody can compute is worse than none, because it invites
+  a fabricated number to satisfy it. **Any future target must name the figure that computes it and
+  where that figure comes from**, as a condition of being written down.
+
+### Two consequences for work already queued
+
+- **`ship-check` stays at exactly three gates.** The earlier rejection is upheld. Verify's
+  full-reproduction mode becomes an explicit flag a human passes at `G3`, and the eval change gate
+  lives in `CONTRIBUTING` plus a `G2` finding — neither becomes a fourth gate. So the "exactly three,
+  hard-coded" claim, `README`, and `ship-observe-automation`'s `S1`/`S6` cases all stand unedited.
+- **`docs/loop/cost-log-section-parse-error-on-macos-ci/` enters `G0` first**, ahead of the backlog.
+  It is the newest and least understood fault (1 red in 3 samples on one commit, not reproducible in
+  150 local iterations), and it touches `write-cost-log-section.sh` and `cost-ledger-lib.sh` — files
+  two backlog units also touch. Understanding it first avoids building on an unexplained fault. The
+  other two captured intents (`stale-evict-lock-permanently-defeats-the-cap`,
+  `resumed-invocation-never-reaches-the-ledger`) queue behind it, in that order.

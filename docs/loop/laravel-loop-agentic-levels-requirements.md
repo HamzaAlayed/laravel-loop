@@ -1,5 +1,14 @@
 # laravel-loop — Agentic Level Requirements
 
+> **Sequencing retired 2026-08-19.** §8's release table no longer schedules anything — see
+> `docs/loop/decisions.md`, *"Backlog gate: one queue, four drops, and six questions closed"*. Two
+> changes that gate made to this document's plan: the **planning checkers (`R2.1`, `R2.2`) come
+> before the eval harness (`R3.1`)**, so the harness scores against them instead of re-implementing
+> the same rules; and **`R4.2` (autonomous triggering) is cancelled**, taking the branch `R4.3`
+> itself offers, while `R4.1` (persistent state) survives. `R2.1` is settled as **structural only,
+> no quality judgement**.
+
+
 **Target:** laravel-loop v0.6 → v0.8
 **Author:** Hamza Alayed · **Date:** 14 August 2026
 **Source:** *The 6 Levels of Agentic Behavior* — Vellum — https://www.vellum.ai/blog/levels-of-agentic-behavior
