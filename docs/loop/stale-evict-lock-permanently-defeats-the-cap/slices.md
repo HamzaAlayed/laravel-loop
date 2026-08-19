@@ -1,5 +1,36 @@
 # Slices — stale-evict-lock-permanently-defeats-the-cap
 
+> ## G1 amendment, 2026-08-19 — `S5` is DROPPED and `SL11`/`SL13` are declined on evidence
+>
+> `S4` ran and returned `needs-decision`. See
+> `spike-sl11-base-clearing.md`: the per-boot property **fails** on the maintainer's host and is
+> `unknown` on both guarding platforms. Both candidate bases are cleared **by age at 3 days**, by
+> `com.apple.bsd.dirhelper` (`CLEAN_FILES_OLDER_THAN_DAYS => "3"`) and `/usr/libexec/tmp_cleaner`
+> (`daily_clean_tmps_days="3"`, `dargs="-empty -mtime +3"`, and an evict lock is an empty `mkdir`).
+> `dirhelper` runs at boot but with that same age filter, so a lock created minutes before a reboot
+> survives it.
+>
+> Relocation was approved to convert *permanent* into *bounded by uptime*. It cannot: it delivers
+> *bounded by 3 days by a threshold this project did not choose, cannot see, and cannot test*, and
+> the filter reads `atime`/`mtime`/`ctime` on a directory that is **held rather than written**, so a
+> holder legitimately holding past 3 days has its lock deleted while alive. That is the wrong side
+> of this unit's founding asymmetry — a lock taken from a live holder is a torn ledger, worse than a
+> ledger over cap. The human's call at this gate: **drop it.**
+>
+> Consequences, binding on the slices below:
+>
+> - **`S5` is not built.** Its text stays for the record; it is not work.
+> - **`SL11` and `SL13` are declined on evidence, not satisfied and not deferred.** No sentence
+>   anywhere may claim uptime bounding. The lock stays beside the ledger.
+> - **`S6` no longer depends on `S5`.** Today's path is the only path, so the reader has a correct
+>   path to derive now.
+> - **`S7` narrows** from three derivations to the two writers, and asserts they agree. It no longer
+>   depends on `S6`.
+> - **`S9` records relocation as declined, with `S4`'s numbers**, and states plainly that the leak
+>   is narrowed by `S3`'s hygiene rather than closed — `SIGKILL` is uncatchable and the one kill on
+>   record has an unestablished signal class.
+> - Remaining order: **`S6` ∥ `S7` ∥ `S8` → `S9`.** The critical path below is superseded.
+
 Cuts `spec.md` (G0 held 2026-08-19, committed `dea7408`, criteria `SL1`–`SL13`) into **nine slices**:
 two that write down what is true today, one behaviour slice that stops catchable kills orphaning the
 lock, one read-only evidence spike that the relocation's whole premise rests on, three that relocate
@@ -690,7 +721,9 @@ Do NOT:      - Do not write, edit, or prototype any code, case, script, or workf
 Depends on:  nothing  (runs in parallel with S1, S2 and S3; blocks S5)
 ```
 
-### S5 — Relocate the lock by one derivation per writer, degrading to today's path when the base cannot be safely used
+### S5 — DROPPED at G1 on S4's evidence (text retained for the record, not work)
+
+### ~~S5 — Relocate the lock by one derivation per writer, degrading to today's path when the base cannot be safely used~~
 ```
 Owner:       loop-build
 Context:     HELD UNTIL S4 RETURNS AND THE HUMAN HAS READ IT. If S4 returned `needs-decision`,
@@ -943,7 +976,9 @@ Do NOT:      - Do not remove, release, repair, rename, or write anything -- /cos
              - Do not weaken, delete, skip, reletter, renumber, or reorder any case.
              - Do not write to this repository's own .claude/.
              - Do not push, dispatch, re-run, cancel, or tag anything.
-Depends on:  S5 -- there is no correct path for this reader to derive until the writers' rule
+Depends on:  nothing -- SUPERSEDED by the G1 amendment: S5 is dropped, so today's path is the
+             only path and the reader has a correct path to derive now. (Original text: S5 -- there
+             is no correct path for this reader to derive until the writers' rule
              exists. A reader that derived the pre-change path would confidently report the
              wrong directory, which is worse than the silence it replaces.
 ```
@@ -1019,7 +1054,9 @@ Do NOT:      - Do not assert a hard-coded expected path, in any case, in any for
                decisions.md, or any other docs/loop/<unit>/ directory.
              - Do not introduce an env var, threshold, default, or suggested value.
              - Do not push, dispatch, re-run, cancel, or tag anything.
-Depends on:  S6 -- cutting this before the reader exists would freeze a two-deriver list and
+Depends on:  nothing -- SUPERSEDED by the G1 amendment: with S5 dropped there is no third
+             deriver, so this narrows to asserting the TWO WRITERS agree. (Original text: S6 --
+             cutting this before the reader exists would freeze a two-deriver list and
              leave the third free to diverge in silence, which is the exact failure SL12 is for.
              (And S5 transitively, for the blocks themselves.)
 ```
@@ -1379,7 +1416,8 @@ it reads like its own intent — which is exactly what `spec.md` says it is.
 # G1 — Slices — stale-evict-lock-permanently-defeats-the-cap
 
 ```
-Slices: 9  ·  Parallel: 3 at t0 (S1 ∥ S2 ∥ S4)  ·  Critical path: S1 → S3 → S5 → S6 → S7 → S8 → S9
+Slices: 8 built, 1 dropped  ·  S1, S2, S3, S4 DONE  ·  S5 DROPPED on S4's evidence
+Remaining: S6 ∥ S7 ∥ S8 → S9
 Case-count deltas: S1 +2 · S2 0 · S3 +3 · S4 0 · S5 +5 · S6 +3 · S7 +3 · S8 0 · S9 0  (group +16,
                    computed from main at build time — never an absolute: README.md:169 reads 466
                    now and two neighbour units are moving it)

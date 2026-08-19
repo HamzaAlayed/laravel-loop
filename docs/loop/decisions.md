@@ -604,3 +604,50 @@ closed, not resolved, and not prevented -- only made discoverable, and nothing r
 otherwise. A kill class this repository cannot catch remains, and the one kill it has actually
 recorded -- a machine sleep, named in `docs/loop/conventions.md`'s "A resumed invocation is a
 different invocation to the ledger" entry -- is not established to be in the catchable class.
+
+## Relocation declined on evidence: the base is cleared by age, not at boot (2026-08-19)
+
+Taken at `S4`'s evidence gate in
+`docs/loop/stale-evict-lock-permanently-defeats-the-cap/`, after
+`spike-sl11-base-clearing.md` observed what actually clears the candidate base. `SL11` and `SL13`
+are **declined on evidence** — not satisfied, and not deferred to a later unit.
+
+**What was observed, read from the maintainer's host rather than from documentation.** Both candidate
+bases sit on the APFS Data volume and the machine has zero memory-backed filesystems, so the one
+clearing mechanism establishable without a reboot does not apply. What clears them is age, at **3
+days**, from two configurations on that machine: `com.apple.bsd.dirhelper.plist` carries
+`CLEAN_FILES_OLDER_THAN_DAYS => "3"`, and `/usr/libexec/tmp_cleaner` carries
+`daily_clean_tmps_days="3"` with `dargs="-empty -mtime +3"` — and an evict lock is an empty `mkdir`
+marker, which is exactly what that argument targets. `dirhelper` does run at boot
+(`RunAtLoad => true`), but with the same age filter, so a lock created minutes before a reboot
+survives the reboot. `ubuntu-latest` is `unknown` in every row: a runner cannot be rebooted, a
+container is investigation-grade only, and gathering it inside CI would need a workflow edit the
+slice forbids.
+
+**Why that reverses the decision rather than qualifying it.** Relocation was approved at G0 to
+convert a permanent cap defeat into one bounded by uptime. It cannot deliver that. It delivers
+bounding at 3 days by a threshold this project did not choose, cannot see from its own code, and
+cannot test — the age-based staleness rule this file already rejected in principle, with the removal
+performed by the OS instead of by this project's code. Worse, the filter reads
+`atime`/`mtime`/`ctime` on a directory that is **held rather than written**, so holding never
+refreshes it, and legitimate hold time is unbounded by design (`converge_ledger()`'s `while :;` with
+I/O-only breaks). A holder legitimately holding past 3 days would have its lock deleted while alive.
+That is the wrong side of this unit's founding asymmetry: a lock taken from a live holder is a torn
+ledger, which is worse than a ledger over cap. Trading a permanent-but-safe failure for a
+bounded-but-unsafe one is not the trade that was approved.
+
+**What survives, and what the unit now claims.** The lock stays beside the ledger. `S1`'s header
+claim, `S2`'s staleness record and `S3`'s trap hygiene are landed; `S6` reports a present lock where
+a human already looks, `S7` narrows to asserting the two writers derive the same path, `S8` measures
+what the hygiene costs an appending invocation, and `S9` closes the record. No sentence anywhere may
+claim uptime bounding, because uptime bounding was never obtained.
+
+**What this decision is not.** The orphaned-lock leak is not fixed by declining relocation, not
+closed, not resolved, and not prevented. It is narrowed to uncatchable kills by `S3`'s hygiene and
+made discoverable by `S6`, and that is the whole of it. `SIGKILL` is uncatchable by definition, and
+the one kill this repository has actually recorded — the machine sleep named in
+`docs/loop/conventions.md` — is not established to be in the catchable class.
+
+**What would reopen it.** A base observed, on a real host of each guarding platform, to be cleared at
+boot rather than by age — `findmnt /tmp`, `/usr/lib/tmpfiles.d/tmp.conf` and `/etc/tmpfiles.d/`, and
+`printenv TMPDIR`, read from that machine. Absent that, a third base is not proposed here.
