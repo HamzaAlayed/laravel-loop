@@ -4671,6 +4671,137 @@ expect "write-cost-log-section.sh is executable" "yes" \
   "$([ -x "$SCRIPTS/write-cost-log-section.sh" ] && echo yes || echo no)"
 
 # ---------------------------------------------------------------------------
+# resumed-invocation-never-reaches-the-ledger S3 (spec.md RV9, RV4) -- LOCKS
+# the coverage sentence's prefix as a PREFIX (position, not mere presence --
+# BG3 already proves presence), and freezes the two surfaces RV4 names that
+# no existing frozen block covers: the budget gate's own output, and
+# log.md's '## Cost' section. The report itself is already frozen three
+# times (S4_FROZEN_UNSET, S1_FROZEN_CONC, S3_FROZEN_RF above) and gets no
+# fourth block here. ONE fixture, three surfaces, ONE cost_scan per surface
+# -- never a second fixture, or the identity claim below is about two
+# ledgers rather than one (CV7/CV8). This slice adds no wording to
+# cost_coverage_sentence(); it makes wording added later (whichever Stage 3
+# arm ships) provable rather than silent.
+echo "resumed-invocation-never-reaches-the-ledger S3 (spec.md RV9, RV4)"
+
+S3LDIR="$(mktemp -d)"
+mkdir -p "$S3LDIR/.claude" "$S3LDIR/docs/loop/s3-lock-fixture"
+S3LLEDGER="$S3LDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s3l1","slug":"s3-lock-fixture","slice":"A","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s3l1","slug":"s3-lock-fixture","slice":"A","phase":"build","agent":"loop-build","status":"completed","total_tokens":100000}'
+} > "$S3LLEDGER"
+S3LLOG="$S3LDIR/docs/loop/s3-lock-fixture/log.md"
+{
+  printf '%s\n' '# Log — s3-lock-fixture'
+  printf '\n'
+  printf '%s\n' '## G0 — Spec'
+  printf '%s\n' 'notes'
+} > "$S3LLOG"
+
+S3L_PREFIX='based on 1 of 1 invocations that carry a token figure (0 unpriced, not counted)'
+
+# Surface 1: cost-report.sh (already frozen elsewhere -- read only for the
+# prefix and identity checks, never a fourth frozen block).
+S3L_REPORT_OUT="$(report "$S3LDIR" s3-lock-fixture)"
+S3L_REPORT_LINE="$(printf '%s\n' "$S3L_REPORT_OUT" | grep -m1 'invocations that carry a token figure' | sed -E 's/^[[:space:]]+//')"
+
+# Surface 2: check-budget-gate.sh's own PreToolUse breach message -- a
+# hard threshold of 1 guarantees the breach fires regardless of the
+# fixture's exact token count.
+S3L_GATE_JSON="$(budget_payload s3-lock-fixture)"
+S3L_GATE_ERR="$(CLAUDE_PROJECT_DIR="$S3LDIR" LARAVEL_LOOP_BUDGET_HARD=1 gate_stderr "$S3L_GATE_JSON")"
+S3L_GATE_LINE="$(printf '%s\n' "$S3L_GATE_ERR" | grep -m1 'invocations that carry a token figure' | sed -E 's/^[[:space:]]+//')"
+
+# Surface 3: write-cost-log-section.sh's '## Cost' section.
+writelog "$S3LDIR" s3-lock-fixture
+S3L_LOG_SECTION="$(extract_cost_section "$S3LLOG")"
+S3L_LOG_LINE="$(printf '%s\n' "$S3L_LOG_SECTION" | grep -m1 'invocations that carry a token figure' | sed -E 's/^Coverage: //; s/^[[:space:]]+//')"
+
+# (1) RV9: the prefix BEGINS each consumer's own sentence -- a case-glob
+# match against the literal prefix (with this fixture's actual p/n/u
+# numbers), never a bare substring search, so a future rewrite that moves
+# the words later in the line cannot pass by accident.
+prefix_is_prefix() { # $1 line $2 prefix
+  case "$1" in
+    "$2"*) echo yes ;;
+    *) echo no ;;
+  esac
+}
+expect "(1) RV9: the coverage sentence's prefix begins the sentence in all three consumers, for one resume-free fixture" \
+  "yes yes yes" \
+  "$(prefix_is_prefix "$S3L_REPORT_LINE" "$S3L_PREFIX") $(prefix_is_prefix "$S3L_GATE_LINE" "$S3L_PREFIX") $(prefix_is_prefix "$S3L_LOG_LINE" "$S3L_PREFIX")"
+
+# (2) RV4: the budget gate's own breach output, frozen. LOCK, not a
+# description -- a later stage that changes this output must update this
+# block deliberately; a stage that changes it without noticing has a bug.
+# Generated from a real run on this lane's own machine with jq present, and
+# separately confirmed (recorded in this slice's return, not asserted here)
+# that cost-report.sh's and write-cost-log-section.sh's output for this same
+# fixture is unchanged with PATH stripped to the python3 arm.
+# IFS= (not the house `read -r -d ''` alone): this surface's own first byte
+# is a blank stderr line (check-budget-gate.sh's print_breach_message()
+# leads with `echo "" >&2`), and default IFS strips leading blank lines from
+# a `read` capture -- the house form is kept for the other two blocks below,
+# which do not begin with one.
+IFS= read -r -d '' S3L_FROZEN_GATE <<'FROZEN'
+
+BUDGET HARD LIMIT REACHED for unit "s3-lock-fixture".
+
+based on 1 of 1 invocations that carry a token figure (0 unpriced, not counted) -- 100 % coverage
+Priced total: 100000 token(s) -- at or above the hard threshold of 1 token(s).
+
+Most expensive slice: A -- 100000 token(s), rework share: unavailable (no priced rework in this slice)
+
+This is a gate, not a kill: any slice already in flight completes; nothing is interrupted. This only pauses the NEXT spawn.
+
+Choose one:
+  1. (recommended) Re-slice "A" -- it is the largest share of this unit's observed spend.
+  2. Raise the hard cap for this unit only. Does not persist beyond it.
+  3. Stop here and review manually before continuing.
+
+This returns immediately and waits for no further input -- an unattended run stops here and keeps its artifacts rather than continuing or hanging.
+FROZEN
+# IFS= preserves the heredoc's own trailing newline too (unlike the house
+# `read -r -d ''` form, which discards it along with leading whitespace) --
+# stripped here to match gate_stderr's command-substitution capture, which
+# always strips a trailing newline the same way every other case in this
+# suite already relies on.
+S3L_FROZEN_GATE="${S3L_FROZEN_GATE%$'\n'}"
+expect "(2) RV4: the budget gate's own breach output is byte-identical to a frozen block, for one resume-free fixture" "" \
+  "$(diff <(printf '%s' "$S3L_FROZEN_GATE") <(printf '%s' "$S3L_GATE_ERR"))"
+
+# (3) RV4: log.md's '## Cost' section, frozen. Same LOCK discipline as (2).
+read -r -d '' S3L_FROZEN_LOG <<'FROZEN'
+## Cost
+
+Coverage: based on 1 of 1 invocations that carry a token figure (0 unpriced, not counted) -- 100 % coverage
+
+Tokens: 100000 (priced subset only, partial -- 0 unpriced invocation(s) not counted)
+
+Rework: this figure counts whole invocations that needed at least one refine pass, at
+whole-invocation granularity -- deliberately over-attributing rather than estimating a
+per-pass split, and NOT the cost of retrying. It is not comparable to the requirements
+document's <15% target (Sec.10), which was calibrated against a narrower, per-pass
+definition. No pass/fail verdict against that target is printed here.
+  count: 0 of 1 invocation(s) marked rework
+  token share: unavailable (no priced invocations are marked rework)
+
+FROZEN
+expect "(3) RV4: log.md's '## Cost' section is byte-identical to a frozen block, for one resume-free fixture" "" \
+  "$(diff <(printf '%s' "$S3L_FROZEN_LOG") <(printf '%s' "$S3L_LOG_SECTION"))"
+
+# (4) CV7/CV8, extended to a third consumer: all three surfaces print
+# identical numbers and identical sentence text for this one fixture -- the
+# same identity BG3/CV8 already prove for two consumers, now covering all
+# three named by RV4.
+expect "(4) CV7/CV8: report, gate, and log.md print the identical coverage sentence and priced total for this one fixture" \
+  "yes yes yes" \
+  "$([ "$S3L_REPORT_LINE" = "$S3L_GATE_LINE" ] && echo yes || echo no) $([ "$S3L_GATE_LINE" = "$S3L_LOG_LINE" ] && echo yes || echo no) $(printf '%s\n' "$S3L_REPORT_OUT" | grep -q 'total priced tokens: 100000' && printf '%s\n' "$S3L_GATE_ERR" | grep -q 'Priced total: 100000 token' && printf '%s\n' "$S3L_LOG_SECTION" | grep -q 'Tokens: 100000' && echo yes || echo no)"
+
+rm -rf "$S3LDIR"
+
+# ---------------------------------------------------------------------------
 echo
 echo "check-script-modes.sh (script-mode rule, S1 -- spec.md A2/A5/A7, ship-gate-blind-to-ci)"
 
