@@ -6021,6 +6021,47 @@ expect "(S7-3) two different CLAUDE_PROJECT_DIRs (different ledgers) derive two 
 rm -rf "$S7_DIR_A" "$S7_DIR_B" "$S7_DIR_C"
 
 # ---------------------------------------------------------------------------
+# resumed-invocation-never-reaches-the-ledger S4 (spec.md RV8) -- decisions.md
+# records that this unit cannot raise pricing coverage and therefore does not
+# satisfy the dropped routing item's revisit condition, while the routing
+# bullet itself stands byte-identical -- the :3380/:3776-style pattern:
+# presence of the new entry's fingerprints, plus a diff proving the
+# neighbouring text it must not disturb.
+echo "resumed-invocation-never-reaches-the-ledger S4 (spec.md RV8)"
+
+s4_riv_decisions_entry_check() {
+  local bad=0 dec="$ROOT/docs/loop/decisions.md"
+  grep -qF '## resumed-invocation-never-reaches-the-ledger S4: cannot raise pricing coverage (2026-08-19)' "$dec" || bad=1
+  grep -qi 'yields a record, never a number' "$dec" || bad=1
+  grep -qi 'does not satisfy the routing item' "$dec" || bad=1
+  grep -qi '20 of 20 joinable' "$dec" || bad=1
+  grep -qi 'stay unattachable' "$dec" || bad=1
+  echo $bad
+}
+expect "(1) decisions.md: the new entry exists, is dated, and names a record-never-a-number plus the routing condition it does not satisfy (RV8)" \
+  "0" "$(s4_riv_decisions_entry_check)"
+
+# (2) the routing bullet ("Routing to a cheaper model") stands byte-identical
+# -- extracted from its own start line up to (not including) the next
+# bullet, diffed against a frozen copy of today's exact text, never edited,
+# annotated, or marked superseded/revisited by this slice.
+s4_riv_routing_bullet_extract() {
+  sed -n '/^- \*\*Routing to a cheaper model/,/^- \*\*Autonomous triggering/{/^- \*\*Autonomous triggering/!p;}' \
+    "$ROOT/docs/loop/decisions.md"
+}
+read -r -d '' S4_RIV_FROZEN_ROUTING <<'FROZEN'
+- **Routing to a cheaper model (cost `R3.1`/`R3.2`).** Dropped. Its own safety detector is rework
+  rate, and this file already establishes that the rework token share is not derivable while
+  `loop-build` is structurally unpriced. Shipping the largest quality-affecting change in the plan
+  with its detector provably blind is the exact trade the cost doc itself forbids: *"never silently
+  switch to a cheaper model … that trades a visible cost for an invisible quality loss."* Revisit
+  only if background pricing coverage rises materially.
+FROZEN
+S4_RIV_ROUTING_LIVE="$(s4_riv_routing_bullet_extract)"
+expect "(2) decisions.md: the routing bullet stands byte-identical, no superseded/revisited marker attached (RV8)" "" \
+  "$(diff <(printf '%s' "$S4_RIV_FROZEN_ROUTING") <(printf '%s' "$S4_RIV_ROUTING_LIVE"))"
+
+# ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
 # file. The harness's actual total is only known once every case above has
 # run, including any inside a loop that fires more than once per source
