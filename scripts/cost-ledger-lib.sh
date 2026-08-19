@@ -973,10 +973,20 @@ cost_scan() {
     out="$(python3 -c "$(_cost_scan_py_program)" "$slug" < "$ledger" 2>/dev/null)"
   fi
 
-  if ! printf '%s' "$out" | grep -q 'COST_N_LINES'; then
-    COST_SCAN_STATE="scan-error"
-    return 0
-  fi
+  # Marker recognition, bash-builtin (PF12): neither this test nor the
+  # slug-presence test below may depend on an external tool being
+  # resolvable, because a `grep` that cannot resolve is indistinguishable
+  # from the parser having failed. `*COST_N_LINES*` is a substring match
+  # over the whole (possibly multi-line) parser output, identical to what
+  # `grep -q 'COST_N_LINES'` was testing -- the marker is never anchored to
+  # a line boundary on either side.
+  case "$out" in
+    *COST_N_LINES*) ;;
+    *)
+      COST_SCAN_STATE="scan-error"
+      return 0
+      ;;
+  esac
 
   local tag k v v2
   while IFS=$'\t' read -r tag k v v2; do
@@ -987,10 +997,25 @@ $out
 EOF
 
   if [ -n "$slug" ]; then
-    if ! printf '%s\n' "$COST_SLUGS_PRESENT" | grep -qxF "$slug"; then
-      COST_SCAN_STATE="no-slug"
-      return 0
-    fi
+    # Exact-line, fixed-string membership, bash-builtin (PF13): replaces
+    # `grep -qxF "$slug"` without relocating the failure onto the same
+    # missing tool. COST_SLUGS_PRESENT is newline-separated; sentinelling
+    # both ends turns "is $slug one whole line of it" into one pattern
+    # match. The leading/trailing `*` are UNQUOTED and so remain glob
+    # wildcards, but "$slug" is QUOTED -- in a case pattern, quoting turns
+    # off a variable's own glob metacharacters (*, ?, [...]), so a slug
+    # containing one is matched LITERALLY, never as a wildcard. That
+    # preserves grep -qxF's fixed-string, whole-line semantics exactly: a
+    # slug that is only a substring, prefix, suffix, or glob of a present
+    # slug is NOT present, because both sentinel newlines must bound it.
+    local slugs_sentinel=$'\n'"$COST_SLUGS_PRESENT"$'\n'
+    case "$slugs_sentinel" in
+      *$'\n'"$slug"$'\n'*) ;;
+      *)
+        COST_SCAN_STATE="no-slug"
+        return 0
+        ;;
+    esac
   fi
   COST_SCAN_STATE="ok"
   return 0
