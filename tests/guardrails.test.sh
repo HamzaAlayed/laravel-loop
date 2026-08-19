@@ -1277,6 +1277,128 @@ expect "(m) commands/cost.md relays the report script's output verbatim" "0" \
 rm -rf "$MIXDIR"
 
 # ---------------------------------------------------------------------------
+# resumed-invocation-never-reaches-the-ledger S2 (spec.md RV2, RV3, RV6) --
+# pins what the ledger's output and documentation may never claim: no
+# completeness vocabulary (RV2, both the live output and the documentation
+# half), no figure moved or fabricated by a record class the reader does not
+# recognise (RV3, the rule half -- a real Arm A record shape is not written
+# here), and no resumed-shaped run read as a refine pass (RV6). RV2's two
+# cases are LOCKS over behaviour already true today: verified true by
+# mutation at build time (see this slice's return), not asserted here --
+# their value is that Stage 3 cannot introduce a completeness claim or an
+# invented figure without turning one of them red.
+echo "resumed-invocation-never-reaches-the-ledger S2 (spec.md RV2, RV3, RV6)"
+
+# RV2 (live output) -- docs/loop/checks.md:79's refusal ("Neither platform
+# above is described as covered, verified, guaranteed, or proven") applied to
+# a token total instead of a platform claim. A fully-priced (100% coverage)
+# fixture's whole report carries none of that vocabulary.
+RV2FULLDIR="$(mktemp -d)"
+mkdir -p "$RV2FULLDIR/.claude"
+RV2FULLLEDGER="$RV2FULLDIR/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"rv2f1","slug":"rv2-full","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"rv2f1","slug":"rv2-full","phase":"build","agent":"loop-build","model":"claude-sonnet-4","model_source":"derived","status":"completed","total_tokens":5000}'
+} > "$RV2FULLLEDGER"
+RV2FULL_OUT="$(report "$RV2FULLDIR" rv2-full)"
+expect "RV2 (live output): a 100%-priced fixture's whole report carries no completeness vocabulary (docs/loop/checks.md:79 precedent)" "0" \
+  "$(printf '%s\n' "$RV2FULL_OUT" | grep -icE 'complete|full|verified|exhaustive|guaranteed|proven|all invocations|every invocation')"
+rm -rf "$RV2FULLDIR"
+
+# RV2 (documentation) -- scoped to lines that MENTION coverage, the way the
+# existing no-digit guards (X5/CL5) are scoped: a blanket grep for "full"
+# would match "fully standalone" elsewhere in README and fail for the wrong
+# reason, so this reads only the lines coverage already appears on.
+readme_coverage_no_completeness_check() {
+  local bad=0 readme="$ROOT/README.md" lines
+  lines="$(grep -i 'coverage' "$readme")"
+  [ -n "$lines" ] || bad=1
+  printf '%s\n' "$lines" | grep -iE 'complete|full|verified|exhaustive|guaranteed|proven' >/dev/null 2>&1 && bad=1
+  echo $bad
+}
+expect "RV2 (documentation): no README line mentioning coverage also carries completeness vocabulary" \
+  "0" "$(readme_coverage_no_completeness_check)"
+
+# RV3/RV6 shared fixture -- one recognised ledger (spec + rework-marked build
+# + backgrounded build), and the same ledger with one extra WELL-FORMED line
+# whose event the reader does not recognise. field evidence item 3: this
+# moves no figure and exits 0, and is reported as "malformed or truncated,
+# not JSON" -- that misclassification is Arm A's to fix (RS10), recorded and
+# explicitly NOT fixed here. The extra line's event name is deliberately not
+# a candidate name for Arm A's record shape.
+RV3DIR="$(mktemp -d)"
+mkdir -p "$RV3DIR/base/.claude" "$RV3DIR/unrec/.claude"
+RV3BASE="$RV3DIR/base/.claude/loop-cost.jsonl"
+RV3UNREC="$RV3DIR/unrec/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"rv3a","slug":"rv3-fixture","slice":"S1","phase":"spec","agent":"loop-spec"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"rv3a","slug":"rv3-fixture","slice":"S1","phase":"spec","agent":"loop-spec","status":"completed","total_tokens":1000}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"rv3b","slug":"rv3-fixture","slice":"S2","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"rv3b","slug":"rv3-fixture","slice":"S2","phase":"build","agent":"loop-build","status":"completed","total_tokens":2000,"phase_detail":"rework","refine_passes":1}'
+  printf '%s\n' '{"ts":5,"event":"start","invocation_id":"rv3c","slug":"rv3-fixture","slice":"S3","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":6,"event":"finish","invocation_id":"rv3c","slug":"rv3-fixture","slice":"S3","phase":"build","agent":"loop-build","status":"async_launched"}'
+} > "$RV3BASE"
+cp "$RV3BASE" "$RV3UNREC"
+# Not a candidate name for Arm A's record: this fixture only needs an event
+# the reader cannot classify, and this string was chosen for that alone.
+printf '%s\n' '{"ts":7,"event":"some_unrecognised_event","invocation_id":"rv3z","slug":"rv3-fixture","phase":"build","agent":"loop-build"}' >> "$RV3UNREC"
+
+# Direct-lib pattern (cl1_check's shape): source the library, call cost_scan
+# on each ledger in turn, and compare the counters and rows RV3 enumerates --
+# NOT a whole-output diff, because that diff is non-empty today (the skipped
+# line count) for a reason this slice does not own.
+rv3_figures_check() {
+  local bad=0
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$RV3BASE" "rv3-fixture"
+  local base_priced_tokens="$COST_TOKENS_PRICED"
+  local base_sentence; base_sentence="$(cost_coverage_sentence)"
+  local base_spec_p="$COST_N_PRICED_SPEC" base_spec_i="$COST_N_INVOCATIONS_SPEC"
+  local base_build_p="$COST_N_PRICED_BUILD" base_build_i="$COST_N_INVOCATIONS_BUILD"
+  cost_slice_rows "$RV3BASE" "rv3-fixture" >/dev/null
+  local base_rows="$COST_SLICE_ROWS"
+
+  cost_scan "$RV3UNREC" "rv3-fixture"
+  local u_priced_tokens="$COST_TOKENS_PRICED"
+  local u_sentence; u_sentence="$(cost_coverage_sentence)"
+  local u_spec_p="$COST_N_PRICED_SPEC" u_spec_i="$COST_N_INVOCATIONS_SPEC"
+  local u_build_p="$COST_N_PRICED_BUILD" u_build_i="$COST_N_INVOCATIONS_BUILD"
+  cost_slice_rows "$RV3UNREC" "rv3-fixture" >/dev/null
+  local u_rows="$COST_SLICE_ROWS"
+
+  [ "$base_priced_tokens" = "$u_priced_tokens" ] || bad=1
+  [ "$base_sentence" = "$u_sentence" ] || bad=1
+  [ "$base_spec_p" = "$u_spec_p" ] && [ "$base_spec_i" = "$u_spec_i" ] || bad=1
+  [ "$base_build_p" = "$u_build_p" ] && [ "$base_build_i" = "$u_build_i" ] || bad=1
+  [ "$base_rows" = "$u_rows" ] || bad=1
+  echo $bad
+}
+expect "RV3: priced total, coverage sentence (incl. coverage share), per-phase and per-slice figures are byte-identical whether or not an unrecognised-event line is present" \
+  "0" "$(rv3_figures_check)"
+
+expect "RV3: both the recognised-only and the unrecognised-line ledger exit 0 (RV7)" "0 0" \
+  "$(report_exit "$RV3DIR/base" rv3-fixture) $(report_exit "$RV3DIR/unrec" rv3-fixture)"
+
+# RV6 -- the unrecognised-event line is never read as a refine pass: the
+# rework count and rework token share do not move, and no per-pass token
+# figure appears anywhere in that fixture's own report output. The existing
+# "no per-pass token figure anywhere" assertion (record-cost-event.sh, above)
+# is re-run unmodified, not replaced -- this is additional coverage on the
+# reader's side, over a fixture holding a record class it does not know.
+RV3BASE_OUT="$(report "$RV3DIR/base" rv3-fixture)"
+RV3UNREC_OUT="$(report "$RV3DIR/unrec" rv3-fixture)"
+RV3BASE_REWORK="$(printf '%s\n' "$RV3BASE_OUT" | sed -n '/^Rework:/,/^$/p')"
+RV3UNREC_REWORK="$(printf '%s\n' "$RV3UNREC_OUT" | sed -n '/^Rework:/,/^$/p')"
+expect "RV6: rework count and rework token share are unchanged by an unrecognised-event line" "" \
+  "$(diff <(printf '%s' "$RV3BASE_REWORK") <(printf '%s' "$RV3UNREC_REWORK"))"
+
+expect "RV6: no per-pass token figure appears anywhere in the unrecognised-line fixture's report" "0" \
+  "$(printf '%s\n' "$RV3UNREC_OUT" | grep -icE 'pass [0-9]+.*token|refine pass [0-9]+:')"
+
+rm -rf "$RV3DIR"
+
+# ---------------------------------------------------------------------------
 # cost-ledger-blind-to-background-agents S1 (spec.md CL1, CL2, CL9) -- every
 # unpriced invocation is reported with the reason it is unpriced, taken only
 # from its finish record's own `status` field, and a launched-in-background
