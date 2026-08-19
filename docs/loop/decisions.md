@@ -651,3 +651,49 @@ the one kill this repository has actually recorded — the machine sleep named i
 **What would reopen it.** A base observed, on a real host of each guarding platform, to be cleared at
 boot rather than by age — `findmnt /tmp`, `/usr/lib/tmpfiles.d/tmp.conf` and `/etc/tmpfiles.d/`, and
 `printenv TMPDIR`, read from that machine. Absent that, a third base is not proposed here.
+
+## S8 close: the measured cost, and what remains the human's (2026-08-19)
+
+`S8`/`S9` of `stale-evict-lock-permanently-defeats-the-cap`, appended beneath "Relocation declined on
+evidence" above rather than rewriting it — that entry already carries `S4`'s numbers (3 days, both
+`com.apple.bsd.dirhelper.plist`'s `CLEAN_FILES_OLDER_THAN_DAYS => "3"` and `tmp_cleaner`'s
+`daily_clean_tmps_days="3"`, and that `dirhelper` runs at boot with `RunAtLoad => true` under the same
+age filter, so a lock created minutes before a reboot survives it), states `SL11` and `SL13` as
+declined on evidence rather than satisfied or deferred, and names what survives. This entry adds only
+what the build learned after that gate.
+
+**`S8`'s number.** Four arms — `record-cost-event.sh` appending under cap; appending over cap with a
+full convergence; a duplicate-finish arrival over cap; `record-recovered-cost.sh` appending over cap
+(the other writer `S3` also changed, timed in place of the original envelope's relocation-degradation
+arm, which was never built) — n=20 each, interleaved before/after `S3`'s trap on one host (pre
+`27b4133`, post `d7cdc40`). Every mean delta is within 0.7 ms and every median delta within 2.7 ms on
+65-150 ms baselines, straddling zero. `S3`'s actual diff on the append path is one `trap` registration
+and two in-memory flag assignments — no loop, no subprocess, no I/O — and the measurement is
+consistent with that: an appending invocation's own cost did not move. Full figures, the falsifiable
+spread check, and the method live in `measure-sl6-append-cost.md`; this entry does not repeat the
+table.
+
+**The leak is narrowed by `S3`'s hygiene rather than closed.** `SIGKILL` is uncatchable by
+definition, and the one kill this repository has actually recorded — the machine sleep named in
+`docs/loop/conventions.md` — has an unestablished signal class. Nothing built in `S6`, `S7`, or `S8`
+changes that: `S6` only reports a present lock, `S7` only guards the two writers' agreement, and `S8`
+only measures a cost that did not move.
+
+**What this unit foreclosed.** The "Staleness answer" entry above already forecloses pid-in-lock, age
+expiry as a criterion this project's own code would apply, and two-phase claim/heartbeat, for `OQ1`.
+This gate forecloses one more, on evidence rather than by design: relocating the lock to convert
+permanence into a uptime bound, absent a base actually observed to clear at boot on a guarding
+platform. It is declined pending that evidence, not ruled out for all time — "What would reopen it,"
+above, names exactly what would.
+
+**`SL10` is the human's, and this record does not claim it.** A real pushed run on both guarding
+platforms, with `guardrails` and `guardrails-macos` reporting an identical `total: N passed, M
+failed`, has not happened from this build — merging this group is not that run. One green run, when
+it happens, is one sample, never a rate and never a claim that the hygiene holds on CI. `SL11`'s
+reboot half is the same shape and is also outstanding: the two marker paths `spike-sl11-base-
+clearing.md` left on the maintainer's host, and the single `ls` the human runs after the next reboot,
+before `2026-08-22T15:30:39Z` per that file's own validity window.
+
+**The Handoff stays unopened.** The append-versus-trim loss window (a line landing between a
+trimmer's `tail` and its `mv`) is a different fault, with a different mechanism, unreproduced, and
+this build did not touch it.
