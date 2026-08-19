@@ -5617,6 +5617,63 @@ expect "S1: no sentence anywhere in the pinned surfaces names the lock/orphan an
   "0" "$(claim_word_guard_check)"
 
 # ---------------------------------------------------------------------------
+# S6 (stale-evict-lock-permanently-defeats-the-cap, spec.md SL3 second half,
+# OQ4/OQ5, settled in slices.md's "SL3's reporting shape") -- /cost reports a
+# present evict lock, where a human already looks, without ever inferring
+# the holder is dead, repairing anything, or gating on the cap's own
+# over/under state. The route is /cost and nothing else; the path is the
+# same literal computation both writers use, read-only.
+S6DIR="$(mktemp -d)"
+mkdir -p "$S6DIR/.claude"
+S6_LEDGER="$S6DIR/.claude/loop-cost.jsonl"
+printf '%s\n' '{"ts":1,"event":"finish","invocation_id":"s6-1","slug":"s6-fixture","phase":"build","agent":"loop-build","status":"completed","total_tokens":10}' > "$S6_LEDGER"
+S6_LOCK="$S6DIR/.claude/loop-cost-evict.lock"
+
+# (S6-1) lock present: /cost names the path, says the ledger is not being
+# trimmed while it is held, says a live trim and an orphan cannot be told
+# apart from here, names the human's remedy, and exits 0.
+mkdir "$S6_LOCK"
+S6_OUT1="$(report "$S6DIR" s6-fixture)"
+S6_EXIT1="$(report_exit "$S6DIR" s6-fixture)"
+expect "(S6-1) lock present: /cost names the path, the not-trimmed effect, the live-trim-vs-orphan limit, and the human's remedy; exit 0" \
+  "yes yes yes yes 0" \
+  "$(printf '%s\n' "$S6_OUT1" | grep -qF "$S6_LOCK" && echo yes || echo no) $(printf '%s\n' "$S6_OUT1" | grep -qi 'no invocation trims the ledger' && echo yes || echo no) $(printf '%s\n' "$S6_OUT1" | grep -qi 'indistinguishable' && echo yes || echo no) $(printf '%s\n' "$S6_OUT1" | grep -qi 'a human may remove that directory' && echo yes || echo no) $S6_EXIT1"
+
+# (S6-2) no lock present: none of the evict-lock strings appear anywhere in
+# the output, and the report is byte-identical to the pre-change script's
+# rendering of the identical fixture -- git show HEAD, per this repository's
+# standing red-before-green discipline, never asserted from memory.
+rmdir "$S6_LOCK"
+S6_PARITY_DIR="$(mktemp -d)"
+mkdir -p "$S6_PARITY_DIR/scripts"
+git -C "$ROOT" show HEAD:scripts/cost-report.sh > "$S6_PARITY_DIR/scripts/cost-report.sh"
+cp "$SCRIPTS/cost-ledger-lib.sh" "$S6_PARITY_DIR/scripts/cost-ledger-lib.sh"
+S6_PRECHANGE="$(CLAUDE_PROJECT_DIR="$S6DIR" bash "$S6_PARITY_DIR/scripts/cost-report.sh" s6-fixture)"
+S6_POSTCHANGE="$(report "$S6DIR" s6-fixture)"
+S6_DIFF="$(diff <(printf '%s' "$S6_PRECHANGE") <(printf '%s' "$S6_POSTCHANGE"))"
+expect "(S6-2) no lock present: none of the evict-lock strings appear, and the report is byte-identical to the pre-change script's rendering of the same fixture" \
+  "no no no" \
+  "$(printf '%s\n' "$S6_POSTCHANGE" | grep -qi 'evict lock' && echo yes || echo no) $(printf '%s\n' "$S6_POSTCHANGE" | grep -qi 'indistinguishable' && echo yes || echo no) $(printf '%s\n' "$S6_POSTCHANGE" | grep -qF "$S6_LOCK" && echo yes || echo no)$S6_DIFF"
+rm -rf "$S6_PARITY_DIR"
+
+# (S6-3) the reader repairs nothing: after running /cost with the lock
+# present, the lock directory still exists, the ledger is byte-identical,
+# and nothing new was created anywhere under .claude (/cost's read-only
+# charter, unchanged).
+mkdir "$S6_LOCK"
+S6_LEDGER_SNAPSHOT="$(mktemp)"
+cp "$S6_LEDGER" "$S6_LEDGER_SNAPSHOT"
+S6_CLAUDE_LISTING_BEFORE="$(find "$S6DIR/.claude" -mindepth 1 | sort)"
+report "$S6DIR" s6-fixture >/dev/null
+S6_CLAUDE_LISTING_AFTER="$(find "$S6DIR/.claude" -mindepth 1 | sort)"
+expect "(S6-3) the reader repairs nothing: the lock still exists, the ledger is byte-identical, and nothing new was created under .claude" \
+  "yes yes yes" \
+  "$([ -d "$S6_LOCK" ] && echo yes || echo no) $(cmp -s "$S6_LEDGER" "$S6_LEDGER_SNAPSHOT" && echo yes || echo no) $([ "$S6_CLAUDE_LISTING_BEFORE" = "$S6_CLAUDE_LISTING_AFTER" ] && echo yes || echo no)"
+rm -f "$S6_LEDGER_SNAPSHOT"
+rmdir "$S6_LOCK" 2>/dev/null
+rm -rf "$S6DIR"
+
+# ---------------------------------------------------------------------------
 # S8 (spec.md, §Development case count) -- this MUST be the last case in the
 # file. The harness's actual total is only known once every case above has
 # run, including any inside a loop that fires more than once per source

@@ -23,6 +23,11 @@ set -uo pipefail
 
 ROOT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 LEDGER="$ROOT_DIR/.claude/loop-cost.jsonl"
+# Same literal computation both writers use (record-cost-event.sh,
+# record-recovered-cost.sh): ROOT -> DIR -> EVICT_LOCK. Read-only here --
+# this file never mkdir's, rmdir's, or otherwise touches this path
+# (stale-evict-lock-permanently-defeats-the-cap SL3, second half).
+EVICT_LOCK="$ROOT_DIR/.claude/loop-cost-evict.lock"
 # Pure bash, deliberately -- no external `dirname` -- so resolving this
 # script's own directory never depends on a coreutil being on PATH, even
 # before the jq/python3 check below runs (CO13).
@@ -37,6 +42,38 @@ fi
 
 # shellcheck source=cost-ledger-lib.sh
 source "$SCRIPT_DIR/cost-ledger-lib.sh"
+
+# stale-evict-lock-permanently-defeats-the-cap S6 (spec.md SL3, second half;
+# OQ4/OQ5): the only human-facing surface that names a present evict lock at
+# all, prints ONCE per invocation of this script regardless of the slug
+# argument or the ledger's own state -- the lock is filesystem state, not a
+# property of any one unit -- and BOUNDED STRUCTURALLY rather than by a
+# minted marker: /cost is human-invoked, so this is zero times per hook
+# invocation and once per human read, with nothing new written anywhere to
+# remember "already reported" (a marker would be another orphanable `mkdir`,
+# the same failure mode this unit exists to reduce).
+#
+# Prints nothing at all when the lock is absent -- the report is otherwise
+# byte-identical to a build that never had this function.
+#
+# NEVER INFERS DEATH. No pid, no age, no `stat`, no `kill -0`, no elapsed
+# time, no "probably" -- a live trim in progress and an orphaned lock left by
+# an interrupted one are indistinguishable from here, and this reader says
+# so rather than guessing. NOT gated on the ledger being over cap: that
+# would need a fourth copy of the LARAVEL_LOOP_COST_MAX_LINES parser inside
+# a reader whose own charter says every figure comes from
+# cost-ledger-lib.sh (recorded as the human's open question at G1, not
+# decided here). REPAIRS NOTHING: no rmdir, no rm, no touch, no mkdir of the
+# lock itself, no write of any kind -- /cost's read-only charter is
+# unchanged.
+print_evict_lock_notice() {
+  [ -d "$EVICT_LOCK" ] || return 0
+  printf 'Evict lock: present at %s.\n' "$EVICT_LOCK"
+  printf '  While it exists, no invocation trims the ledger to its configured cap.\n'
+  printf '  A live trim in progress and an orphaned lock left behind by an interrupted one are indistinguishable from here -- this reader cannot and does not judge which.\n'
+  printf '  If no run is currently active, a human may remove that directory by hand.\n'
+  printf '\n'
+}
 
 print_absent() {
   cat <<'EOF'
@@ -472,6 +509,8 @@ print_list() {
     printf '  %-40s %s\n' "$s" "$(cost_coverage_sentence)"
   done
 }
+
+print_evict_lock_notice
 
 if [ ! -f "$LEDGER" ]; then
   print_absent
