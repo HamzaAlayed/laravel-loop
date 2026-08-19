@@ -2815,6 +2815,35 @@ new_grep_absent_path() {
   printf '%s' "$dir"
 }
 
+# cost-log-section-parse-error-on-macos-ci S2 -- follows new_jq_absent_path()
+# and new_grep_absent_path()'s shape exactly (PF1/PF2's pinned PATH-fixture
+# contract), but this one is parametrised: it skips BOTH real jq and real
+# python3 during the symlink pass (never just the one named), then plants a
+# STUB at the requested name only. That means the other parser is genuinely
+# ABSENT from this PATH -- never symlinked, never stubbed -- so a case can
+# force the real python3 fallback to run against a chosen jq behaviour (or
+# vice versa) without the untouched parser's real binary interfering.
+# Reused by S3 and S4 rather than redefined (slices.md's "one helper,
+# defined once").
+new_stub_parser_path() { # $1 parser to stub (jq|python3) $2 stub script body
+  local parser="$1" body="$2"
+  local dir bindir f base
+  dir="$(mktemp -d)"
+  for bindir in /usr/bin /bin /usr/sbin /sbin /opt/homebrew/bin /usr/local/bin; do
+    [ -d "$bindir" ] || continue
+    for f in "$bindir"/*; do
+      [ -e "$f" ] || continue
+      base="$(basename "$f")"
+      case "$base" in jq|python3) continue ;; esac
+      [ -e "$dir/$base" ] && continue
+      ln -s "$f" "$dir/$base" 2>/dev/null
+    done
+  done
+  printf '%s\n' "$body" > "$dir/$parser"
+  chmod +x "$dir/$parser"
+  printf '%s' "$dir"
+}
+
 SHIP1="$(new_ship_fixture)"
 ship_run "$SHIP1"
 GATE_LINES="$(printf '%s\n' "$SHIP_OUT" | grep -cE '^gate [0-9]: ')"
@@ -3908,6 +3937,127 @@ expect "(S1-5) a broken parser under a grep-less PATH still yields the parse-err
   "yes 0" \
   "$(printf '%s' "$S1_STUBBED_OUT" | grep -qi 'Could not read the cost ledger (parse error)' && echo yes || echo no) $S1_STUBBED_EXIT"
 rm -rf "$S1_STUBDIR" "$GREP_ABSENT_PATH"
+
+# ---------------------------------------------------------------------------
+# cost-log-section-parse-error-on-macos-ci S2 -- a degraded cost_scan now
+# PUBLISHES which parser ran, its exit status, a bounded capture of its own
+# stderr, and one of three route values (PF1, PF2), instead of discarding
+# all three. Reuses this section's own mixed cost-log-fixture ($LOGDIR,
+# S1_SLUG_LEDGER) rather than building a new one. None of these re-assert
+# S1's fix (S1 owns that).
+cost_scan_fields_for_slug() { # $1 ledger $2 slug (PATH set by caller) ->
+  # "STATE<US>PARSER<US>STATUS<US>ROUTE<US>STDERR" (US = \x1f, so a stderr
+  # capture containing an ordinary space never misaligns the split below)
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$1" "$2"
+  printf '%s\x1f%s\x1f%s\x1f%s\x1f%s' \
+    "$COST_SCAN_STATE" "$COST_SCAN_PARSER" "$COST_SCAN_PARSER_STATUS" \
+    "$COST_SCAN_ROUTE" "$COST_SCAN_PARSER_STDERR"
+}
+
+# (S2-1) fixture self-check: new_stub_parser_path() plants the STUB at the
+# requested name (never the real binary -- both real jq and real python3 are
+# excluded from this PATH's symlink pass, so there is no real one for the
+# stub to compete with), and still resolves everything else cost_scan's
+# degraded-and-ok paths need. A PATH fixture that silently resolved the real
+# parser instead of the stub would make S2-2..S2-5 pass for the wrong
+# reason. [OQ5's discipline]
+S2_SELFCHECK_BODY='#!/usr/bin/env bash
+exit 0'
+S2_SELFCHECK_PATH="$(new_stub_parser_path jq "$S2_SELFCHECK_BODY")"
+S2_JQ_RESOLVED="$(PATH="$S2_SELFCHECK_PATH" bash -c 'command -v jq' 2>/dev/null)"
+expect "(S2-1) new_stub_parser_path resolves the STUB jq (not the real one), python3 stays absent, and bash/awk/mktemp/tr/grep still resolve" \
+  "yes no bash yes, awk yes, mktemp yes, tr yes, grep yes" \
+  "$([ "$S2_JQ_RESOLVED" = "$S2_SELFCHECK_PATH/jq" ] && echo yes || echo no) $(s1_resolves "$S2_SELFCHECK_PATH" python3) bash $(s1_resolves "$S2_SELFCHECK_PATH" bash), awk $(s1_resolves "$S2_SELFCHECK_PATH" awk), mktemp $(s1_resolves "$S2_SELFCHECK_PATH" mktemp), tr $(s1_resolves "$S2_SELFCHECK_PATH" tr), grep $(s1_resolves "$S2_SELFCHECK_PATH" grep)"
+rm -rf "$S2_SELFCHECK_PATH"
+
+# (S2-2) jq stub exits non-zero and writes to stderr -> PARSER=jq,
+# STATUS=<that status>, ROUTE=parser-failed, and the stderr text is present
+# in COST_SCAN_PARSER_STDERR. [PF1, PF2]
+S2_C2_BODY='#!/usr/bin/env bash
+printf "jq-stub-stderr-sentinel: unexpected token near line 4\n" >&2
+exit 3'
+S2_C2_PATH="$(new_stub_parser_path jq "$S2_C2_BODY")"
+S2_C2_FIELDS="$(PATH="$S2_C2_PATH" cost_scan_fields_for_slug "$S1_SLUG_LEDGER" "")"
+IFS=$'\x1f' read -r S2_C2_STATE S2_C2_PARSER S2_C2_STATUS S2_C2_ROUTE S2_C2_STDERR <<< "$S2_C2_FIELDS"
+expect "(S2-2) jq stub exits 3 with stderr -> scan-error/jq/3/parser-failed, stderr captured" \
+  "scan-error jq 3 parser-failed yes" \
+  "$S2_C2_STATE $S2_C2_PARSER $S2_C2_STATUS $S2_C2_ROUTE $(printf '%s' "$S2_C2_STDERR" | grep -q 'jq-stub-stderr-sentinel' && echo yes || echo no)"
+rm -rf "$S2_C2_PATH"
+
+# (S2-3) jq absent (new_stub_parser_path excludes it unconditionally),
+# python3 stub exits 0 with output lacking the marker -> PARSER=python3,
+# STATUS=0, ROUTE=parser-output-unrecognised, captured stderr empty. This is
+# the pairwise row proving parser identity is READ, not assumed to be jq.
+# [PF1, PF2]
+S2_C3_BODY='#!/usr/bin/env bash
+printf "not-the-marker-anyone-is-looking-for\n"
+exit 0'
+S2_C3_PATH="$(new_stub_parser_path python3 "$S2_C3_BODY")"
+S2_C3_FIELDS="$(PATH="$S2_C3_PATH" cost_scan_fields_for_slug "$S1_SLUG_LEDGER" "")"
+IFS=$'\x1f' read -r S2_C3_STATE S2_C3_PARSER S2_C3_STATUS S2_C3_ROUTE S2_C3_STDERR <<< "$S2_C3_FIELDS"
+expect "(S2-3) jq absent, python3 stub exits 0 with unrecognised output -> scan-error/python3/0/parser-output-unrecognised, stderr empty" \
+  "scan-error python3 0 parser-output-unrecognised " \
+  "$S2_C3_STATE $S2_C3_PARSER $S2_C3_STATUS $S2_C3_ROUTE $S2_C3_STDERR"
+rm -rf "$S2_C3_PATH"
+
+# (S2-4) jq stub produces nothing at all on EITHER stream (killed by a
+# signal before it can print anything) -> ROUTE=parser-no-output, with the
+# signal's own (non-zero) status still recorded -- distinguishable from
+# (S2-2)'s parser-failed, whose stderr is non-empty. [PF2]
+S2_C4_BODY='#!/usr/bin/env bash
+kill -KILL $$'
+S2_C4_PATH="$(new_stub_parser_path jq "$S2_C4_BODY")"
+S2_C4_FIELDS="$(PATH="$S2_C4_PATH" cost_scan_fields_for_slug "$S1_SLUG_LEDGER" "")"
+IFS=$'\x1f' read -r S2_C4_STATE S2_C4_PARSER S2_C4_STATUS S2_C4_ROUTE S2_C4_STDERR <<< "$S2_C4_FIELDS"
+expect "(S2-4) jq stub killed by a signal, nothing on either stream -> scan-error/jq/parser-no-output, a non-zero status still recorded, stderr empty" \
+  "scan-error jq parser-no-output yes " \
+  "$S2_C4_STATE $S2_C4_PARSER $S2_C4_ROUTE $([ "$S2_C4_STATUS" != "0" ] && [ -n "$S2_C4_STATUS" ] && echo yes || echo no) $S2_C4_STDERR"
+rm -rf "$S2_C4_PATH"
+
+# (S2-5) boundary, the bound: a stub writing far more than 200 characters to
+# stderr -> COST_SCAN_PARSER_STDERR is ONE LINE (newlines collapsed to
+# spaces) of AT MOST 200 characters, and it is the FIRST 200 -- a truncation
+# that kept the tail would discard the parser's actual error and would show
+# a "chunk59" token here instead of "chunk00". [PF1]
+S2_C5_BODY='#!/usr/bin/env bash
+i=0
+while [ $i -lt 60 ]; do
+  printf "chunk%02d-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n" "$i" >&2
+  i=$((i + 1))
+done
+exit 9'
+S2_C5_PATH="$(new_stub_parser_path jq "$S2_C5_BODY")"
+S2_C5_FIELDS="$(PATH="$S2_C5_PATH" cost_scan_fields_for_slug "$S1_SLUG_LEDGER" "")"
+IFS=$'\x1f' read -r S2_C5_STATE S2_C5_PARSER S2_C5_STATUS S2_C5_ROUTE S2_C5_STDERR <<< "$S2_C5_FIELDS"
+S2_C5_LEN="${#S2_C5_STDERR}"
+case "$S2_C5_STDERR" in *$'\n'*) S2_C5_HAS_NL="yes" ;; *) S2_C5_HAS_NL="no" ;; esac
+case "$S2_C5_STDERR" in chunk00-*) S2_C5_STARTS_FIRST="yes" ;; *) S2_C5_STARTS_FIRST="no" ;; esac
+case "$S2_C5_STDERR" in *chunk59*) S2_C5_HAS_LAST="yes" ;; *) S2_C5_HAS_LAST="no" ;; esac
+expect "(S2-5) state/parser/status/route still reported correctly, and stderr longer than the bound is one line, at most 200 chars, holding the FIRST chunk and never the last" \
+  "scan-error jq 9 parser-failed 200 no yes no" \
+  "$S2_C5_STATE $S2_C5_PARSER $S2_C5_STATUS $S2_C5_ROUTE $S2_C5_LEN $S2_C5_HAS_NL $S2_C5_STARTS_FIRST $S2_C5_HAS_LAST"
+rm -rf "$S2_C5_PATH"
+
+# (S2-6) boundary, the ok path: with the real parser on PATH, an ok scan of
+# the cost-log-fixture publishes all four new variables as EMPTY (PF10), and
+# /cost's own output for that unit is byte-identical to the pre-change
+# library's -- captured via `git show`, not asserted from memory, per this
+# repository's standing discipline. [PF10, PF8]
+S2_OK_FIELDS="$(cost_scan_fields_for_slug "$S1_SLUG_LEDGER" "cost-log-fixture")"
+IFS=$'\x1f' read -r S2_OK_STATE S2_OK_PARSER S2_OK_STATUS S2_OK_ROUTE S2_OK_STDERR <<< "$S2_OK_FIELDS"
+
+S2_PARITY_DIR="$(mktemp -d)"
+mkdir -p "$S2_PARITY_DIR/scripts"
+git -C "$ROOT" show HEAD:scripts/cost-ledger-lib.sh > "$S2_PARITY_DIR/scripts/cost-ledger-lib.sh"
+cp "$SCRIPTS/cost-report.sh" "$S2_PARITY_DIR/scripts/cost-report.sh"
+S2_PRECHANGE_REPORT="$(CLAUDE_PROJECT_DIR="$LOGDIR" bash "$S2_PARITY_DIR/scripts/cost-report.sh" cost-log-fixture)"
+S2_POSTCHANGE_REPORT="$(CLAUDE_PROJECT_DIR="$LOGDIR" bash "$SCRIPTS/cost-report.sh" cost-log-fixture)"
+S2_REPORT_DIFF="$(diff <(printf '%s' "$S2_PRECHANGE_REPORT") <(printf '%s' "$S2_POSTCHANGE_REPORT"))"
+expect "(S2-6) ok scan: all four new variables stay empty (PF10), and /cost's ok output is byte-identical to the pre-change library's for the same fixture (PF10, PF8)" \
+  "ok    " "$S2_OK_STATE $S2_OK_PARSER $S2_OK_STATUS $S2_OK_ROUTE $S2_OK_STDERR$S2_REPORT_DIFF"
+rm -rf "$S2_PARITY_DIR"
 
 rm -rf "$LOGDIR" "$NOSLUGDIR"
 

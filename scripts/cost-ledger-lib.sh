@@ -270,6 +270,52 @@
 # COST_N_INFLIGHT; a caller that wants the raw total adds the two explicitly,
 # in its own output, rather than this file inventing a fourth combined figure
 # nobody asked for.
+#
+# cost-log-section-parse-error-on-macos-ci S2 additions to cost_scan (PF1,
+# PF2, PF10): a degraded scan (COST_SCAN_STATE="scan-error") now PUBLISHES
+# what happened to the parser, instead of discarding it. Every consumer must
+# treat these as observations, never a claim about whose fault the
+# degradation was (PF2's own boundary -- that reading is a person's, from the
+# stderr text, not this file's to infer):
+#   COST_SCAN_PARSER          "jq" or "python3" -- whichever was actually
+#                             invoked -- or "" if no parser ran at all (every
+#                             state other than scan-error, "no-parser" and
+#                             "scan-error" both included: "no-parser" means
+#                             neither was on PATH, so nothing to name).
+#   COST_SCAN_PARSER_STATUS   that parser invocation's own exit status, or ""
+#                             if none ran.
+#   COST_SCAN_PARSER_STDERR   a BOUNDED, single-line capture of what the
+#                             parser wrote to its own stderr: newlines and
+#                             tabs collapsed to single spaces, then truncated
+#                             to the first 200 characters (a capture bound,
+#                             not a threshold -- no environment variable
+#                             governs it, and none ever will). "" if the
+#                             parser wrote nothing, or if none ran.
+#   COST_SCAN_ROUTE           one of three values, set only on scan-error,
+#                             describing what was OBSERVED rather than
+#                             inferring which side was at fault:
+#                               parser-no-output           the parser
+#                                 produced nothing on EITHER stream (did not
+#                                 start, was killed, or simply wrote
+#                                 nothing) -- checked first, because a
+#                                 signal-killed parser's own exit status
+#                                 looks exactly like an ordinary failure.
+#                               parser-failed               a non-zero exit
+#                                 status with output on at least one stream.
+#                               parser-output-unrecognised   a zero exit
+#                                 status whose stdout still lacked the
+#                                 COST_N_LINES marker.
+#                             "" on every state other than scan-error,
+#                             including "ok" -- PF10: an ok scan changes no
+#                             byte of any consumer's output, so nothing new
+#                             this slice adds may be non-empty there.
+# All four are reset to "" by _cost_reset_scan_vars, exactly like every
+# other COST_SCAN_* variable. The capture itself (a temp file, read, then
+# removed) runs on every scan that reaches a parser -- PF10's "always-on" is
+# the capture; only the four variables' non-emptiness is degraded-path only.
+# Neither _cost_scan_jq_program nor _cost_scan_py_program is touched by any
+# of this (PF7, PF15) -- the capture wraps the existing invocations in the
+# shell around them.
 
 cost_fmt() {
   # Prints a number, or the literal word "unavailable" for an absent one.
@@ -809,6 +855,10 @@ PY_EOF
 
 _cost_reset_scan_vars() {
   COST_SCAN_STATE="absent"
+  COST_SCAN_PARSER=""
+  COST_SCAN_PARSER_STATUS=""
+  COST_SCAN_PARSER_STDERR=""
+  COST_SCAN_ROUTE=""
   COST_SLUGS_PRESENT=""
   COST_N_LINES=0
   COST_N_SKIPPED=0
@@ -966,12 +1016,30 @@ cost_scan() {
     return 0
   fi
 
-  local out=""
+  # cost-log-section-parse-error-on-macos-ci S2 (PF1, PF2, PF10): the parser's
+  # stderr is captured to a temp file rather than discarded (2>/dev/null,
+  # today's behaviour), and its exit status is captured on a SEPARATE
+  # statement from the `out=` assignment -- `local out="$(...)"` would
+  # capture `local`'s own exit status instead of the parser's (shellcheck
+  # SC2155), so `out` is declared local above with the rest and assigned
+  # here as a plain statement. Both reads (stdout into $out, stderr into the
+  # temp file) happen on EVERY scan that reaches a parser -- PF10's
+  # always-on capture -- and the temp file is removed unconditionally,
+  # immediately, on every path, because cost_scan runs inside hook
+  # processes where a leaked temp file is a leak per tool call.
+  local out="" parser="" status="0" stderr_file="" stderr_raw="" route=""
+  stderr_file="$(mktemp)"
   if [ "$have_jq" -eq 1 ]; then
-    out="$(jq -Rn -r --arg slugfilter "$slug" "$(_cost_scan_jq_program)" < "$ledger" 2>/dev/null)"
+    parser="jq"
+    out="$(jq -Rn -r --arg slugfilter "$slug" "$(_cost_scan_jq_program)" < "$ledger" 2>"$stderr_file")"
+    status=$?
   else
-    out="$(python3 -c "$(_cost_scan_py_program)" "$slug" < "$ledger" 2>/dev/null)"
+    parser="python3"
+    out="$(python3 -c "$(_cost_scan_py_program)" "$slug" < "$ledger" 2>"$stderr_file")"
+    status=$?
   fi
+  stderr_raw="$(cat "$stderr_file" 2>/dev/null)"
+  rm -f "$stderr_file"
 
   # Marker recognition, bash-builtin (PF12): neither this test nor the
   # slug-presence test below may depend on an external tool being
@@ -983,6 +1051,31 @@ cost_scan() {
   case "$out" in
     *COST_N_LINES*) ;;
     *)
+      # S2 (PF1, PF2): publish what was observed. Never inferred: whose
+      # fault the degradation was is read from COST_SCAN_PARSER_STDERR by a
+      # person, not decided here (reading 2/3, slices.md). Route priority --
+      # checked in this order because a signal-killed parser's own non-zero
+      # exit status is otherwise indistinguishable from an ordinary failure:
+      #   1. nothing on EITHER stream at all -> parser-no-output
+      #   2. a non-zero status with output on some stream -> parser-failed
+      #   3. a zero status that still lacked the marker (output existed,
+      #      just not recognised, or the parser wrote nothing but claimed
+      #      success) -> parser-output-unrecognised, falling back to
+      #      parser-no-output for the zero-status/empty-output edge case.
+      COST_SCAN_PARSER="$parser"
+      COST_SCAN_PARSER_STATUS="$status"
+      COST_SCAN_PARSER_STDERR="$(printf '%s' "$stderr_raw" | tr '\n\t' '  ')"
+      COST_SCAN_PARSER_STDERR="${COST_SCAN_PARSER_STDERR:0:200}"
+      if [ -z "$out" ] && [ -z "$stderr_raw" ]; then
+        route="parser-no-output"
+      elif [ "$status" -ne 0 ]; then
+        route="parser-failed"
+      elif [ -z "$out" ]; then
+        route="parser-no-output"
+      else
+        route="parser-output-unrecognised"
+      fi
+      COST_SCAN_ROUTE="$route"
       COST_SCAN_STATE="scan-error"
       return 0
       ;;
