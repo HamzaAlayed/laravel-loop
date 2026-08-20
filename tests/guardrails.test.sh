@@ -3086,7 +3086,7 @@ new_jq_absent_path() {
     [ -d "$bindir" ] || continue
     for f in "$bindir"/*; do
       [ -e "$f" ] || continue
-      base="$(basename "$f")"
+      base="${f##*/}"
       [ "$base" = "jq" ] && continue
       [ -e "$dir/$base" ] && continue
       ln -s "$f" "$dir/$base" 2>/dev/null
@@ -3111,7 +3111,7 @@ new_grep_absent_path() {
     [ -d "$bindir" ] || continue
     for f in "$bindir"/*; do
       [ -e "$f" ] || continue
-      base="$(basename "$f")"
+      base="${f##*/}"
       [ "$base" = "grep" ] && continue
       [ -e "$dir/$base" ] && continue
       ln -s "$f" "$dir/$base" 2>/dev/null
@@ -3138,7 +3138,7 @@ new_stub_parser_path() { # $1 parser to stub (jq|python3) $2 stub script body
     [ -d "$bindir" ] || continue
     for f in "$bindir"/*; do
       [ -e "$f" ] || continue
-      base="$(basename "$f")"
+      base="${f##*/}"
       case "$base" in jq|python3) continue ;; esac
       [ -e "$dir/$base" ] && continue
       ln -s "$f" "$dir/$base" 2>/dev/null
