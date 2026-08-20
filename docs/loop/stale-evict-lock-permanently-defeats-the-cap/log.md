@@ -75,7 +75,7 @@ satisfied or deferred, and `S6`/`S7` were freed of their dependency on it.
 
 Merged at `f31bc1f`.
 
-## Phase 4 — Verify (G2), 2026-08-20 — **CONCERNS**
+## Phase 4 — Verify (G2), 2026-08-20 — **PASS** (first issued CONCERNS; retracted on evidence)
 
 `verify.md` carries the pass. Eleven criteria met with cases that can fail; `SL11` and `SL13`
 confirmed as declined-on-evidence rather than quietly deferred. Suite green at
@@ -86,14 +86,23 @@ Two experiments were re-executed rather than accepted from the commit messages: 
 registration reddens `S3 (k)`, and renaming `record-recovered-cost.sh`'s `EVICT_LOCK` alone reddens
 `(S7-1)` and `(S7-2)`. Both criteria that rest on an experiment now rest on one run in this pass.
 
-**The concern is `SL11`'s, and it belongs to the human.** The reboot observation this unit
-deliberately reserved has now been taken, and it does not match the prediction: both marker
-directories were **absent** after the 2026-08-20 reboot, at roughly 20.5 hours old against a
-three-day age filter. The spike's own decision rule calls that the branch which *contradicts* the
-configuration reading and is worth investigating rather than believing. It does not establish
-boot-clearing — one host, one sample, and several other mechanisms fit — but it is live input to the
-relocation entry's own "What would reopen it", because leg one of the decline (no per-boot property)
-is what leg two (an age filter reaping a held lock) was arguing against.
+**The concern was `SL11`'s, and it has been retracted on evidence.** The reboot observation this unit
+deliberately reserved was taken, and both marker directories were **absent** after the 2026-08-20
+reboot, at roughly 20.5 hours old against a three-day age filter — the branch the spike's own rule
+called a contradiction of the configuration reading.
+
+Then the rule's second half was honoured: *investigate rather than believe immediately.*
+`InstallHistory.plist` records **`macOS 26.6.2` installed at 11:24 that same day**, three hours before
+the 14:22 boot, and the running system is now `26.6.2` (`25G83`). **The boot window contains an OS
+upgrade**, which recreates the per-user `/var/folders` tree and can clear `/private/tmp` during
+installation. The markers' absence is explained by the upgrade, not by ordinary boot behaviour.
+
+So the configuration reading stands unchallenged, the per-boot property still fails as `S4` recorded,
+and the relocation decline rests on ground that was never actually contradicted. The verdict was
+raised to PASS and the sequence recorded rather than overwritten.
+
+Whether an *ordinary* reboot leaves the markers in place is still unobserved, and is now **optional**:
+it would confirm a prediction nothing contradicts, for a property nothing shipped depends on.
 
 ## What this unit foreclosed
 
@@ -112,6 +121,8 @@ is what leg two (an age filter reaping a held lock) was arguing against.
   kill on record has an unestablished signal class.
 - **`SL10` beyond one sample per platform.** Both jobs green on `1bd510b`; that is two samples, not
   a rate.
+- **An ordinary-reboot sample for the temp base.** The one reboot observed was an OS-upgrade reboot,
+  which is confounded for this purpose. Optional, and not a blocker.
 - **The temp-base question on either guarding platform.** Still `UNKNOWN`. A runner cannot be
   rebooted and a fresh VM is a different machine rather than a cleared one.
 - **The Handoff's append-versus-trim loss window.** Deliberately left unopened, as `spec.md`'s

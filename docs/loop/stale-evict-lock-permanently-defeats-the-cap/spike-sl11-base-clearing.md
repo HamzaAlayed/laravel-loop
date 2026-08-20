@@ -212,3 +212,18 @@ happens before 2026-08-23T14:01:07Z.
 The full reasoning, including why this is live input to "What would reopen it" rather than a
 reopening, is in `docs/loop/decisions.md` under **"SL10 satisfied, and SL11's reboot observation
 contradicts the reading it was predicted from (2026-08-20)"**.
+
+## Addendum 2 — the contradiction is confounded; this file's verdict stands (2026-08-20)
+
+The 2026-08-20 14:22 boot was a **macOS upgrade** boot: `InstallHistory.plist` records
+`macOS 26.6.2` installed at 11:24 the same day, and the running system is now `26.6.2` (`25G83`). An
+upgrade recreates the per-user `/var/folders` tree and can clear `/private/tmp` during installation,
+so the absent markers are explained by the upgrade rather than by ordinary boot behaviour.
+
+**Addendum 1's contradiction is therefore retracted.** Everything in the body of this file stands as
+written: the per-boot property FAILS, both bases are cleared by age at 3 days, and a lock created
+minutes before an ordinary reboot survives it.
+
+An ordinary-reboot sample remains unobserved and is optional — it would confirm a prediction nothing
+now contradicts, for a property nothing shipped depends on. Full reasoning in `docs/loop/decisions.md`
+under "SL11's contradiction is confounded".

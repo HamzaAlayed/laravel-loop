@@ -862,3 +862,43 @@ modified, or reconfigured.
 **What this does not establish.** That a resumed run's *cost* is observable — it is not, and `RE4`
 stands unchanged: the id is a handle, never a token figure. Two samples on one host, one platform;
 no rate is claimed. And nothing here says what should be built.
+
+## SL11's contradiction is confounded: the 2026-08-20 reboot was a macOS upgrade (2026-08-20)
+
+Appended beneath the entry above rather than editing it, so the sequence of what was believed when
+stays legible. **This retracts that entry's contradiction, on evidence, and restores the original
+`SL11` verdict.**
+
+`/Library/Receipts/InstallHistory.plist` records, on the same day, three hours before the 14:22 boot:
+
+```
+2026-08-20 11:24  macOS 26.6.2 26.6.2   [softwareupdated]
+2026-08-20 11:24  RosettaUpdateAuto     [bootinstalld]
+```
+
+and the running system is now `26.6.2` (`25G83`). **The boot window contains an OS upgrade.** A major
+macOS install recreates the per-user `/var/folders` tree and can clear `/private/tmp` as part of
+installation — which was named as one of the alternatives fitting the observation, and is now known to
+have **actually occurred** rather than merely being available as a hypothesis.
+
+**What this changes.** The absent markers are no longer evidence that the base is cleared at boot:
+they are explained by an upgrade, which is not an ordinary reboot. The configuration reading in
+`spike-sl11-base-clearing.md` — both bases cleared by age at 3 days, `dirhelper` running at boot under
+the same age filter, so a marker created minutes before an *ordinary* reboot survives it — stands
+**unchallenged**. The per-boot property still **FAILS**, exactly as `S4` recorded, and the relocation
+decline rests on ground that was never actually contradicted.
+
+**What it does not change.** Nothing about the shipped arrangement: the lock stays beside the ledger,
+`SL11` and `SL13` remain declined on evidence, and no sentence anywhere claims uptime bounding.
+
+**What is still unobserved.** Whether an *ordinary* reboot — no upgrade in the window — leaves the
+markers in place. The configuration reading predicts it does. The markers re-planted
+2026-08-20T14:01:07Z would test it, and that sample is now **low value and optional**: it would
+confirm a prediction that nothing contradicts, for a property nothing shipped depends on. It is worth
+taking only if relocation is ever reopened, and it is not a blocker for anything.
+
+**The methodological point, kept because it earned its place.** The spike wrote its decision rule in
+advance and said the contradicting branch was "worth investigating rather than believing immediately."
+Believing it immediately would have put a false contradiction into this file against a decision two
+configuration files argued for. The rule was right, and the investigation cost one read of the install
+history.

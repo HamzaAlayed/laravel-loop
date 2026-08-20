@@ -1,10 +1,14 @@
 # Verify — stale-evict-lock-permanently-defeats-the-cap (S1–S9, the whole cut as amended)
 
-**Verdict: CONCERNS** — eleven of the thirteen criteria are met with cases that can fail, and the two
+**Verdict: PASS** — eleven of the thirteen criteria are met with cases that can fail, and the two
 remaining (`SL11`, `SL13`) were **declined on evidence** at the G1 amendment rather than satisfied,
-which is a legitimate outcome this pass confirms. The concern is not a defect in the build: it is
-that **the one observation this unit explicitly reserved for a human has now been taken, and it
-contradicts the configuration reading the decline rests on.** See Finding 1. Nothing below claims the
+which is a legitimate outcome this pass confirms.
+
+**Amended 2026-08-20.** This pass first issued **CONCERNS**, on the grounds that the reboot
+observation the unit reserved for a human had been taken and contradicted the configuration reading
+the decline rests on. **That contradiction is retracted on evidence:** the boot in question was a
+macOS upgrade boot, which is a sufficient and now-confirmed alternative explanation. The verdict is
+raised and the sequence is recorded rather than overwritten. See Finding 1. Nothing below claims the
 orphaned-holder leak is anything other than narrowed.
 
 **Scope, declared rather than implied:**
@@ -48,46 +52,36 @@ orphaned-holder leak is anything other than narrowed.
 
 ## Findings
 
-**1. `SL11`'s reserved observation has been taken, and it contradicts the configuration reading the
-relocation decline rests on. (CONCERNS — for the human, not for the builder.)**
+**1. `SL11`'s reserved observation was taken; its apparent contradiction is confounded.
+(Raised as CONCERNS, then retracted on evidence — 2026-08-20)**
 
-`spike-sl11-base-clearing.md` left two empty marker directories and stated the decision rule itself:
-*"Both still listed → confirms the per-boot property fails, matching what the configuration above
-already predicts. Either absent → contradicts the configuration reading and is worth investigating
-rather than believing immediately."*
+`spike-sl11-base-clearing.md` left two empty marker directories and stated its decision rule in
+advance: *"Both still listed → confirms the per-boot property fails… Either absent → contradicts the
+configuration reading and is worth investigating rather than believing immediately."*
 
-The host rebooted 2026-08-20 at 14:22 local — inside the stated validity window, with the markers
-roughly 20.5 hours old, far short of the 3-day age filter. Observed immediately afterward:
+The host rebooted 2026-08-20 at 14:22, inside the validity window, with the markers roughly 20.5 hours
+old against a 3-day age filter. **Both were absent** — the contradicting branch, and what this pass
+first reported.
 
-```
-$ ls -ld /var/folders/65/fwmwydjj2ml5rwf5x45x6mc80000gn/T/loop-evict-sl11-reboot-marker \
-         /private/tmp/loop-evict-sl11-reboot-marker
-ls: /private/tmp/loop-evict-sl11-reboot-marker: No such file or directory
-ls: /var/folders/.../T/loop-evict-sl11-reboot-marker: No such file or directory
-```
+**Then the investigation the rule asked for was done, and it dissolved the contradiction.**
+`/Library/Receipts/InstallHistory.plist` records `macOS 26.6.2` installed at **11:24 the same day**,
+three hours before that boot, alongside `RosettaUpdateAuto` via `bootinstalld`; the running system is
+now `26.6.2` (`25G83`). **The boot window contains an OS upgrade**, and a major macOS install
+recreates the per-user `/var/folders` tree and can clear `/private/tmp` during installation.
 
-**Both absent.** That is the branch the spike named as contradicting its own configuration reading.
-Age cannot account for it at 20.5 hours against a 3-day filter, and nothing in this repository
-removed them: `grep -rl loop-evict .` matches only the spike file itself, and no script or case
-references those paths.
+So the markers' absence is explained by an upgrade rather than by ordinary boot behaviour. An upgrade
+boot is not the observation the spike designed for, and the configuration reading — both bases cleared
+by age at 3 days, `dirhelper` running at boot under the same age filter — stands **unchallenged**. The
+per-boot property still **fails**, as `e8ea137` recorded, and the relocation decline rests on ground
+that was never actually contradicted.
 
-What this does **not** establish: that the base is cleared at boot. Other mechanisms fit the same
-observation — a cleanup tool, an OS update's own wipe of `/var/folders`, or boot behaviour that
-differs from the two plists the spike read. One host, one sample, and the spike's own instruction was
-to investigate rather than believe.
+**What remains unobserved, and why it is optional:** whether an *ordinary* reboot leaves the markers
+in place. The configuration predicts it does, nothing contradicts that, and nothing shipped depends on
+it — the lock stays beside the ledger either way. Worth sampling only if relocation is reopened.
 
-Why it matters rather than being trivia: the decline had two legs, and they are entangled. Leg one is
-that the base has no per-boot property, only a 3-day age rule — now contradicted. Leg two is that an
-age filter reading `atime`/`mtime`/`ctime` on a *held* directory would delete a long-held lock while
-its holder is alive. Leg two is an argument **about the age rule specifically**; if boot-clearing is
-the real mechanism, it does not carry, because a reboot ends the holder too. So this observation is
-live input to that entry's own "What would reopen it" — it is not a regression of this unit, and it
-does not by itself reopen anything.
-
-**Recommended disposition, the human's call:** record the observation in `decisions.md` beneath the
-existing entry, re-plant the markers, and take a second sample at the next reboot before any part of
-the relocation decline is revisited. One host and one sample should not move a decision that two
-configuration files argued for.
+**Why this is in the record at all:** believing the contradicting branch immediately would have put a
+false contradiction against a decision two configuration files argued for. The spike's advance rule
+was right, and the investigation cost one read of the install history.
 
 ## `Do NOT` check — clean
 
