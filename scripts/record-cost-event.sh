@@ -636,6 +636,101 @@ if [ "$TOOL_NAME" = "Bash" ]; then
   exit 0
 fi
 
+# --- SendMessage: a resumed run (S7, Stage 3 Arm A -- RS1, RS3, RS4, RS9) -
+# A run resumed with SendMessage is NOT a new invocation. This branch writes
+# one `resume` record that REFERENCES the resumed agent and carries no figure
+# of any kind, so every count, share, per-phase figure, per-slice row and
+# rework figure in every report stays exactly where it was (RS1).
+#
+# Why PostToolUse only: S5's probe observed `to`/`recipient` on the input but
+# `resumedAgentId` ONLY on the response. resumedAgentId is RS3's
+# resumed-agent marker, so a PreToolUse record could neither satisfy RS3 nor
+# know the resume succeeded. See decisions.md, S5's entry.
+#
+# Why no slug, phase or agent: RS5 -- a resumed run's unit comes from the
+# invocation it references, never from its own payload. The record carries
+# the RAW identifier and resolution happens on the reader's side (RS11, S8).
+#
+# Why no token field at all: RE4. A resumed run's cost is not exposed to
+# anything this repository can read, so a number here could only be invented
+# (RS9, RV3). Not zero, not null-as-placeholder, not a duration standing in.
+if [ "$TOOL_NAME" = "SendMessage" ]; then
+  # A PreToolUse SendMessage arrives here too. It writes nothing, but it did
+  # arrive, so it still owes the cap an arrival trim (S5, obligation 3).
+  if [ "$EVENT_TYPE" != "finish" ]; then
+    trim_on_arrival
+    exit 0
+  fi
+  RESUMED_AGENT_ID="$(extract '.tool_response.resumedAgentId' 'd.get("tool_response",{}).get("resumedAgentId","")')"
+  # RS3: record ONLY where the marker is present. A message delivered to an
+  # agent that was already running carries no resumedAgentId and writes
+  # nothing. The safe rule is confirmed 20 of 20; the negative case is
+  # uncorroborated, which is exactly why this refuses rather than detects.
+  if [ -z "$RESUMED_AGENT_ID" ]; then
+    trim_on_arrival
+    exit 0
+  fi
+  RESUMED_AGENT_ID="${RESUMED_AGENT_ID:0:200}"
+  RESUME_SESSION_ID="$(extract '.session_id' 'd.get("session_id","")')"
+  RESUME_SESSION_ID="${RESUME_SESSION_ID:0:200}"
+  RESUME_TOOL_USE_ID="$(extract '.tool_use_id' 'd.get("tool_use_id","")')"
+  RESUME_TOOL_USE_ID="${RESUME_TOOL_USE_ID:0:200}"
+
+  # RS4: exactly-once PER RESUME, not per agent. tool_use_id is distinct per
+  # resume event -- observed in S5's two payloads -- so two resumes of one
+  # agent are two records while one resume delivered twice is one. Same mkdir
+  # primitive the finish path uses; a payload with no tool_use_id cannot be
+  # deduped and is written rather than dropped (L7 outranks L9).
+  if [ -n "$RESUME_TOOL_USE_ID" ]; then
+    RESUME_SAFE_ID="$(printf '%s' "$RESUME_TOOL_USE_ID" | tr -c 'A-Za-z0-9_.-' '_')"
+    RESUME_SAFE_ID="${RESUME_SAFE_ID:0:200}"
+    if mkdir -p "$FINISHED_DIR/_resumed" 2>/dev/null; then
+      if ! mkdir "$FINISHED_DIR/_resumed/$RESUME_SAFE_ID" 2>/dev/null; then
+        trim_on_arrival
+        exit 0
+      fi
+    fi
+  fi
+
+  RESUME_TS="$(date +%s)"
+  RESUME_LINE=""
+  if [ "$HAVE_JQ" -eq 1 ]; then
+    RESUME_LINE="$(jq -nc \
+      --argjson ts "$RESUME_TS" \
+      --arg resumed_agent_id "$RESUMED_AGENT_ID" \
+      --arg session_id "$RESUME_SESSION_ID" \
+      --arg tool_use_id "$RESUME_TOOL_USE_ID" \
+      'def z: if . == "" then null else . end;
+       {ts:$ts, event:"resume", resumed_agent_id:$resumed_agent_id,
+        session_id:($session_id|z), tool_use_id:($tool_use_id|z)}
+       | with_entries(select(.value != null))' 2>/dev/null)"
+  elif [ "$HAVE_PY" -eq 1 ]; then
+    RESUME_LINE="$(python3 - "$RESUME_TS" "$RESUMED_AGENT_ID" "$RESUME_SESSION_ID" \
+      "$RESUME_TOOL_USE_ID" <<'PY' 2>/dev/null
+import sys, json
+ts, resumed_agent_id, session_id, tool_use_id = sys.argv[1:5]
+record = {
+    "ts": int(ts),
+    "event": "resume",
+    "resumed_agent_id": resumed_agent_id,
+    "session_id": session_id or None,
+    "tool_use_id": tool_use_id or None,
+}
+record = {k: v for k, v in record.items() if v is not None}
+print(json.dumps(record, separators=(",", ":")))
+PY
+)"
+  fi
+
+  # RV7: no parser, no record -- but never an error and never a partial line.
+  if [ -z "$RESUME_LINE" ]; then
+    trim_on_arrival
+    exit 0
+  fi
+  append_and_evict "$RESUME_LINE"
+  exit 0
+fi
+
 case "$TOOL_NAME" in
   Agent|Task) : ;;
   *) exit 0 ;;

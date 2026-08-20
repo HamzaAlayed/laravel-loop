@@ -50,6 +50,15 @@
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/record-cost-event.sh"
           }
         ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/record-cost-event.sh"
+          }
+        ]
       }
     ]
   }

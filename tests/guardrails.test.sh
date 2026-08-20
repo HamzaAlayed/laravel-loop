@@ -6192,6 +6192,208 @@ expect "(S6-8) RS10 parity: the jq arm and the python3 arm write the identical r
 rm -rf "$S6DIR"
 
 echo
+echo "resumed-invocation-never-reaches-the-ledger S7 (spec.md RS1, RS3, RS4, RS9, RV7)"
+
+# Arm A's record. A resumed run is NOT a new invocation: this section's
+# load-bearing case is (S7-1), which requires every figure to stay put.
+# Payload shape taken from decisions.md's S5 entry -- a real observed
+# payload, not an invented one.
+S7DIR="$(mktemp -d)"
+s7_send() { # $1 project dir  $2 payload -> exit code
+  printf '%s' "$2" | CLAUDE_PROJECT_DIR="$1" CLAUDE_PLUGIN_ROOT="$ROOT" \
+    bash "$SCRIPTS/record-cost-event.sh" >/dev/null 2>&1
+  echo $?
+}
+s7_resume_json() { # $1 resumedAgentId ("" to omit -- RS3's negative) $2 tool_use_id $3 session
+  python3 - "$1" "$2" "$3" <<'S7PY'
+import json, sys
+aid, tid, sess = sys.argv[1:4]
+resp = {"success": True, "message": "Resuming agent %s" % aid[:7]}
+if aid:
+    resp["resumedAgentId"] = aid
+print(json.dumps({
+    "session_id": sess,
+    "hook_event_name": "PostToolUse",
+    "tool_name": "SendMessage",
+    "tool_input": {"to": aid or "unknown", "recipient": aid or "unknown",
+                   "message": "Now reply with the single word BETA."},
+    "tool_response": resp,
+    "tool_use_id": tid,
+}))
+S7PY
+}
+S7_AGENT="ae91f4afba4f056cd"
+S7_R1="$(s7_resume_json "$S7_AGENT" toolu_s7a sess-s7)"
+S7_R2="$(s7_resume_json "$S7_AGENT" toolu_s7b sess-s7)"
+S7_NOMARK="$(s7_resume_json "" toolu_s7c sess-s7)"
+
+# (S7-1) RS1 -- THE criterion of this arm. One launch + one finish, then the
+# same fixture plus a resume record. Every figure the criterion enumerates is
+# compared, plus the coverage sentence, plus the per-slice rows. The resume
+# must be invisible to all of them.
+S7RS1="$S7DIR/rs1"; mkdir -p "$S7RS1"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s7i1","slug":"s7-fixture","phase":"build","agent":"loop-build","slice":"S1"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s7i1","slug":"s7-fixture","phase":"build","agent":"loop-build","slice":"S1","total_tokens":5000,"status":"completed","agent_id":"ae91f4afba4f056cd"}'
+} > "$S7RS1/base.jsonl"
+cp "$S7RS1/base.jsonl" "$S7RS1/withresume.jsonl"
+printf '%s\n' '{"ts":3,"event":"resume","resumed_agent_id":"ae91f4afba4f056cd","session_id":"sess-s7","tool_use_id":"toolu_s7a"}' >> "$S7RS1/withresume.jsonl"
+s7_rs1_check() {
+  local bad=0
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$S7RS1/base.jsonl" "s7-fixture"
+  local b_inv="$COST_N_INVOCATIONS" b_priced="$COST_N_PRICED" b_tok="$COST_TOKENS_PRICED"
+  local b_unpriced="$COST_N_UNPRICED" b_rework="$COST_N_REWORK" b_rtok="$COST_TOKENS_REWORK_PRICED"
+  local b_sent; b_sent="$(cost_coverage_sentence)"
+  cost_slice_rows "$S7RS1/base.jsonl" "s7-fixture" >/dev/null
+  local b_rows="$COST_SLICE_ROWS"
+
+  cost_scan "$S7RS1/withresume.jsonl" "s7-fixture"
+  [ "$b_inv" = "$COST_N_INVOCATIONS" ] || bad=1
+  [ "$b_priced" = "$COST_N_PRICED" ] || bad=1
+  [ "$b_tok" = "$COST_TOKENS_PRICED" ] || bad=1
+  [ "$b_unpriced" = "$COST_N_UNPRICED" ] || bad=1
+  [ "$b_rework" = "$COST_N_REWORK" ] || bad=1
+  [ "$b_rtok" = "$COST_TOKENS_REWORK_PRICED" ] || bad=1
+  [ "$b_sent" = "$(cost_coverage_sentence)" ] || bad=1
+  cost_slice_rows "$S7RS1/withresume.jsonl" "s7-fixture" >/dev/null
+  [ "$b_rows" = "$COST_SLICE_ROWS" ] || bad=1
+  echo $bad
+}
+expect "(S7-1) RS1: a resume record moves NO figure -- invocation count, priced count, priced tokens, unpriced count, both rework figures, the coverage sentence and every per-slice row are identical with and without it" \
+  "0" "$(s7_rs1_check)"
+
+# (S7-2) RS3: no resumedAgentId -> nothing written at all. The safe rule is
+# "record only where the marker is present", so this refuses rather than
+# detecting a negative the evidence base does not cover.
+S7NM="$S7DIR/nomark"; mkdir -p "$S7NM/.claude"
+S7_NM_EXIT="$(s7_send "$S7NM" "$S7_NOMARK")"
+expect "(S7-2) RS3: a SendMessage with no resumedAgentId writes nothing and exits 0" \
+  "0 absent" \
+  "$S7_NM_EXIT $([ -s "$S7NM/.claude/loop-cost.jsonl" ] && echo present || echo absent)"
+
+# (S7-3) RS4 both directions in one case: two DISTINCT resumes of one agent
+# are two records; the same resume delivered twice is one. Exactly-once holds
+# per resume, not per agent.
+S7D="$S7DIR/dedupe"; mkdir -p "$S7D/.claude"
+s7_send "$S7D" "$S7_R1" >/dev/null
+s7_send "$S7D" "$S7_R1" >/dev/null
+S7_AFTER_DUP="$(grep -c '"event":"resume"' "$S7D/.claude/loop-cost.jsonl" 2>/dev/null || echo 0)"
+s7_send "$S7D" "$S7_R2" >/dev/null
+S7_AFTER_SECOND="$(grep -c '"event":"resume"' "$S7D/.claude/loop-cost.jsonl" 2>/dev/null || echo 0)"
+expect "(S7-3) RS4: one resume delivered twice -> one record; a second distinct resume of the same agent -> two" \
+  "1 2" "$S7_AFTER_DUP $S7_AFTER_SECOND"
+
+# (S7-4) RS9/RV3: the record carries NO token field of any kind. Asserted by
+# reading the record's KEYS, not its rendering -- a zero or a
+# null-as-placeholder would pass a rendering check and fail this one. RE4
+# means any number here could only have been invented.
+s7_keys() {
+  python3 - "$S7D/.claude/loop-cost.jsonl" <<'S7KPY'
+import json, sys
+banned = {"total_tokens", "input_tokens", "output_tokens", "cache_read_tokens",
+          "duration_ms", "tokens", "cost", "usd"}
+bad = []
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if not line:
+        continue
+    r = json.loads(line)
+    if r.get("event") != "resume":
+        continue
+    bad += sorted(set(r) & banned)
+print(",".join(sorted(set(bad))) if bad else "none")
+S7KPY
+}
+expect "(S7-4) RS9/RV3: no resume record carries any token, duration or cost field -- asserted over keys, so a zero or a null placeholder would fail" \
+  "none" "$(s7_keys)"
+
+# (S7-5) RS5/RS11: the record carries the RAW identifier and no unit of its
+# own. A slug here would be the resume's own payload deciding attribution,
+# which RS5 forbids -- the unit comes from the referenced invocation, and
+# resolution is the reader's (S8).
+s7_shape() {
+  python3 - "$S7D/.claude/loop-cost.jsonl" <<'S7SPY'
+import json, sys
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if not line:
+        continue
+    r = json.loads(line)
+    if r.get("event") != "resume":
+        continue
+    print("slug=%s slice=%s raw_id=%s" % (
+        "absent" if "slug" not in r else "PRESENT",
+        "absent" if "slice" not in r else "PRESENT",
+        "yes" if r.get("resumed_agent_id") else "no"))
+    break
+S7SPY
+}
+expect "(S7-5) RS5/RS11: the resume record carries the raw identifier and no slug or slice of its own" \
+  "slug=absent slice=absent raw_id=yes" "$(s7_shape)"
+
+# (S7-6) RV7 asserted PER CASE across four hostile conditions. A resume must
+# never be blocked, delayed, reordered or steered -- including when nothing
+# can be written at all.
+S7MISS="$S7DIR/nodir"                      # no .claude at all
+S7UNW="$S7DIR/unwritable"; mkdir -p "$S7UNW/.claude"; chmod 500 "$S7UNW/.claude"
+S7NOPARSE="$S7DIR/noparse"; mkdir -p "$S7NOPARSE/.claude"
+S7_E1="$(s7_send "$S7MISS" "$S7_R1")"
+S7_E2="$(s7_send "$S7UNW" "$S7_R1")"
+S7_E3="$(printf '%s' "$S7_R1" | PATH="$(new_jq_absent_path)" CLAUDE_PROJECT_DIR="$S7NOPARSE" \
+  CLAUDE_PLUGIN_ROOT="$ROOT" bash "$SCRIPTS/record-cost-event.sh" >/dev/null 2>&1; echo $?)"
+S7_E4="$(s7_send "$S7NM" "$S7_NOMARK")"
+chmod 700 "$S7UNW/.claude" 2>/dev/null || true
+expect "(S7-6) RV7 per case: exit 0 with no .claude dir, an unwritable .claude, jq absent, and no marker" \
+  "0 0 0 0" "$S7_E1 $S7_E2 $S7_E3 $S7_E4"
+
+# (S7-7) RS10 parity: the jq arm and the python3 arm must build the identical
+# resume record, or the two disagree by construction.
+S7PJ="$S7DIR/pjq"; S7PP="$S7DIR/ppy"
+mkdir -p "$S7PJ/.claude" "$S7PP/.claude"
+s7_send "$S7PJ" "$S7_R1" >/dev/null
+printf '%s' "$S7_R1" | PATH="$(new_jq_absent_path)" CLAUDE_PROJECT_DIR="$S7PP" \
+  CLAUDE_PLUGIN_ROOT="$ROOT" bash "$SCRIPTS/record-cost-event.sh" >/dev/null 2>&1
+s7_parity() {
+  python3 - "$S7PJ/.claude/loop-cost.jsonl" "$S7PP/.claude/loop-cost.jsonl" <<'S7PPY'
+import json, sys
+def one(path):
+    for line in open(path):
+        line = line.strip()
+        if line and json.loads(line).get("event") == "resume":
+            r = json.loads(line); r.pop("ts", None); return r
+    return None
+a, b = one(sys.argv[1]), one(sys.argv[2])
+print("identical" if a is not None and a == b else "DIFFER a=%s b=%s" % (a, b))
+S7PPY
+}
+expect "(S7-7) RS10 parity: the jq arm and the python3 arm write the identical resume record" \
+  "identical" "$(s7_parity)"
+
+# (S7-8) the matcher is REGISTERED in hooks.json -- which is all a fixture can
+# prove. That it is LIVE needs a plugin reinstall and a restart, is the
+# maintainer's action, and no case here claims it (conventions.md: a green
+# harness never proves a hook is live).
+expect "(S7-8) hooks.json registers PostToolUse/SendMessage on the cost writer, and the pre-existing entries are untouched" \
+  "yes" \
+  "$(python3 - "$ROOT/hooks/hooks.json" <<'S7HPY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+post = d["hooks"]["PostToolUse"]
+matchers = [e.get("matcher") for e in post]
+sm = [e for e in post if e.get("matcher") == "SendMessage"]
+ok = (matchers[:2] == ["Bash", "Agent|Task"]
+      and "SendMessage" in matchers
+      and len(sm) == 1
+      and any("record-cost-event.sh" in h.get("command", "") for h in sm[0]["hooks"]))
+print("yes" if ok else "no")
+S7HPY
+)"
+
+rm -rf "$S7DIR"
+
+echo
 echo "docs (case count)"
 DEV_SECTION="$(sed -n '/^## Development/,/^## /p' "$ROOT/README.md")"
 README_CASE_COUNT="$(printf '%s\n' "$DEV_SECTION" | grep -oE '[0-9]+ cases' | grep -oE '[0-9]+')"
