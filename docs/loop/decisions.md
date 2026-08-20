@@ -766,3 +766,44 @@ narrowed is not narrowed any differently by it.
 reboot yields a second sample. The observation is valid only if that reboot happens before
 2026-08-23T14:01:07Z; after that the 3-day filter can remove them on its own and absence stops
 distinguishing the two mechanisms. If the reboot comes later, delete both and re-plant first.
+
+## guardrail-suite-runtime-doubled: the fork per entry is gone, the rebuild is deferred (2026-08-20)
+
+Appended at end-of-file. Nothing above is edited, superseded, annotated, or marked revisited.
+
+**Option (a) taken: `basename "$f"` → `${f##*/}` in the three `PATH`-farm helpers.** Three one-line
+edits, no fixture redesign, no shared state. Measured at suite level with interleaved arms on one
+host, n=3 per arm: **mean 257.66s → 160.73s, median 247.51s → 158.35s**, every pair the same sign,
+none straddling zero. All six runs `total: 513 passed, 0 failed`, and the ordered list of all 513 case
+titles and results is **byte-identical across all six runs** (`6e90cf1f95d7`) — the same cases
+proving the same things, faster. Figures and method in
+`docs/loop/guardrail-suite-runtime-doubled/measure-rt5-suite-runtime.md`.
+
+The observed saving **exceeds** the ~65s the scope was accepted on. The projection came from an
+isolated per-build benchmark on an idle host; the arms ran on a loaded one. That explanation is
+consistent with the evidence and **unverified**, and is recorded as unverified rather than asserted.
+
+**Option (b) deferred, with its number named: ~92s.** The suite builds a `PATH` farm **twelve times**
+across **three distinct shapes**, and ten of those twelve perform a byte-identical symlink pass,
+differing only in one file planted afterwards. Building each shape once would collapse nine of the
+twelve. That was deliberately **not** bundled into a one-line fix: it is a design change to a fixture
+whose entire value is that it cannot lie, and bundling it is the cost
+`cost-log-section-parse-error-on-macos-ci`'s `OQ1` already recorded paying. Captured as its own
+intent at `docs/loop/suite-path-farms-rebuilt-twelve-times/` so the 92s is not carried as a comment,
+with `OQ-RT3` — whether the ten stub fixtures' absence property may be satisfied by a shared base
+plus a per-case override rather than literally — as the question a human owns before any build.
+
+**The runtime problem is reduced, not settled.** 160.73s is a mean of three runs on a loaded host, is
+not a new baseline, and should not be quoted as one. The suite remains well above the 88.5s it
+measured at `18289f2`.
+
+**No guard was added, and that cost is accepted knowingly (`OQ-RT2`).** No threshold, no wall-clock
+assertion, no case-count-to-runtime ratio: on shared CI hardware a wall-clock assertion is flaky by
+construction, and a flaky guard spends more trust than it buys. The consequence, stated rather than
+hidden: **the next silent runtime increase will again be caught by a person noticing, not by a
+check** — which is exactly how this one arrived. No check was added, removed, or renamed, so
+`docs/loop/checks.md` gains no row.
+
+**`RT7` is outstanding and this entry does not claim it.** The saving is read from one host. Both
+guarding platforms' figures need a real pushed run, and per-fork cost differs between bash 3.2 on
+macOS and bash 5.x on Linux, so the local delta cannot stand in for either job's.
