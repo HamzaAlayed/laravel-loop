@@ -194,3 +194,21 @@ Stated as observations, because that is what they are:
 
 One host. One sample. Two bases. Nothing here is a rate, and no row is generalised from this host to
 either guarding platform.
+
+---
+
+## Addendum — the reboot observation was taken (2026-08-20)
+
+Appended rather than rewritten; every figure above stands as it was recorded on 2026-08-19.
+
+The host rebooted 2026-08-20 at 14:22 local, inside the validity window this file set, with both
+markers roughly 20.5 hours old. **Both were absent.** By this file's own decision rule that is the
+branch which *contradicts* the configuration reading above, and it is recorded as such — not as an
+establishment of boot-clearing, which one host and one sample cannot support.
+
+Both markers were re-planted 2026-08-20T14:01:07Z for a second sample, valid only if the next reboot
+happens before 2026-08-23T14:01:07Z.
+
+The full reasoning, including why this is live input to "What would reopen it" rather than a
+reopening, is in `docs/loop/decisions.md` under **"SL10 satisfied, and SL11's reboot observation
+contradicts the reading it was predicted from (2026-08-20)"**.

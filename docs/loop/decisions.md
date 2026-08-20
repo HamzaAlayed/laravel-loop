@@ -716,3 +716,53 @@ this build did not touch it.
   written before this unit carries an agent id (`RE6`) — only `agentId` on a `tool_response`
   does — and there is no backfill of that field into existing lines (`OQ-R4`). Whatever this
   unit's Stage 3 ships, past resumes remain outside anything it can attach.
+
+## SL10 satisfied, and SL11's reboot observation contradicts the reading it was predicted from (2026-08-20)
+
+Both halves the `stale-evict-lock-permanently-defeats-the-cap` record named as the human's have now
+happened. Appended beneath the two entries above rather than editing either: neither is superseded,
+neither is annotated, and the relocation decline still stands as written.
+
+**`SL10` is satisfied, as two samples and not as a rate.** Run `32366734933` on pushed commit
+`1bd510b`, job `96417752555` (`guardrails`, `ubuntu-latest`) and job `96417752188`
+(`guardrails-macos`, `macos-latest`), each reporting an identical `total: 513 passed, 0 failed`.
+That is one sample per platform. It is not evidence that the signal hygiene holds on CI in general,
+and the record does not read it that way.
+
+**`SL11`'s reboot observation was taken, and it does not match the prediction.** The host rebooted
+2026-08-20 at 14:22 local — inside the validity window
+`spike-sl11-base-clearing.md` set, with the two markers roughly 20.5 hours old against a 3-day age
+filter. Both were **absent**:
+
+```
+ls: /private/tmp/loop-evict-sl11-reboot-marker: No such file or directory
+ls: /var/folders/65/fwmwydjj2ml5rwf5x45x6mc80000gn/T/loop-evict-sl11-reboot-marker: No such file or directory
+```
+
+The spike stated the decision rule for this branch in advance: *"Either absent → contradicts the
+configuration reading and is worth investigating rather than believing immediately."* This entry does
+that and no more.
+
+- **Age cannot account for it.** 20.5 hours against `CLEAN_FILES_OLDER_THAN_DAYS => "3"` and
+  `daily_clean_tmps_days="3"`.
+- **Nothing in this repository removed them.** `grep -rl loop-evict .` matches only the spike file;
+  no script, case, or workflow names either path.
+- **It does not establish boot-clearing.** One host, one sample. A cleanup tool, an OS update's own
+  wipe of `/var/folders`, or boot behaviour differing from the two plists all fit the same
+  observation. **No mechanism is named here**, because none was observed — only an absence.
+
+**Why it is recorded rather than acted on.** The decline rested on two legs, and they are entangled:
+leg one is that the base has no per-boot property and only a 3-day age rule, which this observation
+contradicts; leg two is that an age filter reading `atime`/`mtime`/`ctime` on a directory that is
+*held* would reap a long-held marker while its holder is alive. Leg two argues **about the age rule
+specifically** — if boot-clearing turns out to be the mechanism, it does not carry, because a reboot
+ends the holder too.
+
+So this is live input to "What would reopen it" above, and it is **not** a reopening. One host and
+one sample should not move a decision two configuration files argued for, and the leak this unit
+narrowed is not narrowed any differently by it.
+
+**Next sample.** Both markers were re-planted 2026-08-20, empty, at the same two paths, so the next
+reboot yields a second sample. The observation is valid only if that reboot happens before
+2026-08-23T14:01:07Z; after that the 3-day filter can remove them on its own and absence stops
+distinguishing the two mechanisms. If the reboot comes later, delete both and re-plant first.
