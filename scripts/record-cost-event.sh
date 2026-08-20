@@ -697,7 +697,7 @@ fi
 
 # --- finish-only fields: best-effort split/cache-read tokens (D1) --------
 STATUS=""; DURATION=""; TOTAL_TOKENS=""; INPUT_TOKENS=""; OUTPUT_TOKENS=""
-CACHE_READ_TOKENS=""; OBSERVED_MODEL=""
+CACHE_READ_TOKENS=""; OBSERVED_MODEL=""; AGENT_ID=""
 if [ "$EVENT_TYPE" = "finish" ]; then
   STATUS="$(extract '.tool_response.status' 'd.get("tool_response",{}).get("status","")')"
   DURATION="$(extract_num '.tool_response.totalDurationMs' 'd.get("tool_response",{}).get("totalDurationMs")')"
@@ -706,6 +706,14 @@ if [ "$EVENT_TYPE" = "finish" ]; then
   OUTPUT_TOKENS="$(extract_num '.tool_response.usage.output_tokens // .tool_response.output_tokens' 'd.get("tool_response",{}).get("usage",{}).get("output_tokens")')"
   CACHE_READ_TOKENS="$(extract_num '.tool_response.usage.cache_read_input_tokens // .tool_response.cache_read_input_tokens' 'd.get("tool_response",{}).get("usage",{}).get("cache_read_input_tokens")')"
   OBSERVED_MODEL="$(extract '.tool_response.model // .tool_response.usage.model' 'd.get("tool_response",{}).get("model") or d.get("tool_response",{}).get("usage",{}).get("model") or ""')"
+  # S6 (RS11 write half): the join key a later resume record references. CARRIED,
+  # never interpreted here -- resolution is the reader's side, and forward-only:
+  # no path in this script rewrites, mutates or reorders an existing ledger line,
+  # so historical records simply do not carry it. Empty when the payload has no
+  # agentId, which both record builders below drop, exactly as every other
+  # optional field behaves.
+  AGENT_ID="$(extract '.tool_response.agentId' 'd.get("tool_response",{}).get("agentId","")')"
+  AGENT_ID="${AGENT_ID:0:200}"
   STATUS="${STATUS:0:200}"
 fi
 
@@ -766,6 +774,7 @@ if [ "$HAVE_JQ" -eq 1 ]; then
     --arg phase_detail "$PHASE_DETAIL" \
     --argjson refine_passes "$REFINE_PASSES_JSON" \
     --arg rework_attribution "$REWORK_ATTRIBUTION" \
+    --arg agent_id "$AGENT_ID" \
     'def z: if . == "" then null else . end;
      {ts:$ts, event:$event, invocation_id:($invocation_id|z), session_id:($session_id|z),
       slug:$slug, slice:($slice|z), phase:$phase, agent:$agent,
@@ -774,13 +783,14 @@ if [ "$HAVE_JQ" -eq 1 ]; then
       input_tokens:$input_tokens, output_tokens:$output_tokens,
       cache_read_tokens:$cache_read_tokens,
       phase_detail:($phase_detail|z), refine_passes:$refine_passes,
-      rework_attribution:($rework_attribution|z)}
+      rework_attribution:($rework_attribution|z), agent_id:($agent_id|z)}
      | with_entries(select(.value != null))' 2>/dev/null)"
 elif [ "$HAVE_PY" -eq 1 ]; then
   LINE="$(python3 - "$TS" "$EVENT_TYPE" "$INVOCATION_ID" "$SESSION_ID" "$SLUG" "$SLICE" \
     "$PHASE" "$AGENT" "$MODEL" "$MODEL_SOURCE" "$STATUS" \
     "$DURATION_JSON" "$TOTAL_TOKENS_JSON" "$INPUT_TOKENS_JSON" "$OUTPUT_TOKENS_JSON" \
-    "$CACHE_READ_TOKENS_JSON" "$PHASE_DETAIL" "$REFINE_PASSES_JSON" "$REWORK_ATTRIBUTION" <<'PY' 2>/dev/null
+    "$CACHE_READ_TOKENS_JSON" "$PHASE_DETAIL" "$REFINE_PASSES_JSON" "$REWORK_ATTRIBUTION" \
+    "$AGENT_ID" <<'PY' 2>/dev/null
 import sys, json
 
 
@@ -795,7 +805,7 @@ def z(s):
 (ts, event, invocation_id, session_id, slug, slice_, phase, agent, model,
  model_source, status, duration_ms, total_tokens, input_tokens,
  output_tokens, cache_read_tokens, phase_detail, refine_passes,
- rework_attribution) = sys.argv[1:20]
+ rework_attribution, agent_id) = sys.argv[1:21]
 
 record = {
     "ts": int(ts),
@@ -817,6 +827,7 @@ record = {
     "phase_detail": z(phase_detail),
     "refine_passes": num(refine_passes),
     "rework_attribution": z(rework_attribution),
+    "agent_id": z(agent_id),
 }
 record = {k: v for k, v in record.items() if v is not None}
 print(json.dumps(record, separators=(",", ":")))

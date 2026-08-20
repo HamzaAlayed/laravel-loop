@@ -6070,6 +6070,128 @@ expect "(2) decisions.md: the routing bullet stands byte-identical, no supersede
 # all along. This case's own contribution is the last one counted, so
 # PASS+FAIL+1 here *is* the grand total the closing printf below reports.
 echo
+echo "resumed-invocation-never-reaches-the-ledger S6 (spec.md RS11 write half, RS10, RV7)"
+
+# Arm A's join key. S6 starts READING .tool_response.agentId onto finish
+# records; it interprets nothing (resolution is the reader's, S8) and it is
+# forward-only -- no path rewrites, mutates or reorders an existing line, so
+# historical records simply do not carry it.
+S6DIR="$(mktemp -d)"
+mkdir -p "$S6DIR/withid/.claude" "$S6DIR/noid/.claude" "$S6DIR/fwd/.claude"
+s6_cost() { # $1 project dir  $2 payload
+  printf '%s' "$2" | CLAUDE_PROJECT_DIR="$1" CLAUDE_PLUGIN_ROOT="$ROOT" \
+    bash "$SCRIPTS/record-cost-event.sh" >/dev/null 2>&1
+  echo $?
+}
+S6_PROMPT=$'Unit:  s6-fixture\nSlice: S1\n\nbuild it'
+S6_WITH="$(finish_json loop-build toolu-s6a "S6 with id" "$S6_PROMPT" sess-s6 completed 1234 500 '{"agentId":"ae91f4afba4f056cd"}')"
+S6_WITHOUT="$(finish_json loop-build toolu-s6b "S6 no id" "$S6_PROMPT" sess-s6 completed 1234 500 "")"
+
+S6_EXIT_WITH="$(s6_cost "$S6DIR/withid" "$S6_WITH")"
+S6_EXIT_WITHOUT="$(s6_cost "$S6DIR/noid" "$S6_WITHOUT")"
+
+# (S6-1) the field is captured when the payload carries it.
+expect "(S6-1) RS11: agentId on the payload lands as agent_id on the finish record" \
+  "ae91f4afba4f056cd" \
+  "$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().strip()).get("agent_id",""))' "$S6DIR/withid/.claude/loop-cost.jsonl" 2>/dev/null)"
+
+# (S6-2) THE CASE THAT PROVES THE FIELD IS ADDITIVE: no agentId in the
+# payload -> the key is absent entirely, not null and not empty-string. A
+# record that gained a null would be a schema change for every existing
+# consumer; this asserts it did not.
+expect "(S6-2) RS10: a payload with no agentId yields a record with NO agent_id key at all -- absent, not null" \
+  "absent" \
+  "$(python3 -c 'import json,sys
+r=json.loads(open(sys.argv[1]).read().strip())
+print("absent" if "agent_id" not in r else "present:%r" % (r["agent_id"],))' "$S6DIR/noid/.claude/loop-cost.jsonl" 2>/dev/null)"
+
+# (S6-3) RS11 FORWARD-ONLY, and it is asserted over the WHOLE FILE rather
+# than over the appended line: seed three pre-existing lines that carry no
+# agent_id, append one new finish that does, and require every pre-existing
+# line to be byte-identical afterwards. This is the case that fails if
+# anyone ever adds a backfill.
+S6FWD="$S6DIR/fwd/.claude/loop-cost.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s6f1","slug":"s6-fixture","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s6f1","slug":"s6-fixture","phase":"build","agent":"loop-build","total_tokens":10}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s6f2","slug":"s6-fixture","phase":"build","agent":"loop-build"}'
+} > "$S6FWD"
+S6_PRE_BEFORE="$(cat "$S6FWD")"
+s6_cost "$S6DIR/fwd" "$S6_WITH" >/dev/null
+S6_PRE_AFTER="$(head -3 "$S6FWD")"
+expect "(S6-3) RS11 forward-only: appending a record carrying agent_id leaves every pre-existing line byte-identical" \
+  "" "$(diff <(printf '%s' "$S6_PRE_BEFORE") <(printf '%s' "$S6_PRE_AFTER"))"
+expect "(S6-4) RS11 forward-only: no pre-existing line gained an agent_id key" \
+  "0" "$(head -3 "$S6FWD" | grep -c 'agent_id')"
+
+# (S6-5) RS10 forward direction: a ledger holding the NEW field is read
+# without error by both consumers, and the record is not reclassified -- the
+# invocation still counts as one priced finish.
+s6_scan_check() {
+  local bad=0
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$S6DIR/withid/.claude/loop-cost.jsonl" "s6-fixture"
+  [ "$COST_SCAN_STATE" = "ok" ] || bad=1
+  [ "$COST_N_PRICED" = "1" ] || bad=1
+  [ "$COST_TOKENS_PRICED" = "1234" ] || bad=1
+  echo $bad
+}
+expect "(S6-5) RS10 forward: a ledger carrying agent_id scans ok, one priced invocation, tokens intact -- no reclassification" \
+  "0" "$(s6_scan_check)"
+
+# (S6-6) RS10 backward direction: the pre-existing ledger written before this
+# slice -- no agent_id anywhere -- still scans ok and reports the same way.
+s6_back_check() {
+  local bad=0
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$S6DIR/noid/.claude/loop-cost.jsonl" "s6-fixture"
+  [ "$COST_SCAN_STATE" = "ok" ] || bad=1
+  [ "$COST_N_PRICED" = "1" ] || bad=1
+  echo $bad
+}
+expect "(S6-6) RS10 backward: a ledger written before this slice reads without error and is not reclassified" \
+  "0" "$(s6_back_check)"
+
+# (S6-7) RV7 asserted PER CASE rather than in aggregate: both writes above
+# exited 0, and so does a write under a PATH that resolves neither parser.
+S6_NOPARSER="$S6DIR/noparser"
+mkdir -p "$S6_NOPARSER/.claude"
+S6_NP_EXIT="$(printf '%s' "$S6_WITH" | PATH="$(new_jq_absent_path)" \
+  CLAUDE_PROJECT_DIR="$S6_NOPARSER" CLAUDE_PLUGIN_ROOT="$ROOT" \
+  bash "$SCRIPTS/record-cost-event.sh" >/dev/null 2>&1; echo $?)"
+expect "(S6-7) RV7: the agent_id write path exits 0 with the payload, without it, and with jq absent -- asserted per case" \
+  "0 0 0" "$S6_EXIT_WITH $S6_EXIT_WITHOUT $S6_NP_EXIT"
+
+# (S6-8) PARITY: the jq arm and the python3 arm must build the IDENTICAL
+# record for one payload, or RS10's "both programs or they disagree by
+# construction" is already broken. Compared with ts removed, since the two
+# runs happen a moment apart.
+S6PJQ="$S6DIR/pjq"; S6PPY="$S6DIR/ppy"
+mkdir -p "$S6PJQ/.claude" "$S6PPY/.claude"
+s6_cost "$S6PJQ" "$S6_WITH" >/dev/null
+printf '%s' "$S6_WITH" | PATH="$(new_jq_absent_path)" \
+  CLAUDE_PROJECT_DIR="$S6PPY" CLAUDE_PLUGIN_ROOT="$ROOT" \
+  bash "$SCRIPTS/record-cost-event.sh" >/dev/null 2>&1
+s6_parity() {
+  python3 - "$S6PJQ/.claude/loop-cost.jsonl" "$S6PPY/.claude/loop-cost.jsonl" <<'S6PY'
+import json, sys
+try:
+    a = json.loads(open(sys.argv[1]).read().strip())
+    b = json.loads(open(sys.argv[2]).read().strip())
+except Exception:
+    print("unreadable"); raise SystemExit
+a.pop("ts", None); b.pop("ts", None)
+print("identical" if a == b else "DIFFER: %s" % sorted(set(a.items()) ^ set(b.items())))
+S6PY
+}
+expect "(S6-8) RS10 parity: the jq arm and the python3 arm write the identical record, agent_id included" \
+  "identical" "$(s6_parity)"
+
+rm -rf "$S6DIR"
+
+echo
 echo "docs (case count)"
 DEV_SECTION="$(sed -n '/^## Development/,/^## /p' "$ROOT/README.md")"
 README_CASE_COUNT="$(printf '%s\n' "$DEV_SECTION" | grep -oE '[0-9]+ cases' | grep -oE '[0-9]+')"
