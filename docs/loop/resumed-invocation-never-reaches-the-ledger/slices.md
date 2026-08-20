@@ -519,7 +519,7 @@ Depends on:  nothing. It shares no file with S1-S3. It shares decisions.md's end
              after the other.
 ```
 
-## Stage 3 — NOT CUT, and why cutting it now would be a defect
+## Stage 3 — was NOT CUT until 2026-08-20; the reason, kept, and then the cut
 
 **Not cut, deliberately, and this is the whole reason the pass stops at five slices.** `spec.md`
 states it in terms this gate does not soften: *"No slice in group `RS` may be written, cut, or
@@ -815,3 +815,332 @@ Stage 3: NOT CUT. An RS envelope now would commit the repo to a capture design a
    pinning RU3's literal now instead of at the arm
 3. Spec is wrong — back to loop-spec
 ```
+
+---
+
+## Stage 3 — CUT 2026-08-20, Arm A, on `S5`'s answer
+
+**The gate that held this closed has opened by evidence, not by patience.** `S5` returned answer
+**(a)**: the `SendMessage` matcher fires and the payload carries the target agent id. `decisions.md`
+carries the entry, the quoted payload, and the re-runnable probe. Arm A is therefore live and Arm B is
+closed — `RB` is not cut and never will be under this answer.
+
+Everything above this line stands as written. The reason cutting was a defect on 2026-08-19 was
+sound; it stopped being a defect the moment the mechanism was observed.
+
+### Couplings, discharged rather than assumed
+
+`spec.md`'s Couplings made this unit third of three and required whoever cuts Arm A to read the two
+earlier units' **landed** diffs first, not after. Both landed and both were verified at G2 on
+2026-08-20:
+
+- `cost-log-section-parse-error-on-macos-ci` (PASS) changed both parser programs' neighbourhood —
+  `cost_scan`'s two `grep` sites became bash builtins and the call sites gained stderr capture. **Both
+  program bodies are byte-identical to before** (`da280d5ff512`, `d69209aa7c5b`), which is what makes
+  `RS10`'s rebase cheap: the programs themselves did not move.
+- `stale-evict-lock-permanently-defeats-the-cap` (PASS) hardened the same writer this arm extends.
+  **Arm A therefore adds records to a working cap rather than a defeated one**, which is the ordering
+  `spec.md` recommended at G0 and the human accepted.
+
+### Field evidence for this cut — read, not assumed
+
+1. **The event is determined by evidence, not chosen.** `S5`'s payloads carry `to` and `recipient` on
+   the *input* (`PreToolUse`, 4 of 4) but `resumedAgentId` only on the *response* (`PostToolUse`,
+   2 of 2). `RS3` requires recording **only where the resumed-agent marker is present**, and that
+   marker is `resumedAgentId`. **So the matcher is `PostToolUse` on `SendMessage`.** A `PreToolUse`
+   record could not satisfy `RS3` and could not know the resume succeeded.
+2. **The idempotency key already exists.** Every `S5` payload carried a `tool_use_id`
+   (`toolu_01Q4PWnxAg6PRJLCUt1yzd7x`, `toolu_01Xauns5zdXgXxNe1wdWPS3g`) — distinct per resume event,
+   which is exactly `RS4`'s "per resume, not per agent". No new key is invented.
+3. **`agentId` is discarded by omission, not by a line.** `record-cost-event.sh` extracts
+   `status`, `totalDurationMs`, `totalTokens`, `usage.*` and `model` from `.tool_response` (lines
+   ~702-708) and simply never reads an id. `grep -n 'agentId' scripts/record-cost-event.sh` returns
+   **nothing**. There is no discard to remove — there is a field to start reading.
+4. **The dual-parser contract.** Every extraction goes through `extract`/`extract_num`, which take a
+   `jq` expression *and* a `python3` expression. `RS10`'s "both programs or they disagree by
+   construction" is enforced by that helper's shape, and by the existing parity case.
+5. **Registration is not fixture-provable.** `docs/loop/conventions.md`: a green harness NEVER proves
+   a hook is live, and a `hooks.json` change needs a plugin reinstall **and** a restart. Every slice
+   below is provable by feeding payloads to the script directly; **that the matcher is registered is a
+   human action and a G2 precondition**, named in "The human action this arm cannot do for itself".
+
+### Order: S6 → S7 → S8 → S9, strictly
+
+`S6` and `S7` both touch `scripts/record-cost-event.sh`, so they serialize. `S8` cannot resolve
+without `S6`'s join key and `S7`'s record. `S9` has nothing to state without `S8`'s resolution.
+
+---
+
+### S6 — start reading `agentId`, forward-only, onto finish records only
+
+```
+Owner:       loop-build
+Unit:  resumed-invocation-never-reaches-the-ledger
+Slice: S6
+Context:     - spec.md RS11 (write half), RS10, RV7; RE5/RE6.
+             - Field evidence 3 and 4 above: there is no discard to delete, and every
+               extraction is dual-parser via extract/extract_num.
+             - scripts/record-cost-event.sh ~702-708 is where the Agent|Task
+               PostToolUse path reads .tool_response.
+Constraints: - FORWARD-ONLY, and this is the criterion most easily violated by a
+               helpful builder: no path may rewrite, mutate, reorder, or re-parse an
+               existing ledger line. No backfill of agentId into historical records,
+               not behind a flag, not as a one-off script, not as a comment
+               suggesting one (RS11).
+             - The field lands on the FINISH record only. Not on start records, not
+               on cap_trip, not on anything else.
+             - A payload with no agentId writes the record it writes today. Whether
+               the field is absent or explicitly null is the BUILDER'S call, but it
+               must be the same choice in both parser programs and it must satisfy
+               RS10 in both directions.
+             - Both the jq and the python3 arm of the extraction change, or neither.
+               The parity case is the guard (RS10).
+             - EXIT 0 ON EVERY PATH, asserted per case rather than in aggregate
+               (RV7). Including with neither jq nor python3 resolvable.
+             - No counts move. This slice adds a field; it must not change the
+               invocation count, priced count, coverage share, in-flight count, any
+               per-phase or per-slice figure, or either rework figure.
+Output:      - scripts/record-cost-event.sh: read .tool_response.agentId on the
+               Agent|Task PostToolUse path and write it onto the finish record.
+             - tests/guardrails.test.sh: the cases below.
+             - The standard return, carrying the before/after `total:` lines.
+Done when:   A finish record written from a payload carrying agentId holds it; one
+             written from a payload without it is unchanged from today; no existing
+             ledger line is touched by any path; the full suite is green; shellcheck
+             clean.
+Test set:    1. agentId present in the payload -> present on the new finish record.
+             2. agentId absent -> the finish record is byte-identical to today's for
+                the same payload. This is the case that proves the field is additive.
+             3. RS11 forward-only: a fixture ledger of pre-existing lines with NO
+                agentId, plus one new append -> every pre-existing line is
+                byte-identical afterwards, asserted by diff over the whole file.
+             4. RS10 both directions, on one fixture each: a ledger WITH the new
+                field read by the report and the budget gate without error; a ledger
+                written before this slice read without error and no record
+                reclassified.
+             5. RV7: each of the above exits 0, asserted per case; plus one with
+                PATH stripped of jq and python3.
+             6. Parity: the jq and python3 arms produce the identical record for the
+                same payload.
+             Fails now: no code reads agentId at all, so cases 1 and 6 fail today.
+Do NOT:      - Do not touch hooks/hooks.json. S7 owns the matcher.
+             - Do not write any resume record. That is S7.
+             - Do not add a selector, flag, or CLI surface.
+             - Do not resolve, join, or interpret the id. It is carried, not read
+               (RS11: resolution is the reader's side, and it is S8's).
+Depends on:  nothing.
+```
+
+### S7 — record the resume event, referencing the target agent, counted as an invocation nowhere
+
+```
+Owner:       loop-build
+Unit:  resumed-invocation-never-reaches-the-ledger
+Slice: S7
+Context:     - spec.md RS1 (write half), RS3, RS4, RS9, RV3, RV7.
+             - Field evidence 1 and 2 above: the matcher is PostToolUse on
+               SendMessage because resumedAgentId lives only on the response, and
+               tool_use_id is the per-resume idempotency key that already exists.
+             - decisions.md's S5 entry holds a real payload, quoted, to build the
+               fixture from. Use it rather than inventing a shape.
+             - The exactly-once machinery already in record-cost-event.sh (the
+               mkdir finished-marker pattern) is the precedent for RS4's dedupe.
+Constraints: - RECORD ONLY WHERE THE MARKER IS PRESENT. No resumedAgentId -> no
+               record, no count moves, nothing printed (RS3). The safe rule is
+               confirmed 20 of 20; the negative branch is uncorroborated and is
+               handled by refusing to record rather than by detecting it.
+             - NO TOKEN FIELD OF ANY KIND on the resume record. Not zero, not null
+               as a placeholder for a figure, not a duration standing in for one.
+               RE4 means a number here could only ever be invented (RS9, RV3).
+             - COUNTED AS AN INVOCATION NOWHERE (RS1). This is the load-bearing
+               constraint of the whole arm: the record exists and every figure
+               stays put.
+             - Exactly-once PER RESUME, not per agent (RS4). Dedupe on
+               tool_use_id. Two distinct resumes of one agent are two records.
+             - EXIT 0 ON EVERY PATH, per case (RV7). A resume must never be
+               blocked, delayed, reordered, or steered -- including when the ledger
+               is missing, unwritable, at cap, or the parser is absent.
+             - hooks/hooks.json gains ONE entry: PostToolUse, matcher SendMessage,
+               calling record-cost-event.sh. Nothing else in that file changes, and
+               the existing Agent|Task and Bash entries are untouched.
+             - The new record consumes ledger lines against the eviction cap. That
+               cap now works (stale-evict-lock landed), but state the consumption
+               rather than ignoring it: one line per resume.
+Output:      - scripts/record-cost-event.sh: handle the SendMessage PostToolUse
+               event and write one resume record.
+             - hooks/hooks.json: one new entry.
+             - tests/guardrails.test.sh: the cases below.
+             - The standard return.
+Done when:   A payload with resumedAgentId writes exactly one resume record; the
+             same payload twice writes one; two distinct resumes write two; a payload
+             without the marker writes nothing; every count in the report is
+             unchanged by any of it; suite green; shellcheck clean.
+Test set:    1. RS1: a fixture of one launch + one resume -> the invocation count,
+                priced count, coverage share, in-flight count, every per-phase
+                figure, every per-slice row and both rework figures are IDENTICAL to
+                the same fixture without the resume. Asserted as a diff of the whole
+                report, so the only permitted difference is what S9 later adds.
+             2. RS3: a SendMessage payload with no resumedAgentId -> no record
+                written, no count moves.
+             3. RS4 both directions: two distinct tool_use_ids against one agent ->
+                two records; the same tool_use_id twice -> one record.
+             4. RS9/RV3: the written record carries no token field, no zero, no
+                placeholder. Asserted by reading the record's keys, not its rendering.
+             5. RV7, per case: ledger missing; ledger unwritable; ledger at cap;
+                PATH stripped of jq and python3 -- each exits 0 and steers nothing.
+             6. Parity: jq and python3 arms write the identical record.
+             Fails now: no code handles SendMessage at all.
+Do NOT:      - Do not resolve the reference. The record carries the RAW identifier;
+               resolution is the reader's, in S8 (RS11).
+             - Do not read the resume's message text for anything -- not a unit, not
+               a slice, not a status (RS5, RS6).
+             - Do not relax record-recovered-cost.sh's RC4 refusal.
+             - Do not print anything on the write path. S9 owns output.
+             - Do not claim the matcher is live because the suite is green. It
+               cannot be, and conventions.md says so.
+Depends on:  S6 (same file; serialize).
+```
+
+### S8 — resolve the reference reader-side, exact match only, in both parser programs
+
+```
+Owner:       loop-build
+Unit:  resumed-invocation-never-reaches-the-ledger
+Slice: S8
+Context:     - spec.md RS2, RS5, RS8, RS10, RS11 (read half).
+             - The 2026-08-17 rejection of the --invocation-id selector, EXTENDED
+               here and not reopened: RS2's exact-match rule is not a licence for a
+               new selector or an --agent-id flag on any CLI.
+             - Field evidence 4: the dual-parser contract, and the existing parity
+               case that enforces it.
+             - cost-log-section-parse-error's landed diff: cost_scan's marker and
+               slug tests are now bash builtins; both parser program BODIES are
+               byte-identical to before, so this rebase is additive.
+Constraints: - EXACT MATCH ON THE IDENTIFIER, AND NOTHING ELSE. No nearest-by-time,
+               no most-recently-launched, no per-slug, no per-phase, no
+               only-other-invocation-so-it-must-be-that guess. Each of those is a
+               named failure, and RS2's second fixture exists to kill them.
+             - RESOLUTION IS THE READER'S. The ledger stores the raw id; no path
+               rewrites a stored line to hold a resolved one (RS11).
+             - Unattached is a real, reportable state -- never silently dropped, and
+               never folded into `unknown` (RS8, RS5).
+             - A resumed run's unit comes from the REFERENCED invocation, never from
+               the resume's own payload (RS5).
+             - BOTH the jq and the python3 program change symmetrically, in the same
+               commit, or they disagree by construction (RS10). The parity case is
+               the guard and it is not to be weakened.
+             - No figure is computed, derived, apportioned or defaulted for a
+               resumed run at any point in the read path (RS9).
+             - Exit 0 on every path, per case (RV7).
+Output:      - scripts/cost-ledger-lib.sh: both parser programs, symmetrically, plus
+               whatever reader-side resolution the shell around them needs.
+             - tests/guardrails.test.sh: the cases below.
+             - The standard return.
+Done when:   A resume attaches to the invocation it names and to no other; a resume
+             naming an unknown id is reported unattached; the referenced
+             invocation's unit is used; both parser programs agree; both RS10
+             directions hold; suite green; shellcheck clean.
+Test set:    1. RS2 positive: TWO invocations open concurrently, a resume naming one
+                -> attaches to the named one. This is the case that fails for every
+                guessing implementation, and it is the reason two invocations are
+                open rather than one.
+             2. RS2 negative: a resume naming an id no record holds -> attached to
+                nothing, reported as unattached.
+             3. RS5 both halves: a resume whose message text names a DIFFERENT unit
+                -> attributed to the referenced invocation's unit; a resume
+                referencing an unknown invocation -> attributed to no unit, and NOT
+                folded into any unit's report as `unknown`.
+             4. RS8: the unattached resume is counted as unattached and the report
+                says so -- not dropped, not an error.
+             5. RS10 both directions, one fixture each.
+             6. Parity: identical output from the jq and python3 programs on a
+                resume-bearing fixture. Extend the existing parity fixture rather
+                than adding a second one.
+             7. RV7: PATH stripped of jq and python3 -> exit 0, no partial figure.
+             Fails now: nothing reads a resume record, so 1-4 and 6 fail today.
+Do NOT:      - Do not add a selector, an --agent-id flag, or any new CLI surface.
+             - Do not touch the writer. S6 and S7 own it.
+             - Do not print the statement. S9 owns output wording.
+             - Do not backfill or rewrite any ledger line.
+             - Do not weaken, skip or renumber the parity case to make this land.
+Depends on:  S6, S7.
+```
+
+### S9 — the statement: factual, conditional, and never a figure
+
+```
+Owner:       loop-build
+Unit:  resumed-invocation-never-reaches-the-ledger
+Slice: S9
+Context:     - spec.md RS1 (output half), RS6, RS7, RS9, RV1, RV2, RV4, RV9.
+             - RV9's append-only rule for the coverage sentence, and the S3 evidence
+               that fourteen cases across five units fire on a one-word reword of
+               its prefix. Whatever this slice adds is APPENDED.
+             - RV2's completeness-vocabulary ban, already asserted against a
+               100%-priced fixture.
+Constraints: - THE CLAUSE IS FACTUAL AND CONDITIONAL, NEVER BOILERPLATE. A report
+               for a unit with no resumed run must not carry it at all (RS7) --
+               not as "0 resumed runs", not as an empty section heading.
+             - FINISHED-VS-KILLED IS STATED ONLY WHERE THE REFERENCED INVOCATION'S
+               OWN RECORDS SUPPORT IT, and never read out of the resume's message
+               text (RS6).
+             - NO FIGURE FOR A RESUMED RUN OR A KILLED ATTEMPT. No zero, no dash, no
+               "pending", no "to be determined". null means unavailable; zero means
+               measured (CV5, L3). "Unavailable" is the word, and it is not softened
+               to anything that implies a figure is coming (RS9, RV3).
+             - The coverage sentence's existing prefix stays BYTE-IDENTICAL and any
+               new wording is appended after it (RV9).
+             - No completeness vocabulary anywhere near it (RV2).
+             - Every consumer that prints the sentence prints the same string and the
+               same numbers -- the shared helper, never a second formatting site
+               (CV7/CV8).
+Output:      - scripts/cost-ledger-lib.sh and/or the reader scripts: the appended
+               clause, from the shared helper.
+             - tests/guardrails.test.sh: the cases below.
+             - The standard return.
+Done when:   A resume-bearing fixture's report states what is known about both runs
+             and prints no figure for either; a resume-free fixture's output is
+             byte-identical to today; all three consumers print the identical
+             string; suite green; shellcheck clean.
+Test set:    1. RS7/RV4: a resume-free fixture -> the full report, the budget gate's
+                output, and log.md's '## Cost' section are BYTE-IDENTICAL to today,
+                against the frozen blocks S3 already pinned.
+             2. RS6 two fixtures: a referenced invocation with a priced `completed`
+                finish, and one with an `async_launched` finish and no figure. The
+                statements DIFFER, and neither depends on prose.
+             3. RS9: the referenced invocation is itself unpriced and a resume
+                exists -> the output names what it knows about both runs and prints
+                no figure for either, substituting no zero and no dash.
+             4. RV9: grep -qF for the coverage sentence's existing prefix still
+                succeeds verbatim; BG3's coverage-honesty case passes unmodified.
+             5. RV2: the 100%-priced fixture's whole report still carries no
+                completeness vocabulary, with a resume present.
+             6. CV7/CV8: all three consumers print the identical string and numbers
+                for one resume-bearing fixture.
+             Fails now: nothing states anything about a resume.
+Do NOT:      - Do not reword, reorder, or reflow the coverage sentence's prefix.
+             - Do not add a section, heading, or row that appears when there is no
+               resumed run.
+             - Do not print a duration in place of a token figure.
+             - Do not touch the writer or the resolution logic.
+Depends on:  S8.
+```
+
+## The human action this arm cannot do for itself
+
+**A `hooks.json` change needs a plugin reinstall AND a restart before the matcher is live**
+(`docs/loop/conventions.md`). Nothing in `S6`-`S9` can perform that, and **a green suite is never
+evidence that it happened** — every case above proves the script's behaviour by feeding it payloads
+directly, which is exactly what a fixture can prove and no more.
+
+So Arm A has a **G2 precondition that belongs to the maintainer**: reinstall the plugin, restart, run
+one real resume, and confirm a resume record appears in `.claude/loop-cost.jsonl`. Until that is
+observed, the honest status of this arm is *the writer behaves correctly on payloads we constructed* —
+not *resumes are being captured*. `S5`'s probe is the precedent for how that observation is made, and
+its `2-read.sh` control-arm discipline is the precedent for how it is read.
+
+## Arm B is closed
+
+`RB1`-`RB4` are not cut and will not be. `S5` returned (a); Arm B was the branch for "fires without
+the payload" or "does not fire", and neither is the answer. Recorded here so nobody re-reads the spec
+and re-opens a branch the evidence closed.
