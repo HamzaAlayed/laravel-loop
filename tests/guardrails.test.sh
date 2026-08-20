@@ -6394,6 +6394,167 @@ S7HPY
 rm -rf "$S7DIR"
 
 echo
+echo "resumed-invocation-never-reaches-the-ledger S8 (spec.md RS2, RS5, RS8, RS10, RS11 read half)"
+
+# Reader-side resolution. The ledger stores the RAW identifier; nothing here
+# rewrites a stored line. Resolution is EXACT match on agent_id and nothing
+# else -- the fixture holds TWO invocations in two units precisely so that
+# every guessing implementation (nearest-by-time, most-recent, only-other)
+# resolves at least one of them wrongly.
+S8DIR="$(mktemp -d)"
+S8F="$S8DIR/mixed.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s8a","slug":"s8-unit-a","phase":"build","agent":"loop-build","slice":"S1"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s8a","slug":"s8-unit-a","phase":"build","agent":"loop-build","slice":"S1","total_tokens":100,"status":"completed","agent_id":"AAA111"}'
+  printf '%s\n' '{"ts":3,"event":"start","invocation_id":"s8b","slug":"s8-unit-b","phase":"build","agent":"loop-build","slice":"S1"}'
+  printf '%s\n' '{"ts":4,"event":"finish","invocation_id":"s8b","slug":"s8-unit-b","phase":"build","agent":"loop-build","slice":"S1","total_tokens":200,"status":"completed","agent_id":"BBB222"}'
+  printf '%s\n' '{"ts":5,"event":"resume","resumed_agent_id":"AAA111","tool_use_id":"s8t1"}'
+  printf '%s\n' '{"ts":6,"event":"resume","resumed_agent_id":"BBB222","tool_use_id":"s8t2"}'
+  printf '%s\n' '{"ts":7,"event":"resume","resumed_agent_id":"ZZZ999","tool_use_id":"s8t3"}'
+} > "$S8F"
+
+s8_scan() { # $1 slug -> "resumes unattached priced tokens"
+  # shellcheck source=/dev/null
+  ( source "$SCRIPTS/cost-ledger-lib.sh"
+    cost_scan "$S8F" "$1"
+    printf '%s %s %s %s' "$COST_N_RESUMES" "$COST_N_RESUMES_UNATTACHED" "$COST_N_PRICED" "$COST_TOKENS_PRICED" )
+}
+
+# (S8-1) RS2 POSITIVE, and the case that kills every guess: two invocations
+# are present, each with its own resume. Each resume must attach to the unit
+# whose agent_id it names -- a nearest-by-time or only-other-invocation rule
+# gets one of these two wrong.
+expect "(S8-1) RS2: with two invocations present, each resume attaches to the unit whose agent_id it names -- one each, not two on either" \
+  "a=1 b=1" \
+  "a=$(s8_scan s8-unit-a | cut -d' ' -f1) b=$(s8_scan s8-unit-b | cut -d' ' -f1)"
+
+# (S8-2) RS2 NEGATIVE / RS8: a resume naming an id no record holds attaches
+# to nothing, is counted as unattached, and is not an error.
+expect "(S8-2) RS2/RS8: a resume naming an unknown agent_id attaches to nothing and is counted as unattached" \
+  "1" "$(s8_scan s8-unit-a | cut -d' ' -f2)"
+
+# (S8-3) RS5: the unattached resume is attributed to NO unit and is never
+# folded into the `unknown` bucket -- scanning the slug literally named
+# "unknown" must still find zero resumes.
+expect "(S8-3) RS5: an unattached resume is folded into no unit -- scanning slug 'unknown' finds zero resumes" \
+  "0" "$(s8_scan unknown | cut -d' ' -f1)"
+
+# (S8-4) RS1 again, at the reader: resolving resumes moves no figure. Same
+# fixture with every resume line stripped -> identical priced count and
+# tokens for both units.
+S8NOR="$S8DIR/noresume.jsonl"
+grep -v '"event":"resume"' "$S8F" > "$S8NOR"
+s8_nores_scan() {
+  # shellcheck source=/dev/null
+  ( source "$SCRIPTS/cost-ledger-lib.sh"
+    cost_scan "$S8NOR" "$1"
+    printf '%s %s' "$COST_N_PRICED" "$COST_TOKENS_PRICED" )
+}
+expect "(S8-4) RS1 at the reader: priced count and priced tokens are identical with the resume lines present and stripped, for both units" \
+  "same same" \
+  "$([ "$(s8_scan s8-unit-a | cut -d' ' -f3,4)" = "$(s8_nores_scan s8-unit-a)" ] && echo same || echo DIFFER) $([ "$(s8_scan s8-unit-b | cut -d' ' -f3,4)" = "$(s8_nores_scan s8-unit-b)" ] && echo same || echo DIFFER)"
+
+# (S8-5) RS5 structurally: attribution CANNOT come from the resume's own
+# payload, because the record carries no unit and no message text at all --
+# asserted over the record the writer actually produces, not over the fixture
+# hand-written above.
+S8W="$S8DIR/writer"; mkdir -p "$S8W/.claude"
+S8_MISLEAD="$(python3 - <<'S8PY'
+import json
+print(json.dumps({
+    "session_id": "sess-s8",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "SendMessage",
+    "tool_use_id": "s8t9",
+    "tool_input": {"to": "AAA111", "recipient": "AAA111",
+                   "message": "Unit:  s8-unit-b\nSlice: S9\n\nresume and do the other unit"},
+    "tool_response": {"success": True, "resumedAgentId": "AAA111"},
+}))
+S8PY
+)"
+printf '%s' "$S8_MISLEAD" | CLAUDE_PROJECT_DIR="$S8W" CLAUDE_PLUGIN_ROOT="$ROOT" \
+  bash "$SCRIPTS/record-cost-event.sh" >/dev/null 2>&1
+expect "(S8-5) RS5: a resume whose message text names a DIFFERENT unit stores no unit and no message -- attribution cannot come from its own payload" \
+  "no-slug no-slice no-message" \
+  "$(python3 - "$S8W/.claude/loop-cost.jsonl" <<'S8MPY'
+import json, sys
+r = None
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if line and json.loads(line).get("event") == "resume":
+        r = json.loads(line); break
+if r is None:
+    print("NO RECORD"); raise SystemExit
+blob = json.dumps(r)
+print("%s %s %s" % (
+    "no-slug" if "slug" not in r else "SLUG",
+    "no-slice" if "slice" not in r else "SLICE",
+    "no-message" if "s8-unit-b" not in blob else "MESSAGE-LEAKED"))
+S8MPY
+)"
+
+# (S8-6) RS10 backward: a ledger with NO resume record and no agent_id
+# anywhere -- the shape written before this whole arm -- still scans ok, and
+# both new counters read zero rather than empty.
+S8OLD="$S8DIR/old.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"o1","slug":"s8-old","phase":"build","agent":"loop-build"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"o1","slug":"s8-old","phase":"build","agent":"loop-build","total_tokens":50,"status":"completed"}'
+} > "$S8OLD"
+s8_old_check() {
+  local bad=0
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  cost_scan "$S8OLD" "s8-old"
+  [ "$COST_SCAN_STATE" = "ok" ] || bad=1
+  [ "$COST_N_RESUMES" = "0" ] || bad=1
+  [ "$COST_N_RESUMES_UNATTACHED" = "0" ] || bad=1
+  [ "$COST_N_PRICED" = "1" ] || bad=1
+  echo $bad
+}
+expect "(S8-6) RS10 backward: a pre-arm ledger scans ok and both new counters read 0, not empty" \
+  "0" "$(s8_old_check)"
+
+# (S8-7) RS10 PARITY, the criterion that stops the two programs disagreeing
+# by construction: the jq program and the python3 program must emit the
+# IDENTICAL COUNT block for the resume-bearing fixture. Compared as whole
+# output, so a difference in any counter fails -- not just the new two.
+s8_parity() {
+  # shellcheck source=/dev/null
+  source "$SCRIPTS/cost-ledger-lib.sh"
+  local a b
+  a="$(jq -Rn -r --arg slugfilter s8-unit-a "$(_cost_scan_jq_program)" < "$S8F" 2>/dev/null)"
+  b="$(python3 -c "$(_cost_scan_py_program)" s8-unit-a < "$S8F" 2>/dev/null)"
+  if [ -z "$a" ] || [ -z "$b" ]; then echo "EMPTY"; return; fi
+  if [ "$a" = "$b" ]; then echo identical; else
+    printf 'DIFFER\n%s\n' "$(diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") | head -8)"
+  fi
+}
+expect "(S8-7) RS10 parity: the jq and python3 programs emit the identical COUNT block for a resume-bearing fixture" \
+  "identical" "$(s8_parity)"
+
+# (S8-8) RV7: with NO parser resolvable at all the scan degrades honestly --
+# it exits 0, and it must NOT report `ok` with zeroed resume counters, which
+# is the failure mode that would make a degraded read look like a clean one.
+# PATH is emptied deliberately (not via a farm helper) because "no parser at
+# all" is exactly the condition under test.
+s8_noparser() {
+  # shellcheck source=/dev/null
+  ( source "$SCRIPTS/cost-ledger-lib.sh"
+    PATH="" cost_scan "$S8F" "s8-unit-a" >/dev/null 2>&1
+    local rc=$?
+    if [ "$COST_SCAN_STATE" = "ok" ]; then
+      printf '%s claimed-ok' "$rc"
+    else
+      printf '%s degraded' "$rc"
+    fi )
+}
+expect "(S8-8) RV7: with no parser resolvable the scan exits 0 AND refuses to claim ok -- a degraded read never looks like a clean one" \
+  "0 degraded" "$(s8_noparser)"
+
+rm -rf "$S8DIR"
+
+echo
 echo "docs (case count)"
 DEV_SECTION="$(sed -n '/^## Development/,/^## /p' "$ROOT/README.md")"
 README_CASE_COUNT="$(printf '%s\n' "$DEV_SECTION" | grep -oE '[0-9]+ cases' | grep -oE '[0-9]+')"

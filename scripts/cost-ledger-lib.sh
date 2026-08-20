@@ -94,6 +94,11 @@
 #   COST_N_LINES              non-blank lines read
 #   COST_N_SKIPPED            lines that were neither parseable JSON nor a recognised shape
 #   COST_N_CAPTRIP            cap_trip records seen for the requested slug (or all, if empty)
+#   COST_N_RESUMES            resume records whose resumed_agent_id resolves, by EXACT match on a
+#                             finish record's agent_id, to the requested slug (S8, RS2). Never an
+#                             invocation: no count, share or figure includes one (RS1).
+#   COST_N_RESUMES_UNATTACHED resume records whose resumed_agent_id matches no agent_id anywhere in
+#                             the ledger. Belongs to no unit and is folded into none (RS5/RS8).
 #   COST_N_INVOCATIONS        resolved invocations (has a finish) -- priced + unpriced
 #   COST_N_PRICED             of those, the ones carrying a numeric total_tokens
 #   COST_N_UNPRICED           of those, the ones that finished with no token figure
@@ -400,7 +405,7 @@ def phase_key:
   else "UNKNOWN" end;
 
 (reduce (inputs | select(length > 0)) as $line
-  ( {lines:0, skipped:0, captrip:0, slugs:{}, inv:{}}
+  ( {lines:0, skipped:0, captrip:0, slugs:{}, inv:{}, agents:{}, resumes:[]}
   ; .lines += 1
   | ($line | to_rec) as $r
   | if $r == null or ($r|type) != "object" then
@@ -412,6 +417,10 @@ def phase_key:
     elif (($r.event // "") == "start" or ($r.event // "") == "finish" or ($r.event // "") == "recovered") then
       (($r.slug // "unknown")) as $slg
       | .slugs[$slg] = 1
+      # S8 (RS2/RS5): agent_id -> slug, recorded for EVERY slug and so BEFORE
+      # the filter below. A resume must be able to tell "belongs to another
+      # unit" from "belongs to nothing", and a slug-filtered map cannot.
+      | (if (($r.agent_id // "") != "") then .agents[($r.agent_id)] = $slg else . end)
       | if ($slugfilter != "" and $slugfilter != $slg) then .
         else
           (($r.invocation_id // ("noid-" + ((.lines)|tostring)))) as $id
@@ -455,6 +464,12 @@ def phase_key:
             ) as $ne
           | .inv[$id] = $ne
         end
+    elif (($r.event // "") == "resume") then
+      # S8 (RS1): collected, never turned into an invocation. Carries no slug
+      # by construction (S7), so it is NOT slug-filtered here -- attribution
+      # is resolved below, from the referenced invocation, never from this
+      # record (RS5).
+      .resumes += [($r.resumed_agent_id // "")]
     else
       .skipped += 1
     end
@@ -544,9 +559,18 @@ def phase_key:
      else . end
    )) as $agg
 | ( $agg.rework_list | sort_by([-(.passes), .id]) | map(.passes|tostring) | join(",") ) as $passeslist
+# S8 (RS2): EXACT match on the identifier, and nothing else. No
+# nearest-by-time, no most-recently-launched, no only-other-invocation guess:
+# the id is looked up in .agents or it resolves to nothing.
+| ( [ $acc.resumes[] | select(. != "") ] ) as $rids
+| ( [ $rids[] | ($acc.agents[.] // "") ] ) as $rslugs
+| ( [ $rslugs[] | select(. != "") | select($slugfilter == "" or . == $slugfilter) ] | length ) as $n_resumes
+| ( [ $rslugs[] | select(. == "") ] | length ) as $n_resumes_unattached
 | ( "COUNT\tCOST_N_LINES\t\($acc.lines)",
     "COUNT\tCOST_N_SKIPPED\t\($acc.skipped)",
     "COUNT\tCOST_N_CAPTRIP\t\($acc.captrip)",
+    "COUNT\tCOST_N_RESUMES\t\($n_resumes)",
+    "COUNT\tCOST_N_RESUMES_UNATTACHED\t\($n_resumes_unattached)",
     "COUNT\tCOST_N_INVOCATIONS\t\($agg.inv)",
     "COUNT\tCOST_N_PRICED\t\($agg.priced)",
     "COUNT\tCOST_N_UNPRICED\t\($agg.unpriced)",
@@ -601,6 +625,8 @@ skipped = 0
 captrip = 0
 slugs = {}
 inv = {}
+agents = {}
+resumes = []
 
 
 def phase_key(p):
@@ -627,8 +653,19 @@ for raw in sys.stdin:
         if slugfilter == "" or slugfilter == slg:
             captrip += 1
         continue
+    if event == "resume":
+        # S8 (RS1): collected, never an invocation. No slug by construction
+        # (S7), so not slug-filtered -- attribution is resolved below, from
+        # the referenced invocation and never from this record (RS5).
+        resumes.append(r.get("resumed_agent_id") or "")
+        continue
     if event in ("start", "finish", "recovered"):
         slugs[slg] = 1
+        # S8 (RS2/RS5): agent_id -> slug for EVERY slug, so recorded before
+        # the filter below -- a resume must be able to tell "another unit"
+        # from "nothing at all", and a slug-filtered map cannot.
+        if r.get("agent_id"):
+            agents[r["agent_id"]] = slg
         if slugfilter != "" and slugfilter != slg:
             continue
         invid = r.get("invocation_id") or ("noid-" + str(lines))
@@ -761,10 +798,18 @@ for invid, e in inv.items():
 rework_list.sort(key=lambda t: (-t[0], t[1]))
 passeslist = ",".join(str(p) for p, _ in rework_list)
 
+# S8 (RS2): EXACT match on the identifier, and nothing else -- no
+# nearest-by-time, no most-recently-launched, no only-other-invocation guess.
+rslugs = [agents.get(a, "") for a in resumes if a != ""]
+n_resumes = len([x for x in rslugs if x != "" and (slugfilter == "" or x == slugfilter)])
+n_resumes_unattached = len([x for x in rslugs if x == ""])
+
 out = [
     f"COUNT\tCOST_N_LINES\t{lines}",
     f"COUNT\tCOST_N_SKIPPED\t{skipped}",
     f"COUNT\tCOST_N_CAPTRIP\t{captrip}",
+    f"COUNT\tCOST_N_RESUMES\t{n_resumes}",
+    f"COUNT\tCOST_N_RESUMES_UNATTACHED\t{n_resumes_unattached}",
     f"COUNT\tCOST_N_INVOCATIONS\t{agg['inv']}",
     f"COUNT\tCOST_N_PRICED\t{agg['priced']}",
     f"COUNT\tCOST_N_UNPRICED\t{agg['unpriced']}",
@@ -863,6 +908,8 @@ _cost_reset_scan_vars() {
   COST_N_LINES=0
   COST_N_SKIPPED=0
   COST_N_CAPTRIP=0
+  COST_N_RESUMES=0
+  COST_N_RESUMES_UNATTACHED=0
   COST_N_INVOCATIONS=0
   COST_N_PRICED=0
   COST_N_UNPRICED=0
@@ -961,6 +1008,8 @@ $row"
     COST_TS_MAX) COST_TS_MAX="$v" ;;
     COST_N_SKIPPED) COST_N_SKIPPED="$v" ;;
     COST_N_CAPTRIP) COST_N_CAPTRIP="$v" ;;
+    COST_N_RESUMES) COST_N_RESUMES="$v" ;;
+    COST_N_RESUMES_UNATTACHED) COST_N_RESUMES_UNATTACHED="$v" ;;
     COST_N_INVOCATIONS) COST_N_INVOCATIONS="$v" ;;
     COST_N_PRICED) COST_N_PRICED="$v" ;;
     COST_N_UNPRICED) COST_N_UNPRICED="$v" ;;
