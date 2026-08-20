@@ -85,3 +85,38 @@ the criterion that makes a cost change believable, and it is the strongest form 
 - **A new baseline for the suite.** 160.73s is a mean of three runs on a loaded host, not the suite's
   runtime. Nobody should quote it as one.
 - **Why the projection under-predicted.** See §3. Unverified, and labelled as such.
+
+---
+
+## 6. RT7 — both guarding platforms, from a real pushed commit (added 2026-08-20)
+
+`RT7` was open when this file was first written. It is now closed with CI's own job records.
+
+| Commit | Cases | `guardrails` (ubuntu-latest) | `guardrails-macos` |
+|---|---|---|---|
+| `1bd510b` — pre-fix | 513 | 212s | 223s |
+| `6282775` — post-fix | 513 | **125s** | **195s** |
+| Delta | — | **−87s** | **−28s** |
+
+Both jobs on `6282775` reported `total: 513 passed, 0 failed` — run `32382823972`, jobs `96469963076`
+and `96469962803`. Both commits carry the identical 513 cases, so the two rows differ only by this
+unit's three lines.
+
+**The saving is real on both platforms, and it is markedly larger on Linux.** That asymmetry is what
+`RT7` existed to detect, and it is recorded as observed with **no mechanism claimed**: one sample per
+platform per commit, and the direction is the opposite of the naive guess that macOS's older bash
+would show the bigger win.
+
+**Three reasons these two deltas are not comparable to each other**, stated so nobody treats −87s and
+−28s as a measured platform ratio:
+
+- Job duration includes checkout, `shellcheck`, and the script-mode check on both platforms, and
+  **additionally a Homebrew install of `shellcheck` on macOS**, whose own duration varies run to run.
+  These are **upper bounds on the suite's own share**, exactly as `spec.md` §1.2 labels them.
+- One sample per platform per commit. No rate, no ratio, no confidence in the difference between the
+  two deltas.
+- Neither figure is comparable to §3's local arms, which ran on a loaded host with a different
+  driver.
+
+What can be said: **on a real pushed commit, both guarding platforms got faster, both stayed green at
+513, and no case's outcome changed.** That is what `RT7` asked for.

@@ -87,17 +87,29 @@ the arms show 89–112s. The measurement file states the discrepancy and labels 
 explanation — idle-host benchmark versus loaded-host arms, per-fork cost rising under load — as
 consistent with the evidence and **unverified**, rather than presenting it as the reason.
 
-## Phase 4 — Verify (G2), 2026-08-20 — **CONCERNS**
+## Phase 4 — Verify (G2), 2026-08-20 — **PASS** (first issued CONCERNS; RT7 since closed)
 
-`verify.md` carries the pass. Seven of eight criteria met, `RT3` in the strongest form available: all
+`verify.md` carries the pass. All eight criteria met, `RT3` in the strongest form available: all
 513 case titles and results, in order, byte-identical across both arms and all three trials.
 
-**`RT7` is unmet and it is the whole of the concern.** It requires both guarding platforms' figures
-from a real pushed commit, and nothing has been pushed. That is not substitutable by a local run, by
-this criterion's own terms: the thing removed is a fork, and per-fork cost differs between bash 3.2 on
-macOS and bash 5.x on Linux. `spec.md` §1.2 already holds five runs of before-figures on both
-platforms, so the comparison is ready to be made the moment a run exists — nothing needs re-measuring
-locally.
+**`RT7` was the whole of the concern at first issue, and is now closed.** `6282775` was pushed and
+run (`32382823972`). Both commits carry the identical 513 cases, so these rows differ only by this
+unit's three lines:
+
+| Job | `1bd510b` pre-fix | `6282775` post-fix | Delta |
+|---|---|---|---|
+| `guardrails` (ubuntu-latest) | 212s | **125s** | **−87s** |
+| `guardrails-macos` | 223s | **195s** | **−28s** |
+
+Both jobs `total: 513 passed, 0 failed`. **The saving is markedly larger on Linux** — roughly three
+times the macOS one. That asymmetry is exactly what `RT7` existed to detect and what a local delta
+could not have shown, and it is the **opposite** of the naive guess that macOS's older bash would show
+the bigger win. Recorded as observed, with no mechanism claimed.
+
+Three reasons those two deltas are **not** a measured platform ratio: one sample per platform per
+commit; job duration includes checkout, `shellcheck` and the script-mode check on both platforms plus
+a Homebrew install of `shellcheck` on macOS, so both are upper bounds on the suite's own share; and
+neither is comparable to the local arms, which ran on a loaded host with a different driver.
 
 ## What this unit foreclosed
 
@@ -111,9 +123,10 @@ locally.
 
 ## What this unit did not close
 
-- **`RT7`.** Both platforms, from a pushed run. Outstanding.
 - **The runtime problem.** Reduced, not settled. 160.73s is a loaded-host mean of three runs and is
   **not** a new baseline; the suite remains well above `18289f2`'s 88.53s.
+- **Any ratio between the two platforms' savings.** `RT7` is met, but −87s and −28s are two
+  observations on one sample each, not a measured ratio.
 - **Option (b).** Deferred, and its ~92s is now stale — computed against a per-build rate that no
   longer applies. The captured intent re-states it as roughly 43s at the post-fix rate, **unmeasured**.
 - **Why the projection under-predicted.** Unverified by design.
