@@ -7,9 +7,10 @@ made it a red for any surface to start implying otherwise. It did **not** captur
 raise pricing coverage, and produced no token figure for one — because `RE4` establishes there is no
 figure to be had.
 
-**Still open, and deliberately so:** `S5`, the spike that asks whether a `hooks.json` matcher on
-`SendMessage` fires at all, has not run. Stage 3 (group `RS`) is uncut, and cutting it before that
-answer exists would be a G1 defect rather than an optimisation.
+**Stage 2 and Stage 3 have since landed (2026-08-20).** `S5` ran and returned **(a)**: the matcher
+fires and the payload carries the target agent id. Arm A was cut on that answer and built as `S6`–`S9`.
+Arm B is closed permanently. The paragraph above stands as the record of what was true when Stage 1
+closed; the sections at the end of this file carry what happened next.
 
 ## Where it came from
 
@@ -106,3 +107,85 @@ criterion written before the answer was settled.
 No records for this unit ("resumed-invocation-never-reaches-the-ledger") in the cost ledger. Not evidence the unit was free --
 the ledger simply has nothing filed under this slug.
 
+## Phase 2 — the spike (S5), 2026-08-20 — answer **(a)**
+
+Driven by the maintainer, on a probe kit built for the purpose and left outside the repository. A
+throwaway project registered the matcher on both events plus two control matchers, and a fresh session
+launched a subagent and resumed it.
+
+**The control fired 6 times; `SendMessage` fired 4 — twice on each event, across two sessions.** `to`
+and `recipient` were present on 4 of 4 payloads (the *input*); `resumedAgentId` on 2 of 2
+`PostToolUse` payloads (the *response*), and where both existed the two ids matched. That is answer
+**(a)**, both halves, recorded separately as `SP5` required.
+
+One finding kept because it would have wasted the next person's run: Claude Code's *"Ignoring N
+`permissions.allow` entries … this workspace has not been trusted"* warning covers `permissions.allow`
+**only** — the hooks in the same file still fire. An untrusted workspace is not a reason to discard a
+run; the control arm is what settles whether a run counted.
+
+`SP4`'s four cleanup steps all ran. `hooks/hooks.json` was untouched by the spike and the live plugin
+install was never reinstalled or reconfigured.
+
+## Phase 3 — Stage 3 cut (G1) and built, 2026-08-20
+
+**The cut discharged its couplings rather than assuming them.** `spec.md` made this unit third of
+three and required whoever cuts Arm A to read the two earlier units' *landed* diffs first. Both had
+landed and both were verified at G2 the same day: the parse-error unit left **both parser program
+bodies byte-identical**, so `RS10`'s rebase was additive; the evict-lock unit meant Arm A adds records
+to a **working** cap rather than a defeated one.
+
+**Two design questions were settled by evidence rather than chosen** — the return on having run the
+spike instead of guessing:
+
+- **The event is `PostToolUse`.** `resumedAgentId` lives only on the response, and it *is* `RS3`'s
+  resumed-agent marker. A `PreToolUse` record could neither satisfy `RS3` nor know the resume
+  succeeded.
+- **The idempotency key already existed:** `tool_use_id`, distinct per resume event in both observed
+  payloads. `RS4`'s "per resume, not per agent" needed nothing invented.
+
+Also corrected against the spec's own text: `agentId` was discarded **by omission**, not at
+`record-cost-event.sh:661-667`. There was no discard to delete, only a field to start reading.
+
+| Slice | Commit | What it did | Cases |
+|---|---|---|---|
+| **S6** | `2332a5b` | Read `agentId` onto finish records, forward-only. Field **absent** when the payload lacks it — the same choice every other optional field already makes, so no consumer sees a schema change | 513 → 521 |
+| **S7** | `9a94816` | The `resume` record, referencing the agent, counted as an invocation nowhere. One 9-line `hooks.json` entry | 521 → 529 |
+| **S8** | `99ca292` | Reader-side resolution, exact match, both parser programs. `agent_id → slug` map populated **before** the slug filter, so "another unit" and "nothing at all" stay distinguishable | 529 → 537 |
+| **S9** | `2685351` | The appended clause, conditional and figure-free, plus the two counters `RS6` needs | 537 → 544 |
+
+A deliberate behaviour change, recorded rather than discovered later: a `resume` line used to land in
+`COST_N_SKIPPED` as an unrecognised event and no longer does. `RV3`'s fixture was built with an event
+name chosen specifically to *stay* unrecognised, so that unit had already anticipated this.
+
+## Phase 4 — Verify (G2), 2026-08-20 — **CONCERNS**
+
+All eleven `RS` criteria met, suite green at `544 passed, 0 failed`, `shellcheck` clean. `verify.md`
+carries the row-by-row pass.
+
+**The concern is the precondition, and it is the maintainer's.** `(S7-8)` proves the matcher is
+*registered*; liveness needs a plugin reinstall and a restart, and `conventions.md` is explicit that a
+green harness never proves a hook is live. So the honest status is **the writer behaves correctly on
+payloads we constructed** — not *resumes are being captured*. One real resume observed landing in
+`.claude/loop-cost.jsonl` closes it.
+
+One existing case was changed and it was **tightened**: `(S7-1)` had demanded an identical coverage
+sentence, while `RS1` permits exactly one difference and `S9` made it live. The replacement pins
+prefix byte-identity and confines the addition to the resume clause — mutation-tested, not assumed.
+
+## What Stage 3 foreclosed
+
+- **Inventing a second invocation.** `RS1`, asserted over every count, figure and row.
+- **Guessing the reference.** Exact match only, with the two-invocation fixture there to kill
+  nearest-by-time, most-recent, and only-other-invocation.
+- **Reading attribution out of a resume's prose.** The record stores no unit and no message, so there
+  is nothing to read.
+- **A figure for a resumed run.** Asserted over record keys, so a zero or a null placeholder fails.
+- **Backfilling the join key.** Forward-only, asserted over the whole file.
+- **Arm B.** Closed by the spike's answer; `RB1`–`RB4` will not be cut.
+
+## What Stage 3 did not close
+
+- **Liveness.** The G2 precondition above. Registered, not observed.
+- **A resumed run's cost.** Not knowable — `RE4` stands. `agent_id` is a handle, never a figure.
+- **Both platforms' colours on this work.** Unpushed at the time of writing.
+- **An independent G2.** Same-session build and verify.

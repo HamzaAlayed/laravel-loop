@@ -87,3 +87,73 @@ enforceable at all.
 - **Whether pricing coverage can be raised.** It cannot, by this unit, and `RV8` is the record of
   that rather than a step toward it.
 - **Independence.** Same-session backfill, as declared in Scope.
+
+---
+
+# Verify — Stage 3, Arm A (S6–S9), 2026-08-20
+
+**Verdict: CONCERNS** — all eleven `RS` criteria are met, each with at least one case that can fail,
+and the suite is green at `544 passed, 0 failed`. The concern is the precondition `slices.md` named
+at G1 and reserved for the maintainer: **no real resume has been observed landing in the ledger**, so
+the honest status of this arm is *the writer behaves correctly on payloads we constructed* — **not**
+*resumes are being captured*.
+
+Same shape as `guardrail-suite-runtime-doubled`'s `RT7` earlier today: nothing is wrong with the diff,
+and one piece of evidence only a human can produce is outstanding.
+
+**What closes it.** Reinstall the plugin, restart, run one real resume, and confirm a `resume` record
+appears in `.claude/loop-cost.jsonl`. `S5`'s probe is the precedent for making that observation and
+its control-arm discipline is the precedent for reading it.
+
+**Scope:**
+
+- **Changed surface:** `scripts/record-cost-event.sh` (S6, S7), `hooks/hooks.json` (S7, one 9-line
+  entry), `scripts/cost-ledger-lib.sh` (S8, S9 — both parser programs and the sentence helper),
+  `tests/guardrails.test.sh`, `README.md`. Commits `2332a5b` (S6), `9a94816` (S7), `99ca292` (S8),
+  `2685351` (S9).
+- **Suite:** `513 → 544` cases across the four slices, `0 failed`. `shellcheck -S warning` clean,
+  script modes ok.
+- ⚠ **This arm changes runtime behaviour once the plugin is reinstalled.** Every slice before it today
+  was documentation, tests, or a cost change. This one starts writing a new record type.
+- ⚠ **Same-session build and verify.**
+
+## Criteria, one row each
+
+| Criterion | Verdict | Proven by |
+|---|---|---|
+| **RS1** — recorded as a reference, counted as an invocation nowhere | **MET** | `(S7-1)`, tightened when S9 landed: every count, token total, both rework figures and every per-slice row identical with and without the record, **and** the coverage sentence's prior text surviving as a byte-identical prefix. Mutation-tested — making the clause replace rather than append reddens it. `(S8-4)` repeats the figure half at the reader |
+| **RS2** — exact match on the identifier, and nothing else | **MET** | `(S8-1)` holds **two** invocations in two units, each with its own resume, so nearest-by-time, most-recently-launched and only-other-invocation all get one wrong. Each attaches to the unit whose `agent_id` it names. `(S8-2)` is the negative |
+| **RS3** — a message to an already-running agent is not a resumed run | **MET** | `(S7-2)`: no `resumedAgentId` → nothing written, exit 0. Implemented as a **refusal** rather than a detection, because the negative branch is the uncorroborated part of the evidence base |
+| **RS4** — two resumes are two; one delivered twice is one | **MET, both directions** | `(S7-3)`, deduped on `tool_use_id` — distinct per resume event in both of `S5`'s observed payloads, so the key was not invented |
+| **RS5** — the unit comes from the referenced invocation, never the payload | **MET, structurally** | `(S8-5)` puts a resume whose **message text names a different unit** through the real writer and asserts the stored record holds no slug, no slice, and no trace of the misleading text — attribution cannot come from a payload that is not there. `(S8-3)`: an unattached resume is not folded into `unknown` |
+| **RS6** — finished-vs-killed only where the referenced records support it | **MET** | `(S9-2)`: the statement differs between a referenced invocation with a priced `completed` finish and one with `async_launched` and no figure. Read from `COST_N_RESUMES_ON_PRICED`/`_ON_UNPRICED`, which come from that invocation's own records |
+| **RS7** — a unit with no resumed run says nothing about them | **MET, by absence** | `(S9-1)`: the string `resum` appears nowhere in a resume-free sentence — no "0 resumed runs", no empty clause. `RV4`'s frozen blocks (`S3`'s three surfaces) still green, unmodified |
+| **RS8** — an unattached resume is not dropped and errors nothing | **MET** | `(S8-2)` counts it; `(S9-7)` asserts it is counted **separately** and the unit's own clause still says 1, not 2 |
+| **RS9** — the killed attempt is never given a figure | **MET, over keys** | `(S7-4)` asserts no resume record carries any token, duration or cost key — so a zero or a null-as-placeholder fails, where a rendering check would pass. `(S9-3)` asserts the clause says "unavailable and in no total" with no `pending`, no `to be determined`, no `0 tokens` |
+| **RS10** — read without error in both directions, both programs or neither | **MET** | `(S6-5)`/`(S6-6)` and `(S8-6)` for the two directions; `(S6-8)`, `(S7-7)` and `(S8-7)` for parity — `(S8-7)` compares the **whole COUNT block**, so a divergence in any counter fails, not just the new ones |
+| **RS11** — the join key is carried forward, never backfilled; resolution reader-side | **MET** | `(S6-3)` asserts every pre-existing line byte-identical over the **whole file** after an append; `(S6-4)` that none gained the key. `(S8-5)` that the record stores the raw identifier. Resolution lives in the reader by construction |
+
+## Findings
+
+**1. The G1-declared precondition is unmet. (CONCERNS — the maintainer's, not the builder's.)**
+
+`(S7-8)` proves only that the matcher is **registered** in `hooks.json`. Liveness needs a plugin
+reinstall and a restart, and `docs/loop/conventions.md` is explicit that a green harness never proves
+a hook is live. No case here claims otherwise, and this verdict does not either.
+
+**2. One existing case was changed, and it was tightened. (Recorded, not a concern.)**
+
+`(S7-1)`. The old assertion demanded an identical coverage sentence; `RS1` permits exactly one
+difference, and `S9` makes it live. The replacement is strictly stronger — prefix byte-identity, the
+addition confined to the resume clause, and no figure or completeness word inside it — and it was
+mutation-tested rather than assumed. Case total rose at every slice; nothing was weakened, skipped or
+renumbered.
+
+## What this pass cannot tell you
+
+- **Whether resumes are actually being captured.** Finding 1. Registered, not observed live.
+- **Whether a resumed run's cost can ever be known.** It cannot, by `RE4`. `agent_id` is a handle,
+  never a figure, and no criterion here changes that.
+- **How the arm behaves on `ubuntu-latest`.** Not pushed at the time of writing, so both jobs'
+  colours on this work are unread.
+- **Independence.** Same-session build and verify.
