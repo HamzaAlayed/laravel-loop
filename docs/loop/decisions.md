@@ -807,3 +807,58 @@ check** — which is exactly how this one arrived. No check was added, removed, 
 **`RT7` is outstanding and this entry does not claim it.** The saving is read from one host. Both
 guarding platforms' figures need a real pushed run, and per-fork cost differs between bash 3.2 on
 macOS and bash 5.x on Linux, so the local delta cannot stand in for either job's.
+
+## resumed-invocation-never-reaches-the-ledger S5: the SendMessage matcher fires, WITH the target agent id (2026-08-20)
+
+`SP1`–`SP5`. The spike's only deliverable is which one of three answers is true. **The answer is (a):
+a `hooks.json` matcher on `SendMessage` fires, and the payload carries the target agent id.** Both
+halves, recorded separately as `SP5` requires, and neither inferred from the other.
+
+`RE12` was recorded as UNKNOWN and deliberately unasserted in both directions. It is now answered by
+observation. **This entry records the answer and nothing else: no arm is recommended, no record type
+is proposed, and no capture mechanism is designed.** Choosing what to build on this is the next gate's
+business, not this spike's.
+
+**Half one — the hook ran.** Registered on both `PreToolUse` and `PostToolUse` for `SendMessage` in a
+throwaway project outside this repository, with two control matchers (`Bash`, `Agent|Task`) so a
+silent probe could not be mistaken for a silent hook. The control fired **6 times**; `SendMessage`
+fired **4 times** — `PreToolUse` twice, `PostToolUse` twice — across **two distinct sessions**
+(`e69a5789`, `73631088`), each resuming a different agent.
+
+**Half two — the payload carries the id.** `to` and `recipient` are present on **4 of 4** payloads,
+i.e. on the *input*, available at `PreToolUse`. `resumedAgentId` is present on **2 of 2**
+`PostToolUse` payloads (and correctly absent from the `PreToolUse` ones, which carry no
+`tool_response`). Where both exist, **the input id equals the response id** in every sample.
+
+Evidence, one `PostToolUse` payload quoted from disk verbatim, whitespace as written:
+
+```json
+{"session_id":"e69a5789-416f-4416-82f2-9f2e9ee413ad","cwd":"/private/var/folders/65/fwmwydjj2ml5rwf5x45x6mc80000gn/T/s5-sendmessage-probe","hook_event_name":"PostToolUse","tool_name":"SendMessage","tool_input":{"to":"ae91f4afba4f056cd","summary":"ask probe agent to reply BETA","message":"Now reply with the single word BETA. Do nothing else.","type":"message","recipient":"ae91f4afba4f056cd"},"tool_response":{"success":true,"message":"Resuming agent ae91f4a","resumedAgentId":"ae91f4afba4f056cd","pin":{"id":"ae91f4afba4f056cd","name":"ae91f4afba4f056cd","ref":"0c0087"}},"tool_use_id":"toolu_01Q4PWnxAg6PRJLCUt1yzd7x","duration_ms":6}
+```
+
+The second sample is identical in shape with `a5bdfe80c71ac2258` throughout and
+`tool_use_id: toolu_01Xauns5zdXgXxNe1wdWPS3g`.
+
+**The probe, re-runnable by a second person.** Scripts at `~/s5-kit/` (`1-setup.sh`, `2-read.sh`,
+`3-cleanup.sh`), not in this repository. `1-setup.sh` builds a throwaway project dir, writes a probe
+that dumps its stdin verbatim and exits 0, and registers it on both events for `SendMessage` plus the
+two controls. A fresh session in that dir is then driven with the prompt the script writes: run one
+Bash command, launch one subagent, then resume that agent with `SendMessage`. `2-read.sh` prints the
+label counts and the raw payload bytes, and **refuses to report an answer when the control arm did not
+fire** — a probe that never ran and a hook that never fires are the same observation.
+
+**One finding worth carrying, because it would waste the next person's run.** Claude Code warns
+`Ignoring N permissions.allow entries from .claude/settings.json: this workspace has not been
+trusted`. That warning covers **`permissions.allow` only — the hooks in the same file still fire**,
+which is what these payloads are. An untrusted workspace is therefore not a reason to discard a run;
+the control arm is what settles whether a run counted.
+
+**Cleanup (`SP4`), all four steps run, whichever answer came back.** Throwaway dir and probe script
+deleted; `git status --porcelain` clean apart from this unit's own work; `git diff -- hooks/hooks.json`
+**empty**; every script named in `hooks/hooks.json` still present and executable. This repository's
+`hooks/hooks.json` was never touched and the maintainer's live plugin install was never reinstalled,
+modified, or reconfigured.
+
+**What this does not establish.** That a resumed run's *cost* is observable — it is not, and `RE4`
+stands unchanged: the id is a handle, never a token figure. Two samples on one host, one platform;
+no rate is claimed. And nothing here says what should be built.
