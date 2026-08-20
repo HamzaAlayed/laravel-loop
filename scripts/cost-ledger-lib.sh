@@ -384,6 +384,27 @@ cost_coverage_sentence() {
     [ "$tp" -gt 0 ] && tshare=$(( tt * 100 / tp ))
     suffix="${suffix}; ${pt} of ${p} priced figure(s) transcribed rather than host-observed (${tt} of ${tp} priced token(s), ${tshare} %)"
   fi
+  # S9 (RS1, RS6, RS7, RS9, RV9): APPENDED after everything above, and only
+  # when this unit actually holds a resumed run -- a unit with none produces
+  # the identical sentence as before this clause existed (RS7). It is a
+  # statement, never a figure: RE4 means a resumed run's own cost is not
+  # exposed to anything this repository can read, so "unavailable" is the word
+  # and it is not softened into anything implying a number is coming (RS9,
+  # RV3). Whether the referenced run carries a figure is read from THAT
+  # invocation's records (RS6), never from the resume's payload, which stores
+  # no prose to read (S7).
+  local nr="${COST_N_RESUMES:-0}" nrp="${COST_N_RESUMES_ON_PRICED:-0}"
+  local nru="${COST_N_RESUMES_ON_UNPRICED:-0}"
+  if [ "$nr" -gt 0 ]; then
+    suffix="${suffix}; ${nr} resumed run(s) reference an invocation of this unit, their own cost unavailable and in no total"
+    if [ "$nrp" -gt 0 ] && [ "$nru" -gt 0 ]; then
+      suffix="${suffix} (${nrp} referencing an invocation that carries a figure, ${nru} an invocation that does not)"
+    elif [ "$nrp" -gt 0 ]; then
+      suffix="${suffix} (referencing an invocation that carries a figure)"
+    elif [ "$nru" -gt 0 ]; then
+      suffix="${suffix} (referencing an invocation that carries no figure either)"
+    fi
+  fi
   printf 'based on %s of %s invocations that carry a token figure (%s unpriced, not counted)%s' \
     "$p" "$n" "$u" "$suffix"
 }
@@ -405,7 +426,7 @@ def phase_key:
   else "UNKNOWN" end;
 
 (reduce (inputs | select(length > 0)) as $line
-  ( {lines:0, skipped:0, captrip:0, slugs:{}, inv:{}, agents:{}, resumes:[]}
+  ( {lines:0, skipped:0, captrip:0, slugs:{}, inv:{}, agents:{}, agentinv:{}, resumes:[]}
   ; .lines += 1
   | ($line | to_rec) as $r
   | if $r == null or ($r|type) != "object" then
@@ -421,6 +442,9 @@ def phase_key:
       # the filter below. A resume must be able to tell "belongs to another
       # unit" from "belongs to nothing", and a slug-filtered map cannot.
       | (if (($r.agent_id // "") != "") then .agents[($r.agent_id)] = $slg else . end)
+      # S9 (RS6): the referenced invocation's id too, so the statement can be
+      # read from THAT invocation's own records rather than from the resume.
+      | (if (($r.agent_id // "") != "" and ($r.invocation_id // "") != "") then .agentinv[($r.agent_id)] = $r.invocation_id else . end)
       | if ($slugfilter != "" and $slugfilter != $slg) then .
         else
           (($r.invocation_id // ("noid-" + ((.lines)|tostring)))) as $id
@@ -566,11 +590,21 @@ def phase_key:
 | ( [ $rids[] | ($acc.agents[.] // "") ] ) as $rslugs
 | ( [ $rslugs[] | select(. != "") | select($slugfilter == "" or . == $slugfilter) ] | length ) as $n_resumes
 | ( [ $rslugs[] | select(. == "") ] | length ) as $n_resumes_unattached
+# S9 (RS6): split the attached resumes by whether the invocation they
+# reference carries a figure of its own. Read from that invocation's records,
+# never from the resume's payload -- which holds no prose to read.
+| ( [ $rids[] | select(($acc.agents[.] // "") != "")
+              | select($slugfilter == "" or ($acc.agents[.] // "") == $slugfilter)
+              | ($acc.agentinv[.] // "") | select(. != "") ] ) as $rinvs
+| ( [ $rinvs[] | select((($acc.inv[.].priced) // false)) ] | length ) as $n_resumes_on_priced
+| ( [ $rinvs[] | select((($acc.inv[.].priced) // false) | not) ] | length ) as $n_resumes_on_unpriced
 | ( "COUNT\tCOST_N_LINES\t\($acc.lines)",
     "COUNT\tCOST_N_SKIPPED\t\($acc.skipped)",
     "COUNT\tCOST_N_CAPTRIP\t\($acc.captrip)",
     "COUNT\tCOST_N_RESUMES\t\($n_resumes)",
     "COUNT\tCOST_N_RESUMES_UNATTACHED\t\($n_resumes_unattached)",
+    "COUNT\tCOST_N_RESUMES_ON_PRICED\t\($n_resumes_on_priced)",
+    "COUNT\tCOST_N_RESUMES_ON_UNPRICED\t\($n_resumes_on_unpriced)",
     "COUNT\tCOST_N_INVOCATIONS\t\($agg.inv)",
     "COUNT\tCOST_N_PRICED\t\($agg.priced)",
     "COUNT\tCOST_N_UNPRICED\t\($agg.unpriced)",
@@ -626,6 +660,7 @@ captrip = 0
 slugs = {}
 inv = {}
 agents = {}
+agentinv = {}
 resumes = []
 
 
@@ -666,6 +701,10 @@ for raw in sys.stdin:
         # from "nothing at all", and a slug-filtered map cannot.
         if r.get("agent_id"):
             agents[r["agent_id"]] = slg
+            # S9 (RS6): the referenced invocation's id too, so the statement
+            # is read from THAT invocation's records, never from the resume.
+            if r.get("invocation_id"):
+                agentinv[r["agent_id"]] = r["invocation_id"]
         if slugfilter != "" and slugfilter != slg:
             continue
         invid = r.get("invocation_id") or ("noid-" + str(lines))
@@ -803,6 +842,15 @@ passeslist = ",".join(str(p) for p, _ in rework_list)
 rslugs = [agents.get(a, "") for a in resumes if a != ""]
 n_resumes = len([x for x in rslugs if x != "" and (slugfilter == "" or x == slugfilter)])
 n_resumes_unattached = len([x for x in rslugs if x == ""])
+# S9 (RS6): split attached resumes by whether the referenced invocation
+# carries a figure of its own.
+_attached = [a for a in resumes
+             if a != "" and agents.get(a, "") != ""
+             and (slugfilter == "" or agents.get(a, "") == slugfilter)]
+_rinvs = [agentinv.get(a, "") for a in _attached]
+_rinvs = [i for i in _rinvs if i != ""]
+n_resumes_on_priced = len([i for i in _rinvs if (inv.get(i) or {}).get("priced")])
+n_resumes_on_unpriced = len([i for i in _rinvs if not (inv.get(i) or {}).get("priced")])
 
 out = [
     f"COUNT\tCOST_N_LINES\t{lines}",
@@ -810,6 +858,8 @@ out = [
     f"COUNT\tCOST_N_CAPTRIP\t{captrip}",
     f"COUNT\tCOST_N_RESUMES\t{n_resumes}",
     f"COUNT\tCOST_N_RESUMES_UNATTACHED\t{n_resumes_unattached}",
+    f"COUNT\tCOST_N_RESUMES_ON_PRICED\t{n_resumes_on_priced}",
+    f"COUNT\tCOST_N_RESUMES_ON_UNPRICED\t{n_resumes_on_unpriced}",
     f"COUNT\tCOST_N_INVOCATIONS\t{agg['inv']}",
     f"COUNT\tCOST_N_PRICED\t{agg['priced']}",
     f"COUNT\tCOST_N_UNPRICED\t{agg['unpriced']}",
@@ -910,6 +960,8 @@ _cost_reset_scan_vars() {
   COST_N_CAPTRIP=0
   COST_N_RESUMES=0
   COST_N_RESUMES_UNATTACHED=0
+  COST_N_RESUMES_ON_PRICED=0
+  COST_N_RESUMES_ON_UNPRICED=0
   COST_N_INVOCATIONS=0
   COST_N_PRICED=0
   COST_N_UNPRICED=0
@@ -1010,6 +1062,8 @@ $row"
     COST_N_CAPTRIP) COST_N_CAPTRIP="$v" ;;
     COST_N_RESUMES) COST_N_RESUMES="$v" ;;
     COST_N_RESUMES_UNATTACHED) COST_N_RESUMES_UNATTACHED="$v" ;;
+    COST_N_RESUMES_ON_PRICED) COST_N_RESUMES_ON_PRICED="$v" ;;
+    COST_N_RESUMES_ON_UNPRICED) COST_N_RESUMES_ON_UNPRICED="$v" ;;
     COST_N_INVOCATIONS) COST_N_INVOCATIONS="$v" ;;
     COST_N_PRICED) COST_N_PRICED="$v" ;;
     COST_N_UNPRICED) COST_N_UNPRICED="$v" ;;

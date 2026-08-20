@@ -6256,12 +6256,31 @@ s7_rs1_check() {
   [ "$b_unpriced" = "$COST_N_UNPRICED" ] || bad=1
   [ "$b_rework" = "$COST_N_REWORK" ] || bad=1
   [ "$b_rtok" = "$COST_TOKENS_REWORK_PRICED" ] || bad=1
-  [ "$b_sent" = "$(cost_coverage_sentence)" ] || bad=1
+  # RS1/RV9, tightened when S9 landed: RS1 permits exactly ONE difference in
+  # the output -- the new statement -- so this no longer demands an identical
+  # sentence. It demands something stricter than the old equality could
+  # express: the resume-free sentence must survive as a BYTE-IDENTICAL PREFIX
+  # (so RV9's append-only rule holds and no earlier clause was reworded), and
+  # the only addition must be the resume clause itself.
+  local u_sent; u_sent="$(cost_coverage_sentence)"
+  case "$u_sent" in
+    "$b_sent"*) ;;
+    *) bad=1 ;;
+  esac
+  local added="${u_sent#"$b_sent"}"
+  case "$added" in
+    *"resumed run(s) reference an invocation of this unit"*) ;;
+    *) bad=1 ;;
+  esac
+  # and nothing else crept in with it: no figure, no completeness word.
+  case "$added" in
+    *"token figure"*|*complete*|*verified*|*full*) bad=1 ;;
+  esac
   cost_slice_rows "$S7RS1/withresume.jsonl" "s7-fixture" >/dev/null
   [ "$b_rows" = "$COST_SLICE_ROWS" ] || bad=1
   echo $bad
 }
-expect "(S7-1) RS1: a resume record moves NO figure -- invocation count, priced count, priced tokens, unpriced count, both rework figures, the coverage sentence and every per-slice row are identical with and without it" \
+expect "(S7-1) RS1/RV9: a resume record moves NO figure -- every count, token total, rework figure and per-slice row identical -- and the coverage sentence gains ONLY the appended resume clause, its prior text byte-identical" \
   "0" "$(s7_rs1_check)"
 
 # (S7-2) RS3: no resumedAgentId -> nothing written at all. The safe rule is
@@ -6555,6 +6574,116 @@ expect "(S8-8) RV7: with no parser resolvable the scan exits 0 AND refuses to cl
 rm -rf "$S8DIR"
 
 echo
+echo "resumed-invocation-never-reaches-the-ledger S9 (spec.md RS6, RS7, RS9, RV2, RV9, CV7/CV8)"
+
+# The statement. Factual, conditional, appended -- and never a figure.
+# Every assertion below goes through a named helper rather than an inline
+# `case` inside a command substitution: a case pattern's own `)` closes the
+# substitution early, which silently turned the assertions into literal text
+# the first time this section was written.
+S9DIR="$(mktemp -d)"
+mkdir -p "$S9DIR/docs/loop/s9-fixture" "$S9DIR/.claude"
+S9LED="$S9DIR/.claude/loop-cost.jsonl"
+
+s9_sentence() { # $1 ledger  $2 slug
+  # shellcheck source=/dev/null
+  ( source "$SCRIPTS/cost-ledger-lib.sh"
+    cost_scan "$1" "$2"
+    cost_coverage_sentence )
+}
+s9_has() { # $1 haystack  $2 needle  -> yes/no
+  case "$1" in
+    *"$2"*) echo yes ;;
+    *) echo no ;;
+  esac
+}
+s9_starts() { # $1 haystack  $2 prefix -> yes/no
+  case "$1" in
+    "$2"*) echo yes ;;
+    *) echo no ;;
+  esac
+}
+
+S9_NORES="$S9DIR/nores.jsonl"; S9_ONPRICED="$S9DIR/onpriced.jsonl"; S9_ONUNPRICED="$S9DIR/onunpriced.jsonl"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s9p","slug":"s9-fixture","phase":"build","agent":"loop-build","slice":"S1"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s9p","slug":"s9-fixture","phase":"build","agent":"loop-build","slice":"S1","total_tokens":4000,"status":"completed","agent_id":"S9PRICED"}'
+} > "$S9_NORES"
+cp "$S9_NORES" "$S9_ONPRICED"
+printf '%s\n' '{"ts":3,"event":"resume","resumed_agent_id":"S9PRICED","tool_use_id":"s9t1"}' >> "$S9_ONPRICED"
+{
+  printf '%s\n' '{"ts":1,"event":"start","invocation_id":"s9u","slug":"s9-fixture","phase":"build","agent":"loop-build","slice":"S1"}'
+  printf '%s\n' '{"ts":2,"event":"finish","invocation_id":"s9u","slug":"s9-fixture","phase":"build","agent":"loop-build","slice":"S1","status":"async_launched","agent_id":"S9UNPRICED"}'
+  printf '%s\n' '{"ts":3,"event":"resume","resumed_agent_id":"S9UNPRICED","tool_use_id":"s9t2"}'
+} > "$S9_ONUNPRICED"
+
+S9_SENT_NORES="$(s9_sentence "$S9_NORES" s9-fixture)"
+S9_SENT_PRICED="$(s9_sentence "$S9_ONPRICED" s9-fixture)"
+S9_SENT_UNPRICED="$(s9_sentence "$S9_ONUNPRICED" s9-fixture)"
+
+# (S9-1) RS7: a unit with no resumed run says NOTHING about resumed runs --
+# not "0 resumed runs", not an empty clause. The word is absent entirely.
+expect "(S9-1) RS7: a resume-free fixture's coverage sentence contains no resume wording at all -- not even a zero" \
+  "no" "$(s9_has "$S9_SENT_NORES" "resum")"
+
+# (S9-2) RS6: the two statements DIFFER, and the difference is read from the
+# REFERENCED invocation's own records -- one carries a figure, one does not.
+# Neither resume record holds any prose to read.
+S9_DIFFER=DIFFER
+[ "$S9_SENT_PRICED" = "$S9_SENT_UNPRICED" ] && S9_DIFFER=SAME
+expect "(S9-2) RS6: the statement differs by whether the REFERENCED invocation carries a figure -- read from its records, never from prose" \
+  "DIFFER yes yes" \
+  "$S9_DIFFER $(s9_has "$S9_SENT_PRICED" "an invocation that carries a figure") $(s9_has "$S9_SENT_UNPRICED" "carries no figure either")"
+
+# (S9-3) RS9/RV3: no figure for the resumed run in either shape, and
+# "unavailable" is not softened toward a number that might arrive.
+expect "(S9-3) RS9/RV3: the resume clause names no figure -- 'unavailable and in no total', with no pending, no zero, no dash standing in" \
+  "yes no no no" \
+  "$(s9_has "$S9_SENT_PRICED" "cost unavailable and in no total") $(s9_has "$S9_SENT_PRICED$S9_SENT_UNPRICED" "pending") $(s9_has "$S9_SENT_PRICED$S9_SENT_UNPRICED" "to be determined") $(s9_has "$S9_SENT_PRICED$S9_SENT_UNPRICED" "0 tokens")"
+
+# (S9-4) RV9: the frozen prefix survives VERBATIM and the resume clause lands
+# after every pre-existing clause rather than displacing one.
+expect "(S9-4) RV9: the frozen prefix survives verbatim and the resume clause lands AFTER the coverage share" \
+  "yes yes" \
+  "$(s9_starts "$S9_SENT_PRICED" "based on 1 of 1 invocations that carry a token figure (0 unpriced, not counted)") $(s9_has "$S9_SENT_PRICED" "% coverage; 1 resumed run")"
+
+# (S9-5) RV2: a 100%-priced fixture carrying a resume still uses no
+# completeness vocabulary -- the fixture most tempting to call complete.
+S9_COMPLETENESS="$(printf '%s' "$S9_SENT_PRICED" | grep -ociE 'complete|verified|guaranteed|proven|full coverage' || true)"
+expect "(S9-5) RV2: a fully-priced fixture WITH a resume present carries no completeness vocabulary" \
+  "0" "$S9_COMPLETENESS"
+
+# (S9-6) CV7/CV8: the consumers print the IDENTICAL sentence for one
+# resume-bearing fixture -- the shared helper, never a second formatting site.
+cp "$S9_ONPRICED" "$S9LED"
+printf '# Log\n\n## Notes\n\nkeep\n' > "$S9DIR/docs/loop/s9-fixture/log.md"
+S9_REPORT="$(CLAUDE_PROJECT_DIR="$S9DIR" bash "$SCRIPTS/cost-report.sh" s9-fixture 2>/dev/null)"
+CLAUDE_PROJECT_DIR="$S9DIR" bash "$SCRIPTS/write-cost-log-section.sh" s9-fixture >/dev/null 2>&1
+S9_LOGSEC="$(cat "$S9DIR/docs/loop/s9-fixture/log.md")"
+s9_line() { printf '%s\n' "$1" | grep -m1 'invocations that carry a token figure' | sed -E 's/^Coverage: //; s/^[[:space:]]+//'; }
+S9_RL="$(s9_line "$S9_REPORT")"; S9_LL="$(s9_line "$S9_LOGSEC")"
+S9_SAME=DIFFER
+[ "$S9_RL" = "$S9_LL" ] && S9_SAME=same
+expect "(S9-6) CV7/CV8: the report and the log section print the identical coverage sentence, resume clause included" \
+  "same yes" "$S9_SAME $(s9_has "$S9_RL" "resumed run(s) reference")"
+
+# (S9-7) RS8/RS5: an unattached resume is counted separately and never folded
+# into this unit's own statement -- the clause still says 1, not 2.
+S9_UNATT="$S9DIR/unatt.jsonl"
+cp "$S9_ONPRICED" "$S9_UNATT"
+printf '%s\n' '{"ts":4,"event":"resume","resumed_agent_id":"NOSUCHAGENT","tool_use_id":"s9t3"}' >> "$S9_UNATT"
+s9_unatt_counts() {
+  # shellcheck source=/dev/null
+  ( source "$SCRIPTS/cost-ledger-lib.sh"
+    cost_scan "$S9_UNATT" s9-fixture
+    printf '%s %s' "$COST_N_RESUMES" "$COST_N_RESUMES_UNATTACHED" )
+}
+expect "(S9-7) RS8/RS5: an unattached resume is counted separately and never folded into this unit's statement" \
+  "1 1 yes" \
+  "$(s9_unatt_counts) $(s9_has "$(s9_sentence "$S9_UNATT" s9-fixture)" "1 resumed run(s) reference an invocation of this unit")"
+
+rm -rf "$S9DIR"
+
 echo "docs (case count)"
 DEV_SECTION="$(sed -n '/^## Development/,/^## /p' "$ROOT/README.md")"
 README_CASE_COUNT="$(printf '%s\n' "$DEV_SECTION" | grep -oE '[0-9]+ cases' | grep -oE '[0-9]+')"
